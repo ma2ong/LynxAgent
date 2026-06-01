@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# NOTE: "name" is the public/brand package name (rename freely once the brand
+# is decided). The internal Python import package stays "tradingagents" so the
+# Apache-licensed core and its imports keep working unchanged.
+name = "alphaagent"
+version = "0.1.0"
+description = "A-share quant pattern screening + multi-agent analysis (lite SaaS)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "PyJWT>=2.0.0",
+    "httpx>=0.24.0",
+    "requests>=2.32.4",
+    "motor>=3.3.0",
+    "pandas>=2.3.0",
+    "akshare>=1.17.86",
+]
+
+[tool.setuptools.packages.find]
+include = ["tradingagents*", "app*"]
+exclude = ["tests*", "docs*", "scripts*", "data*", "logs*", "reports*"]

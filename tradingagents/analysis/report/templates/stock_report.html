@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ name }}({{ code }}) 深度分析报告</title>
+{% if echarts_asset_path %}
+<script src="{{ echarts_asset_path }}"></script>
+{% endif %}
+<script>
+if (typeof window.echarts === 'undefined') {
+  document.write('<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"><\/script>');
+}
+</script>
+<style>
+:root { --bg: #0d1117; --card: #161b22; --text: #c9d1d9; --accent: #58a6ff; --green: #3fb950; --red: #f85149; }
+body { background: var(--bg); color: var(--text); font-family: 'PingFang SC', sans-serif; margin: 0; padding: 20px; }
+.hero { background: var(--card); border-radius: 12px; padding: 24px; margin-bottom: 20px; border-left: 4px solid var(--accent); }
+.hero h1 { margin: 0 0 8px; font-size: 28px; color: white; }
+.rating-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-weight: bold; }
+.rating-买入 { background: var(--green); color: black; }
+.rating-持有 { background: #d29922; color: black; }
+.rating-观察 { background: #388bfd; color: white; }
+.rating-回避 { background: var(--red); color: white; }
+.card { background: var(--card); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+.card h2 { color: var(--accent); font-size: 16px; margin: 0 0 16px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+.chart-container { width: 100%; height: 350px; }
+.scenarios { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.scenario { padding: 16px; border-radius: 8px; text-align: center; }
+.scenario.bear { background: rgba(248,81,73,0.15); border: 1px solid var(--red); }
+.scenario.base { background: rgba(88,166,255,0.15); border: 1px solid var(--accent); }
+.scenario.bull { background: rgba(63,185,80,0.15); border: 1px solid var(--green); }
+.scenario .price { font-size: 24px; font-weight: bold; margin: 8px 0; }
+.peers-table { width: 100%; border-collapse: collapse; }
+.peers-table th, .peers-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #30363d; font-size: 14px; }
+.risk-item { padding: 12px; border-left: 3px solid var(--red); margin-bottom: 8px; background: rgba(248,81,73,0.05); border-radius: 0 8px 8px 0; }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>{{ name }} <small style="color:#8b949e;font-size:16px;">{{ code }}</small>
+    <span class="rating-badge rating-{{ overall_rating }}" style="float:right;margin-top:6px">{{ overall_rating }}</span>
+  </h1>
+  <p style="margin:0;color:#8b949e">{{ macro }}</p>
+  {% if moat %}<p style="margin:8px 0 0;color:var(--green)">核心壁垒：{{ moat }}</p>{% endif %}
+</div>
+
+<div class="card">
+  <h2>K线走势</h2>
+  <div id="kline" class="chart-container"></div>
+</div>
+
+<div class="card">
+  <h2>五维质量评分</h2>
+  <div id="radar" class="chart-container" style="height:280px"></div>
+  {% if quality_score.rationale %}<p style="color:#8b949e;font-size:13px;margin:0">{{ quality_score.rationale }}</p>{% endif %}
+</div>
+
+<div class="card">
+  <h2>三情景目标价</h2>
+  <div class="scenarios">
+    {% for s_name, s_data in scenarios.items() if s_name in ['bear', 'base', 'bull'] %}
+    <div class="scenario {{ s_name }}">
+      <div style="color:#8b949e">{% if s_name=='bear' %}悲观{% elif s_name=='base' %}基准{% else %}乐观{% endif %}</div>
+      <div class="price" style="color:{% if s_name=='bull' %}var(--green){% elif s_name=='bear' %}var(--red){% else %}white{% endif %}">
+        ¥{{ s_data.target_price }}
+      </div>
+      <div style="font-size:12px;color:#8b949e">净利 {{ s_data.net_profit }} 亿</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>估值历史</h2>
+  {% if valuation %}
+  <p>当前 PE-TTM：<strong>{{ valuation.current }}</strong>x &nbsp;|&nbsp;
+     历史分位：<strong>{{ (valuation.percentile * 100)|round(1) }}%</strong> &nbsp;|&nbsp;
+     历史均值：{{ valuation.mean }}x</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>竞品对标</h2>
+  <table class="peers-table">
+    <thead><tr><th>代码</th><th>名称</th><th>PE</th><th>ROE</th></tr></thead>
+    <tbody>
+    {% for peer in peers %}
+    <tr><td>{{ peer.code }}</td><td>{{ peer.name }}</td><td>{{ peer.pe }}x</td><td>{{ peer.roe }}%</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>主要风险</h2>
+  {% for risk in risks %}
+  <div class="risk-item">
+    <strong>{{ risk.risk }}</strong>
+    <div style="font-size:13px;color:#8b949e;margin-top:4px">应对：{{ risk.mitigation }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h2>跟踪计划</h2>
+  {% for m in tracking_plan.metrics %}
+  <div style="padding:8px 0;border-bottom:1px solid #30363d;font-size:14px">
+    <strong>{{ m.name }}</strong>：阈值 {{ m.threshold }}
+  </div>
+  {% endfor %}
+  {% if tracking_plan.next_review %}
+  <p style="margin:12px 0 0;color:var(--accent)">下次复盘：{{ tracking_plan.next_review }}</p>
+  {% endif %}
+</div>
+
+<script>
+const klineData = {{ kline_data | tojson }};
+const radarData = {{ radar_data | tojson }};
+
+const klineChart = echarts.init(document.getElementById('kline'), 'dark');
+klineChart.setOption({
+  backgroundColor: 'transparent',
+  tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+  xAxis: { type: 'category', data: klineData.dates, scale: true },
+  yAxis: { scale: true },
+  series: [{
+    type: 'candlestick',
+    data: klineData.kline_data,
+    itemStyle: { color: '#f85149', color0: '#3fb950', borderColor: '#f85149', borderColor0: '#3fb950' }
+  }, {
+    name: 'MA5', type: 'line', data: klineData.ma5, smooth: true,
+    lineStyle: { width: 1, color: '#58a6ff' }, showSymbol: false
+  }, {
+    name: 'MA20', type: 'line', data: klineData.ma20, smooth: true,
+    lineStyle: { width: 1, color: '#d29922' }, showSymbol: false
+  }]
+});
+
+const radarChart = echarts.init(document.getElementById('radar'), 'dark');
+radarChart.setOption({
+  backgroundColor: 'transparent',
+  radar: { indicator: radarData.indicators, shape: 'circle', splitNumber: 4,
+           axisName: { color: '#8b949e' }, splitLine: { lineStyle: { color: '#30363d' } } },
+  series: [{ type: 'radar', data: [{ value: radarData.values, name: '评分',
+    areaStyle: { color: 'rgba(88,166,255,0.2)' }, lineStyle: { color: '#58a6ff' },
+    itemStyle: { color: '#58a6ff' } }] }]
+});
+window.addEventListener('resize', () => { klineChart.resize(); radarChart.resize(); });
+</script>
+</body>
+</html>

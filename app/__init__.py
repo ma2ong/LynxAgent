@@ -1,0 +1,1 @@
+"""AlphaAgent — FastAPI backend package."""

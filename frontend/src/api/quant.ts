@@ -286,7 +286,7 @@ export const quantApi = {
   }) => unwrap<BacktestResult>(await ApiClient.post('/api/quant/backtest', payload, { timeout: 180000 })),
 
   pool: async (limit = 200) =>
-    unwrap<QuantStockPoolResult>(await ApiClient.get('/api/quant/pool', { params: { limit }, timeout: 120000 })),
+    unwrap<QuantStockPoolResult>(await ApiClient.get('/api/quant/pool', { limit }, { timeout: 120000 })),
 
   syncDataLake: async (payload: { limit?: number }) =>
     unwrap<DataLakeSyncResult>(await ApiClient.post('/api/quant/datalake/sync', payload, { timeout: 180000 })),

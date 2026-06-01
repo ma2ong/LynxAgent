@@ -86,6 +86,8 @@ class IndustryAnalystAgent:
             response = re.sub(r"^```\w*\s*", "", response.strip())
             response = re.sub(r"```\s*$", "", response).strip()
             parsed = json.loads(response)
+            if not isinstance(parsed, dict):
+                raise ValueError("industry response is not a JSON object")
         except json.JSONDecodeError as e:
             logger.warning(f"IndustryAgent JSON parse error for {code}: {e}")
             parsed = {"chain": {}, "peers": [], "position": "unknown", "moat": ""}

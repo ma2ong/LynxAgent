@@ -549,6 +549,11 @@ const loadPool = async () => {
   poolLoading.value = true
   try {
     poolResult.value = await quantApi.pool(poolLimit.value)
+    const n = poolResult.value?.items?.length || 0
+    if (n) ElMessage.success(`已读取股票池 ${n} 只`)
+    else ElMessage.warning('股票池为空，请检查数据源或稍后重试')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '读取股票池失败')
   } finally {
     poolLoading.value = false
   }
@@ -557,8 +562,17 @@ const loadPool = async () => {
 const syncLake = async () => {
   syncLoading.value = true
   try {
-    syncResult.value = await quantApi.syncDataLake({ limit: poolLimit.value })
+    const res = await quantApi.syncDataLake({ limit: poolLimit.value })
+    syncResult.value = res
     poolResult.value = await quantApi.pool(poolLimit.value)
+    const errs = (res as any)?.errors || []
+    if (errs.length) {
+      ElMessage.warning(`已拉取实时股票池 ${res?.total ?? 0} 只，但未持久化：${errs[0]}`)
+    } else {
+      ElMessage.success(`数据湖同步完成：新增 ${res?.inserted ?? 0} / 更新 ${res?.updated ?? 0}`)
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.message || '同步数据湖失败')
   } finally {
     syncLoading.value = false
   }

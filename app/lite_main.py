@@ -12,6 +12,11 @@ import requests
 from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load .env (JWT_SECRET, MONGO_URI, admin creds) before auth import reads them,
+# so logins stay valid across restarts when JWT_SECRET is set.
+load_dotenv()
 
 from app.lite_auth import get_current_lite_user, router as lite_auth_router, store
 from app.routers.quant import router as quant_router
@@ -81,10 +86,11 @@ class LiteDeepAnalysisLLM:
         self.call_count = 0
 
     def chat(self, prompt: str) -> str:
+        # The deep-analysis framework fires these prompts CONCURRENTLY (ThreadPoolExecutor),
+        # so responses must be keyed by prompt content — never by call order.
         self.call_count += 1
-        if self.call_count == 1:
-            return f"{self.name}（{self.code}）的宏观分析应结合行业景气、政策方向、利率环境和资金偏好判断，当前结论以公开数据和量化信号为主。"
-        if self.call_count == 2:
+
+        if "产业链" in prompt:
             return json.dumps(
                 {
                     "chain": {
@@ -102,7 +108,7 @@ class LiteDeepAnalysisLLM:
                 },
                 ensure_ascii=False,
             )
-        if self.call_count == 3:
+        if "打分" in prompt or "fundamental" in prompt:
             return json.dumps(
                 {
                     "fundamental": 68,
@@ -110,11 +116,11 @@ class LiteDeepAnalysisLLM:
                     "competitive": 70,
                     "growth": 72,
                     "valuation": 62,
-                    "rationale": "质量评分采用 Lite 默认估计，重点用于补齐 Claude 深度框架结构，最终判断仍叠加量化趋势和风险控制。",
+                    "rationale": "质量评分采用 Lite 默认估计，重点用于补齐深度框架结构，最终判断仍叠加量化趋势和风险控制。",
                 },
                 ensure_ascii=False,
             )
-        if self.call_count == 4:
+        if "投资风险" in prompt:
             return json.dumps(
                 [
                     {"risk": "趋势失效风险", "mitigation": "若跌破关键均线或量能明显萎缩，应降低仓位或等待重新放量确认。"},
@@ -123,7 +129,7 @@ class LiteDeepAnalysisLLM:
                 ],
                 ensure_ascii=False,
             )
-        if self.call_count == 5:
+        if "跟踪计划" in prompt:
             return json.dumps(
                 {
                     "metrics": [
@@ -135,7 +141,10 @@ class LiteDeepAnalysisLLM:
                 },
                 ensure_ascii=False,
             )
-        return "持有"  # default for call 6+; Lite mode fallback
+        if "综合评级" in prompt:
+            return "持有"
+        # macro and any other free-text prompt
+        return f"{self.name}（{self.code}）的宏观分析应结合行业景气、政策方向、利率环境和资金偏好判断，当前结论以公开数据和量化信号为主。"
 
 
 class LiteNoopCacheManager:

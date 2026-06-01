@@ -34,7 +34,7 @@
           <el-tag v-if="rating" :type="ratingType" effect="dark" size="large">{{ rating }}</el-tag>
         </div>
         <div class="metrics">
-          <div><span>量化评分</span><strong>{{ result.quant_score ?? '-' }}</strong></div>
+          <div><span>量化评分</span><strong>{{ scoreDisplay }}</strong></div>
           <div>
             <span>现价</span>
             <strong>{{ result.current_price != null ? Number(result.current_price).toFixed(2) : '-' }}</strong>
@@ -50,6 +50,10 @@
         </div>
         <el-button class="to-paper" @click="goPaper">去模拟交易</el-button>
       </section>
+
+      <el-alert v-if="degraded" type="info" :closable="false" show-icon class="degraded">
+        深度分析模块本次降级，下方为量化画像结论。
+      </el-alert>
 
       <section v-for="sec in sections" :key="sec.key" class="panel">
         <div class="panel-title">{{ sec.label }}</div>
@@ -78,32 +82,23 @@ const symbol = ref('')
 const loading = ref(false)
 const result = ref<Record<string, any> | null>(null)
 
-// Map known text-section keys to Chinese labels; anything else is shown generically.
-const LABELS: Record<string, string> = {
-  macro: '宏观与环境',
-  moat: '护城河 / 竞争壁垒',
-  industry: '行业分析',
-  valuation: '估值分析',
-  scenario: '情景推演',
-  fundamental: '基本面',
-  technical: '技术面',
-  summary: '综合结论',
-  recommendation: '操作建议',
-  risk: '风险提示',
-  risks: '风险提示',
-}
+// Only these meaningful narrative fields are shown, in this order. Everything
+// else in the result (ids, timestamps, scores, llm metadata) stays hidden.
+const SECTIONS: Array<[string, string]> = [
+  ['summary', '综合结论'],
+  ['recommendation', '操作建议'],
+  ['technical_analysis', '技术面分析'],
+  ['fundamental_analysis', '基本面分析'],
+  ['sentiment_analysis', '情绪面分析'],
+  ['news_analysis', '消息面分析'],
+  ['risk_assessment', '风险评估'],
+]
 
-const SKIP = new Set([
-  'symbol', 'stock_name', 'name', 'quant_score', 'overall_rating',
-  'current_price', 'price_change_percent', 'price_change', 'volume',
-  'quote_source', 'quote_updated_at', 'task_id', 'analysis_id',
-])
-
-const rating = computed(() => result.value?.overall_rating || '')
+const rating = computed(() => result.value?.overall_rating || result.value?.deep_rating || '')
 const ratingType = computed(() => {
   const r = String(rating.value)
   if (/买入|强烈|看好|positive|buy/i.test(r)) return 'danger'
-  if (/卖出|看空|negative|sell/i.test(r)) return 'success'
+  if (/卖出|回避|看空|negative|sell/i.test(r)) return 'success'
   return 'warning'
 })
 const pctClass = computed(() => {
@@ -111,23 +106,20 @@ const pctClass = computed(() => {
   return v == null ? '' : v >= 0 ? 'up' : 'down'
 })
 
+const scoreDisplay = computed(() => {
+  const r = result.value
+  const s = r?.overall_score ?? r?.quant_score ?? r?.technical_score
+  return s == null ? '-' : Number(s).toFixed(1)
+})
+
+const degraded = computed<string>(() => result.value?.deep_analysis_error || '')
+
 const sections = computed(() => {
   const r = result.value
   if (!r) return [] as Array<{ key: string; label: string; text: string }>
-  const out: Array<{ key: string; label: string; text: string }> = []
-  for (const [key, value] of Object.entries(r)) {
-    if (SKIP.has(key)) continue
-    if (typeof value === 'string' && value.trim().length > 8) {
-      out.push({ key, label: LABELS[key] || key, text: value })
-    }
-  }
-  // Show labelled sections first, in LABELS order.
-  const order = Object.keys(LABELS)
-  out.sort((a, b) => {
-    const ia = order.indexOf(a.key); const ib = order.indexOf(b.key)
-    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
-  })
-  return out
+  return SECTIONS
+    .filter(([k]) => typeof r[k] === 'string' && (r[k] as string).trim().length > 0)
+    .map(([key, label]) => ({ key, label, text: r[key] as string }))
 })
 
 const hasRaw = computed(() => !!result.value)

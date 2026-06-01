@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 import polars as pl
 from jinja2 import Environment, FileSystemLoader
-from tradingagents.analysis.report.chart_builder import ChartBuilder
+from quantcore.analysis.report.chart_builder import ChartBuilder
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 

@@ -105,7 +105,7 @@ def fetch_stock_dataframe(symbol: str, start_date: Optional[str], end_date: Opti
 
 def load_local_kline(symbol: str, days: int | None = None) -> "pd.DataFrame":
     """从本地 SQLite 读取日线并归一化；无数据返回空 DataFrame。"""
-    from tradingagents.quant.local_store import get_local_store
+    from quantcore.quant.local_store import get_local_store
     store = get_local_store()
     raw = store.load_kline(symbol, limit=days)
     if raw is None or raw.empty:

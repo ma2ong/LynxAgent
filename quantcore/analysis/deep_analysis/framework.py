@@ -4,11 +4,11 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 import polars as pl
-from tradingagents.data.sources.akshare_adapter import AKShareAdapter
-from tradingagents.data.pipeline.cache_manager import CacheManager
-from tradingagents.analysis.deep_analysis.valuation import ValuationCalculator
-from tradingagents.analysis.deep_analysis.scenario import ScenarioAnalysis
-from tradingagents.analysis.deep_analysis.industry_agent import IndustryAnalystAgent
+from quantcore.data.sources.akshare_adapter import AKShareAdapter
+from quantcore.data.pipeline.cache_manager import CacheManager
+from quantcore.analysis.deep_analysis.valuation import ValuationCalculator
+from quantcore.analysis.deep_analysis.scenario import ScenarioAnalysis
+from quantcore.analysis.deep_analysis.industry_agent import IndustryAnalystAgent
 
 logger = logging.getLogger(__name__)
 

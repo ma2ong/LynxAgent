@@ -20,7 +20,7 @@ labels: bug
 <!-- 实际发生了什么；有报错请贴完整日志 -->
 
 ## 环境
-- 模块：后端 (app/) / 前端 (frontend/) / 量化核心 (tradingagents/)
+- 模块：后端 (app/) / 前端 (frontend/) / 量化核心 (quantcore/)
 - 浏览器或 Python 版本：
 - 相关股票代码 / 场景（如适用）：
 

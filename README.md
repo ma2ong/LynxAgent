@@ -36,14 +36,14 @@ AlphaAgent 把「全市场形态扫描」和「多智能体深度研究」合到
 flowchart TD
     U[用户浏览器] --> FE["前端 frontend/<br/>Vue 3 · Element Plus · ECharts"]
     FE -->|REST / JWT| BE["后端 app/<br/>FastAPI · lite_auth · routers/quant"]
-    BE --> CORE["量化核心 tradingagents/<br/>quant 引擎 · 多智能体分析 · 数据管道"]
+    BE --> CORE["量化核心 quantcore/<br/>quant 引擎 · 多智能体分析 · 数据管道"]
     CORE --> DS["数据源<br/>腾讯日线 · akshare"]
     CORE --> ST["存储<br/>SQLite 本地 · Parquet · MongoDB(可选,行业富集)"]
 ```
 
 - **前端** `frontend/`：Vue 3 + Element Plus + ECharts，`ApiClient` 统一封装请求与 JWT。
 - **后端** `app/`：FastAPI 轻量服务，`lite_main` 装配认证 (`lite_auth`) 与量化路由 (`routers/quant`)，认证与自选股存 SQLite。
-- **量化核心** `tradingagents/`：形态扫描、多智能体深度分析、K 线服务、数据管道与本地行情存储。
+- **量化核心** `quantcore/`：形态扫描、多智能体深度分析、K 线服务、数据管道与本地行情存储。
 
 ## 🚀 快速开始
 
@@ -72,7 +72,7 @@ npm run build    # 生产构建
 alphaagent/
 ├─ app/                 FastAPI 后端（认证、量化路由）
 ├─ frontend/            Vue 3 前端
-├─ tradingagents/       量化核心（quant 引擎、多智能体分析、数据管道）
+├─ quantcore/       量化核心（quant 引擎、多智能体分析、数据管道）
 ├─ pyproject.toml       后端打包配置
 └─ requirements.txt
 ```

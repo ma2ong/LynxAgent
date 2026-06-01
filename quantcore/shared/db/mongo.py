@@ -15,7 +15,7 @@ def _get_client() -> MongoClient:
 
 
 def get_mongo_db() -> Database:
-    db_name = os.environ.get("MONGODB_DB", "tradingagents")
+    db_name = os.environ.get("MONGODB_DB", "quantcore")
     return _get_client()[db_name]
 
 

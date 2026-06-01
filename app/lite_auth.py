@@ -111,7 +111,7 @@ class LiteAuthStore:
 
     def ensure_admin(self) -> dict[str, Any]:
         username = os.getenv("SAAS_LITE_ADMIN_USERNAME") or os.getenv("SAAS_ADMIN_USERNAME") or "admin"
-        email = os.getenv("SAAS_LITE_ADMIN_EMAIL") or os.getenv("SAAS_ADMIN_EMAIL") or "admin@local.tradingagents"
+        email = os.getenv("SAAS_LITE_ADMIN_EMAIL") or os.getenv("SAAS_ADMIN_EMAIL") or "admin@local.quantcore"
         password = os.getenv("SAAS_LITE_ADMIN_PASSWORD") or os.getenv("SAAS_ADMIN_PASSWORD") or "admin123"
 
         user = self.get_by_username(username)

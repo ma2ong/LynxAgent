@@ -15,9 +15,9 @@ from pydantic import BaseModel
 
 from app.lite_auth import get_current_lite_user, router as lite_auth_router, store
 from app.routers.quant import router as quant_router
-from tradingagents.quant import QuantEngine
-from tradingagents.quant.sync_service import get_sync_service
-from tradingagents.trading import EasyTraderBridge, EasyTraderOrder
+from quantcore.quant import QuantEngine
+from quantcore.quant.sync_service import get_sync_service
+from quantcore.trading import EasyTraderBridge, EasyTraderOrder
 
 
 app = FastAPI(
@@ -3492,7 +3492,7 @@ async def enrich_lite_result_with_professional_analysis(
     stock_name = (quote or {}).get("name") or (stock_meta or {}).get("name") or result.get("stock_name") or symbol
     technical_snapshot: dict[str, Any] = {}
     try:
-        from tradingagents.quant.data import default_start_date, fetch_stock_dataframe, normalize_ohlcv
+        from quantcore.quant.data import default_start_date, fetch_stock_dataframe, normalize_ohlcv
 
         df = await asyncio.wait_for(
             asyncio.to_thread(fetch_stock_dataframe, symbol, default_start_date(260), None),
@@ -3809,8 +3809,8 @@ async def enrich_lite_result_with_deep_analysis(
 ) -> dict[str, Any]:
     stock_name = (stock_meta or {}).get("name") or result.get("stock_name") or symbol
     try:
-        import tradingagents.analysis.deep_analysis.framework as deep_framework_module
-        from tradingagents.analysis.report.html_generator import HTMLReportGenerator
+        import quantcore.analysis.deep_analysis.framework as deep_framework_module
+        from quantcore.analysis.report.html_generator import HTMLReportGenerator
 
         deep_framework_module.CacheManager = LiteNoopCacheManager
         deep_llm = LiteDeepAnalysisLLM(symbol, stock_name)

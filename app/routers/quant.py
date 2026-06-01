@@ -5,8 +5,8 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from tradingagents.quant import QuantEngine
-from tradingagents.quant.chart_service import build_chart_payload
+from quantcore.quant import QuantEngine
+from quantcore.quant.chart_service import build_chart_payload
 
 
 router = APIRouter(prefix="/api/quant", tags=["quant"])

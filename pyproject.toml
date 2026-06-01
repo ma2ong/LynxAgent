@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 # NOTE: "name" is the public/brand package name (rename freely once the brand
 # is decided). The internal Python import package is "quantcore".
-name = "alphaagent"
+name = "lynxagent"
 version = "0.1.0"
 description = "A-share quant pattern screening + multi-agent analysis (lite SaaS)"
 readme = "README.md"

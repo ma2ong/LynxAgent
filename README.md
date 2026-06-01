@@ -1,13 +1,13 @@
-# AlphaAgent
+# LynxAgent
 
-> **Find your alpha.** A 股量化形态选股 + 多智能体深度分析的轻量 SaaS。
+> **See the patterns others miss.** A 股量化形态选股 + 多智能体深度分析的轻量 SaaS。
 
 ![License](https://img.shields.io/badge/license-Proprietary-red.svg)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-009688.svg)
 
-AlphaAgent 把「全市场形态扫描」和「多智能体深度研究」合到一个轻量产品里：先用本地行情数据在全市场（约 5000 只）里扫出技术形态候选，再让多个 AI 智能体（行业 / 估值 / 情景）逐只深挖，产出可读的深度分析报告。
+LynxAgent 把「全市场形态扫描」和「多智能体深度研究」合到一个轻量产品里：先用本地行情数据在全市场（约 5000 只）里扫出技术形态候选，再让多个 AI 智能体（行业 / 估值 / 情景）逐只深挖，产出可读的深度分析报告。
 
 ---
 
@@ -69,7 +69,7 @@ npm run build    # 生产构建
 ## 📁 目录结构
 
 ```
-alphaagent/
+lynxagent/
 ├─ app/                 FastAPI 后端（认证、量化路由）
 ├─ frontend/            Vue 3 前端
 ├─ quantcore/       量化核心（quant 引擎、多智能体分析、数据管道）

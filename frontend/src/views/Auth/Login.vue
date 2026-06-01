@@ -1,7 +1,7 @@
 <template>
   <div class="login-wrap">
     <el-card class="login-card">
-      <h2 class="title">AlphaAgent 登录</h2>
+      <h2 class="title">LynxAgent 登录</h2>
       <el-form @submit.prevent="onSubmit">
         <el-form-item>
           <el-input v-model="username" placeholder="用户名" :prefix-icon="User" />

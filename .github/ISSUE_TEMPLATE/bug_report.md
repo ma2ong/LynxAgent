@@ -1,6 +1,6 @@
 ---
 name: Bug 报告
-about: 报告一个问题，帮助改进 AlphaAgent
+about: 报告一个问题，帮助改进 LynxAgent
 title: "[Bug] "
 labels: bug
 ---

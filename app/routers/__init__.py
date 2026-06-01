@@ -1,1 +1,1 @@
-"""API route handlers for AlphaAgent."""
+"""API route handlers for LynxAgent."""

@@ -1,1 +1,1 @@
-"""AlphaAgent — FastAPI backend package."""
+"""LynxAgent — FastAPI backend package."""

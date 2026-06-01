@@ -1,13 +1,20 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 const routes: RouteRecordRaw[] = [
-  { path: '/', redirect: '/quant' },
   { path: '/login', name: 'login', component: () => import('@/views/Auth/Login.vue') },
   {
-    path: '/quant',
-    name: 'quant',
-    component: () => import('@/views/Quant/index.vue'),
+    path: '/',
+    component: () => import('@/components/Layout/AppLayout.vue'),
     meta: { requiresAuth: true },
+    children: [
+      { path: '', redirect: '/quant' },
+      { path: 'quant', name: 'quant', component: () => import('@/views/Quant/index.vue') },
+      { path: 'insights/hot-news', name: 'hot-news', component: () => import('@/views/Insights/HotNews.vue') },
+      { path: 'insights/catalyst', name: 'catalyst', component: () => import('@/views/Insights/CatalystMonitor.vue') },
+      { path: 'analysis/single', name: 'single-analysis', component: () => import('@/views/Analysis/SingleAnalysis.vue') },
+      { path: 'favorites', name: 'favorites', component: () => import('@/views/Favorites/index.vue') },
+      { path: 'paper', name: 'paper', component: () => import('@/views/PaperTrading/index.vue') },
+    ],
   },
 ]
 

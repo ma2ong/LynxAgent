@@ -532,15 +532,29 @@ const syncStatus = ref<any>({ running: false, phase: 'idle', done: 0, total: 0, 
 const syncRunning = computed(() => !!syncStatus.value.running)
 const syncPct = computed(() => syncStatus.value.total ? Math.floor(syncStatus.value.done / syncStatus.value.total * 100) : 0)
 let syncTimer: number | undefined
+let syncWatching = false
 const pollSync = async () => {
   syncStatus.value = await quantApi.syncStatus()
   if (syncStatus.value.running) {
     syncTimer = window.setTimeout(pollSync, 2500)
+  } else if (syncWatching) {
+    syncWatching = false
+    const s = syncStatus.value
+    ElMessage.success(`同步完成：${s.done}/${s.total} 只，失败 ${s.errors_count || 0}。形态智选现在可扫全市场。`)
   }
 }
 const startSync = async (full: boolean) => {
-  await quantApi.syncMarket(full)
-  pollSync()
+  try {
+    const s = await quantApi.syncMarket(full)
+    if (s && typeof s === 'object') syncStatus.value = s
+    syncWatching = true
+    ElMessage.success(full
+      ? '已开始全量同步（约 5000 只日线，后台进行，可切换页面，完成约需几分钟）'
+      : '已开始增量同步')
+    pollSync()
+  } catch (error: any) {
+    ElMessage.error(error?.message || '启动同步失败')
+  }
 }
 onMounted(() => { quantApi.syncStatus().then(s => { syncStatus.value = s; if (s.running) pollSync() }) })
 onUnmounted(() => { if (syncTimer) window.clearTimeout(syncTimer) })

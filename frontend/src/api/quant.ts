@@ -295,7 +295,7 @@ export const quantApi = {
     unwrap<FactorResearchResult>(await ApiClient.post('/api/quant/research', payload, { timeout: 240000 })),
 
   syncMarket: async (full = false) =>
-    unwrap<any>(await ApiClient.post('/api/lite/datalake/sync', { full }, { timeout: 30000 })),
+    unwrap<any>(await ApiClient.post('/api/lite/datalake/sync', {}, { params: { full }, timeout: 30000 })),
 
   syncStatus: async () =>
     unwrap<any>(await ApiClient.get('/api/lite/datalake/sync/status', undefined, { timeout: 15000 })),

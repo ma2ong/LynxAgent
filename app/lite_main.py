@@ -3431,13 +3431,18 @@ def _build_professional_single_stock_report(
     wr_v = float(latest.get("williams_r") or 0)
     aroon_up_v = float(latest.get("aroon_up") or 0)
     aroon_down_v = float(latest.get("aroon_down") or 0)
+    stochrsi_v = float(latest.get("stochrsi") or 0)
+    obv_rising = bool(latest.get("obv_rising"))
     mom_bits = []
     if cci_v:
         mom_bits.append(f"CCI {cci_v:.0f}")
     if wr_v:
         mom_bits.append(f"威廉%R {wr_v:.0f}")
+    if stochrsi_v:
+        mom_bits.append(f"StochRSI {stochrsi_v:.0f}")
     if aroon_up_v or aroon_down_v:
         mom_bits.append(f"Aroon 上{aroon_up_v:.0f}/下{aroon_down_v:.0f}")
+    mom_bits.append("OBV 上升" if obv_rising else "OBV 走平/下降")
     mom_state = ("动量补充：" + "、".join(mom_bits) + "。") if mom_bits else ""
     extra_ind_line = kdj_state + adx_state + atr_state + mf_state + mom_state
 

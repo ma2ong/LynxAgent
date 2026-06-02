@@ -5,12 +5,17 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from .data import load_local_kline
+from .factors import enrich_indicators
 from .integrations import recognize_patterns
 
 
 def _ma(close: pd.Series, n: int) -> List[Optional[float]]:
     s = close.rolling(n).mean()
     return [None if pd.isna(v) else round(float(v), 3) for v in s]
+
+
+def _arr(series: pd.Series, ndigits: int = 2) -> List[Optional[float]]:
+    return [None if pd.isna(v) else round(float(v), ndigits) for v in series]
 
 
 def _macd(close: pd.Series):
@@ -52,6 +57,17 @@ def build_chart_payload(symbol: str, name: str = "", days: int = 250) -> Dict[st
     volumes = [round(float(v), 1) for v in df["volume"]]
     ma = {f"ma{n}": _ma(close, n) for n in (5, 10, 20, 30, 60)}
     macd = _macd(close)
+    # 副图指标序列（KDJ / ADX / 资金流），失败不影响主图
+    kdj: Dict[str, object] = {}
+    adx: Dict[str, object] = {}
+    moneyflow: Dict[str, object] = {}
+    try:
+        ind = enrich_indicators(df)
+        kdj = {"k": _arr(ind["kdj_k"]), "d": _arr(ind["kdj_d"]), "j": _arr(ind["kdj_j"])}
+        adx = {"adx": _arr(ind["adx14"]), "plus_di": _arr(ind["plus_di"]), "minus_di": _arr(ind["minus_di"])}
+        moneyflow = {"mfi": _arr(ind["mfi14"]), "cmf": _arr(ind["cmf20"], 4)}
+    except Exception:
+        pass
     patterns: List[Dict[str, object]] = []
     try:
         rec = recognize_patterns(symbol, df)
@@ -72,4 +88,5 @@ def build_chart_payload(symbol: str, name: str = "", days: int = 250) -> Dict[st
     except Exception:
         patterns = []
     return {"symbol": symbol, "name": name, "dates": dates, "candles": candles,
-            "volumes": volumes, "ma": ma, "macd": macd, "patterns": patterns}
+            "volumes": volumes, "ma": ma, "macd": macd, "patterns": patterns,
+            "kdj": kdj, "adx": adx, "moneyflow": moneyflow}

@@ -118,6 +118,23 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["kc_upper"] = kc_mid + 2 * out["atr14"]
     out["kc_lower"] = kc_mid - 2 * out["atr14"]
 
+    # --- Extra momentum indicators (standard public definitions) ---
+    # CCI (20): deviation of typical price from its mean, scaled by mean deviation
+    tp_sma = typical.rolling(20).mean()
+    mean_dev = (typical - tp_sma).abs().rolling(20).mean()
+    out["cci20"] = (typical - tp_sma) / (0.015 * mean_dev.replace(0, float("nan")))
+
+    # Williams %R (14): position of close within the 14-day high/low range (−100..0)
+    hh14 = out["high"].rolling(14).max()
+    ll14 = out["low"].rolling(14).min()
+    out["williams_r"] = (hh14 - out["close"]) / (hh14 - ll14).replace(0, float("nan")) * -100
+
+    # Stochastic RSI (14) with %K smoothing(3)
+    rsi_min = out["rsi14"].rolling(14).min()
+    rsi_max = out["rsi14"].rolling(14).max()
+    stochrsi = (out["rsi14"] - rsi_min) / (rsi_max - rsi_min).replace(0, float("nan")) * 100
+    out["stochrsi_k"] = stochrsi.rolling(3).mean()
+
     return out
 
 
@@ -202,11 +219,26 @@ def signal_from_score(score: float) -> str:
     return "avoid"
 
 
+def _aroon_latest(data: pd.DataFrame, period: int = 25) -> tuple[float, float]:
+    """Aroon up/down at the latest bar (O(period); avoids slow rolling.apply)."""
+    high_tail = data["high"].tail(period + 1).reset_index(drop=True)
+    low_tail = data["low"].tail(period + 1).reset_index(drop=True)
+    span = len(high_tail) - 1
+    if span < 1:
+        return 0.0, 0.0
+    since_high = span - int(high_tail.values.argmax())
+    since_low = span - int(low_tail.values.argmin())
+    up = round(100 * (span - since_high) / span, 1)
+    down = round(100 * (span - since_low) / span, 1)
+    return up, down
+
+
 def indicator_snapshot(df: pd.DataFrame) -> Dict[str, float]:
-    """Latest ATR / KDJ / ADX / Chandelier readings (standard public indicators)."""
+    """Latest ATR / KDJ / ADX / Chandelier / money-flow / momentum readings (standard public indicators)."""
     data = enrich_indicators(df)
     close = _last(data["close"])
     atr = _last(data["atr14"])
+    aroon_up, aroon_down = _aroon_latest(data)
     return {
         "atr": round(atr, 4),
         "atr_pct": round(atr / close * 100, 2) if close else 0.0,
@@ -220,6 +252,11 @@ def indicator_snapshot(df: pd.DataFrame) -> Dict[str, float]:
         "mfi": round(_last(data["mfi14"], 50.0), 2),
         "cmf": round(_last(data["cmf20"]), 4),
         "obv_rising": bool(_last(data["obv"]) >= _last(data["obv"].shift(10))),
+        "cci": round(_last(data["cci20"]), 2),
+        "williams_r": round(_last(data["williams_r"], -50.0), 2),
+        "stochrsi": round(_last(data["stochrsi_k"], 50.0), 2),
+        "aroon_up": aroon_up,
+        "aroon_down": aroon_down,
     }
 
 

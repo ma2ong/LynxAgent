@@ -3427,7 +3427,19 @@ def _build_professional_single_stock_report(
     if mfi_value or cmf_value:
         flow = "资金净流入" if cmf_value > 0.05 else ("资金净流出" if cmf_value < -0.05 else "资金中性")
         mf_state = f"资金流 MFI {mfi_value:.0f}、CMF {cmf_value:+.2f}（{flow}）。"
-    extra_ind_line = kdj_state + adx_state + atr_state + mf_state
+    cci_v = float(latest.get("cci") or 0)
+    wr_v = float(latest.get("williams_r") or 0)
+    aroon_up_v = float(latest.get("aroon_up") or 0)
+    aroon_down_v = float(latest.get("aroon_down") or 0)
+    mom_bits = []
+    if cci_v:
+        mom_bits.append(f"CCI {cci_v:.0f}")
+    if wr_v:
+        mom_bits.append(f"威廉%R {wr_v:.0f}")
+    if aroon_up_v or aroon_down_v:
+        mom_bits.append(f"Aroon 上{aroon_up_v:.0f}/下{aroon_down_v:.0f}")
+    mom_state = ("动量补充：" + "、".join(mom_bits) + "。") if mom_bits else ""
+    extra_ind_line = kdj_state + adx_state + atr_state + mf_state + mom_state
 
     above_parts = []
     below_parts = []

@@ -8,7 +8,7 @@
       <el-tag effect="plain" type="info">研究与模拟，不直接下单</el-tag>
     </section>
 
-    <el-tabs v-model="activeTab" class="quant-tabs" @tab-change="onTabChange">
+    <el-tabs v-model="activeTab" class="quant-tabs">
       <el-tab-pane label="一键推荐" name="screen">
         <div class="smart-home">
           <section class="smart-hero compact-smart-hero">
@@ -464,12 +464,6 @@ import {
 } from '@/api/quant'
 
 const activeTab = ref('screen')
-const tabLoaded = ref<Record<string, boolean>>({ screen: false })
-
-const onTabChange = (tabName: string) => {
-  // placeholder: tabs that need auto-loading on first switch go here
-  // e.g.: if (!tabLoaded.value[tabName]) { loadTabData(tabName); tabLoaded.value[tabName] = true }
-}
 
 const router = useRouter()
 

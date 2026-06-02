@@ -3421,7 +3421,13 @@ def _build_professional_single_stock_report(
         kdj_state = f"KDJ 的 J={jv:.0f}（{'超买区，注意回踩' if jv > 100 else '超卖区，关注反弹' if jv < 0 else '中性'}）。"
     adx_state = f"ADX {adx_value:.0f}（{'趋势明确' if adx_value >= 25 else '震荡为主' if adx_value < 20 else '趋势中等'}）。" if adx_value else ""
     atr_state = f"ATR 波动约 {atr_pct:.1f}%。" if atr_pct else ""
-    extra_ind_line = kdj_state + adx_state + atr_state
+    mfi_value = float(latest.get("mfi") or 0)
+    cmf_value = float(latest.get("cmf") or 0)
+    mf_state = ""
+    if mfi_value or cmf_value:
+        flow = "资金净流入" if cmf_value > 0.05 else ("资金净流出" if cmf_value < -0.05 else "资金中性")
+        mf_state = f"资金流 MFI {mfi_value:.0f}、CMF {cmf_value:+.2f}（{flow}）。"
+    extra_ind_line = kdj_state + adx_state + atr_state + mf_state
 
     above_parts = []
     below_parts = []

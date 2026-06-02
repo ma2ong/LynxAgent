@@ -92,6 +92,32 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # Chandelier Exit (long stop): highest-high(22) - 3 * ATR
     out["chandelier_long"] = out["high"].rolling(22).max() - 3 * out["atr14"]
 
+    # --- Volume / money-flow indicators (standard public definitions) ---
+    vol = out.get("volume", pd.Series(0.0, index=out.index)).fillna(0)
+    close_diff = out["close"].diff()
+    direction = (close_diff > 0).astype(float) - (close_diff < 0).astype(float)
+    out["obv"] = (direction * vol).cumsum()  # On-Balance Volume
+
+    # Money Flow Index (14): volume-weighted RSI on typical price
+    typical = (out["high"] + out["low"] + out["close"]) / 3
+    raw_mf = typical * vol
+    tp_diff = typical.diff()
+    pos_mf = raw_mf.where(tp_diff > 0, 0.0).rolling(14).sum()
+    neg_mf = raw_mf.where(tp_diff < 0, 0.0).rolling(14).sum()
+    mfr = pos_mf / neg_mf.replace(0, pd.NA)
+    out["mfi14"] = 100 - (100 / (1 + mfr))
+
+    # Chaikin Money Flow (20)
+    hl = (out["high"] - out["low"]).replace(0, pd.NA)
+    mf_mult = ((out["close"] - out["low"]) - (out["high"] - out["close"])) / hl
+    out["cmf20"] = (mf_mult * vol).rolling(20).sum() / vol.rolling(20).sum().replace(0, pd.NA)
+
+    # Keltner Channel (EMA20 ± 2 * ATR)
+    kc_mid = out["close"].ewm(span=20, adjust=False).mean()
+    out["kc_mid"] = kc_mid
+    out["kc_upper"] = kc_mid + 2 * out["atr14"]
+    out["kc_lower"] = kc_mid - 2 * out["atr14"]
+
     return out
 
 
@@ -191,6 +217,9 @@ def indicator_snapshot(df: pd.DataFrame) -> Dict[str, float]:
         "plus_di": round(_last(data["plus_di"]), 2),
         "minus_di": round(_last(data["minus_di"]), 2),
         "chandelier_stop": round(_last(data["chandelier_long"]), 2),
+        "mfi": round(_last(data["mfi14"], 50.0), 2),
+        "cmf": round(_last(data["cmf20"]), 4),
+        "obv_rising": bool(_last(data["obv"]) >= _last(data["obv"].shift(10))),
     }
 
 

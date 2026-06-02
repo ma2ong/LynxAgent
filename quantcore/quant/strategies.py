@@ -48,6 +48,13 @@ def multi_ma_breakout_signal(df: pd.DataFrame) -> pd.Series:
     return ma_stack & (data["close"] > prior_high) & volume_confirm
 
 
+def keltner_breakout_signal(df: pd.DataFrame) -> pd.Series:
+    data = enrich_indicators(df)
+    volume = data.get("volume", pd.Series(index=data.index, dtype=float))
+    # 收盘突破 Keltner 上轨（EMA20 + 2*ATR）且站上中轨，配合放量确认
+    return (data["close"] > data["kc_upper"]) & (data["close"] > data["kc_mid"]) & (volume > data["volume_ma20"])
+
+
 STRATEGIES = {
     "ma_volume": moving_average_volume_signal,
     "turtle_breakout": turtle_breakout_signal,
@@ -55,4 +62,5 @@ STRATEGIES = {
     "high_tight_flag": high_tight_flag_signal,
     "limit_up_washout": limit_up_washout_signal,
     "multi_ma_breakout": multi_ma_breakout_signal,
+    "keltner_breakout": keltner_breakout_signal,
 }

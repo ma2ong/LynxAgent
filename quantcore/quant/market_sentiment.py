@@ -1,0 +1,169 @@
+"""大盘情绪/市场宽度统计：全部基于本地日线，无需 LLM 或外部接口。
+
+指标定义（A 股情绪复盘常用口径，均为公开算法）：
+- 涨停/跌停：按板块涨跌幅阈值近似（主板≈10%，创业板/科创板≈20%）。
+- 连板高度：个股连续涨停天数；梯队按 3 板 / 4 板 / 5 板+ 统计。
+- 5 日线占比：收盘价 > MA5 的个股占比（全市场 + 分板块）。
+- 涨跌比：上涨家数 / 下跌家数。
+- 情绪温度：5日线占比、涨跌比、涨跌停强弱的合成分（0-100）。
+- 板块涨跌幅：按代码前缀分段（全A/沪主板/深主板/创业板/科创板）的等权累计收益。
+"""
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+from typing import Dict, List
+
+import pandas as pd
+
+from .local_store import get_local_store
+
+
+def _segment(symbol: str) -> str:
+    s = str(symbol).zfill(6)
+    if s.startswith("688"):
+        return "科创板"
+    if s.startswith("30"):
+        return "创业板"
+    if s.startswith("6"):
+        return "沪主板"
+    return "深主板"
+
+
+def _limit_threshold(symbol: str) -> float:
+    s = str(symbol).zfill(6)
+    return 0.195 if s.startswith(("30", "688")) else 0.097
+
+
+def _cap_band(symbol: str) -> str:
+    # 无市值数据，用板块作为大/中/小盘的近似分层
+    seg = _segment(symbol)
+    if seg in ("沪主板", "深主板"):
+        return "大盘股"
+    if seg == "创业板":
+        return "中盘股"
+    return "小盘股"
+
+
+def compute_market_sentiment(start: str, end: str, buffer_days: int = 24) -> Dict[str, object]:
+    store = get_local_store()
+    conn = store._conn()
+    win_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=buffer_days)).strftime("%Y-%m-%d")
+    rows = conn.execute(
+        "SELECT symbol, date, close, amount FROM daily_kline WHERE date >= ? AND date <= ? ORDER BY symbol, date",
+        (win_start, end),
+    ).fetchall()
+    if not rows:
+        return {"empty": True, "message": "本地行情为空，请先在「数据同步」做全量同步", "dates": []}
+
+    df = pd.DataFrame(rows, columns=["symbol", "date", "close", "amount"])
+    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+    df = df.dropna(subset=["close"])
+    df = df[df["close"] > 0]
+    # 修正同步层单位不一致：科创板(688)源的 volume 为「股」却仍按「手」×100，
+    # 使其 amount 被放大 100 倍（实测 688 板块单只均值 ~680 亿 vs 主板 ~5 亿）。
+    # 对 688 回退 100 倍后，全市场成交额回到 ~2-3 万亿的合理量级。
+    # 注：根因在 sync_service 的成交额计算，待修复 + 重新同步后应移除此补偿。
+    mask_688 = df["symbol"].astype(str).str.startswith("688")
+    df.loc[mask_688, "amount"] = df.loc[mask_688, "amount"] / 100.0
+
+    g = df.groupby("symbol", sort=False)
+    df["pct"] = g["close"].pct_change()
+    df["ma5"] = g["close"].transform(lambda s: s.rolling(5).mean())
+    df["above_ma5"] = df["close"] > df["ma5"]
+    thr = df["symbol"].map(_limit_threshold)
+    df["limit_up"] = df["pct"] >= thr
+    df["limit_down"] = df["pct"] <= -thr
+    # 连板高度：连续涨停天数
+    grp = (~df["limit_up"]).groupby(df["symbol"]).cumsum()
+    df["board_height"] = df["limit_up"].groupby([df["symbol"], grp]).cumsum().where(df["limit_up"], 0).astype(int)
+    df["seg"] = df["symbol"].map(_segment)
+    df["cap"] = df["symbol"].map(_cap_band)
+
+    # 仅保留展示窗口
+    win = df[(df["date"] >= start) & (df["date"] <= end)].copy()
+    # 剔除不完整交易日（个股数明显少于中位数，多为未收盘的当日）
+    counts = win.groupby("date")["symbol"].size()
+    if len(counts):
+        threshold_n = counts.median() * 0.6
+        complete = set(counts[counts >= threshold_n].index)
+        win = win[win["date"].isin(complete)].copy()
+    dates = sorted(win["date"].unique().tolist())
+
+    def by_date(series_bool):
+        return [int(v) for v in win.groupby("date").apply(lambda x: int(series_bool(x))).reindex(dates).fillna(0)]
+
+    # 逐日聚合
+    daily = win.groupby("date")
+    amount_yi = [round(float(v) / 1e8, 1) for v in daily["amount"].sum().reindex(dates).fillna(0)]
+    limit_up_cnt = [int(v) for v in daily["limit_up"].sum().reindex(dates).fillna(0)]
+    limit_down_cnt = [int(v) for v in daily["limit_down"].sum().reindex(dates).fillna(0)]
+    adv = daily.apply(lambda x: int((x["pct"] > 0).sum())).reindex(dates).fillna(0)
+    dec = daily.apply(lambda x: int((x["pct"] < 0).sum())).reindex(dates).fillna(0)
+    adv_list = [int(v) for v in adv]
+    dec_list = [int(v) for v in dec]
+
+    # 5日线占比（全市场 + 大/中/小盘）
+    def above_ratio(frame):
+        return round(float(frame["above_ma5"].mean()) * 100, 1) if len(frame) else 0.0
+    above_all = [above_ratio(daily.get_group(d)) for d in dates]
+    above_cap: Dict[str, List[float]] = {}
+    for cap in ("大盘股", "中盘股", "小盘股"):
+        sub = win[win["cap"] == cap].groupby("date")
+        above_cap[cap] = [above_ratio(sub.get_group(d)) if d in sub.groups else 0.0 for d in dates]
+
+    # 连板梯队
+    def board_count(frame, h):
+        if h == "5+":
+            return int((frame["board_height"] >= 5).sum())
+        return int((frame["board_height"] == int(h)).sum())
+    boards3 = [board_count(daily.get_group(d), "3") for d in dates]
+    boards4 = [board_count(daily.get_group(d), "4") for d in dates]
+    boards5 = [board_count(daily.get_group(d), "5+") for d in dates]
+    max_height = [int(daily.get_group(d)["board_height"].max() or 0) for d in dates]
+
+    # 板块等权累计涨跌幅
+    seg_returns: Dict[str, List[float]] = {}
+    for seg in ["全A", "沪主板", "深主板", "创业板", "科创板"]:
+        sub = win if seg == "全A" else win[win["seg"] == seg]
+        mean_pct = sub.groupby("date")["pct"].mean().reindex(dates).fillna(0.0)
+        cum = (1 + mean_pct).cumprod() - 1
+        seg_returns[seg] = [round(float(v) * 100, 2) for v in cum]
+
+    # KPI（最新交易日）
+    last = dates[-1]
+    prev = dates[-2] if len(dates) >= 2 else None
+    turnover_today = amount_yi[-1]
+    turnover_prev = amount_yi[-2] if len(amount_yi) >= 2 else turnover_today
+    adv_dec_ratio = round(adv_list[-1] / dec_list[-1], 2) if dec_list[-1] else float(adv_list[-1])
+    sentiment_temp = _sentiment_temperature(above_all[-1], adv_dec_ratio, limit_up_cnt[-1], limit_down_cnt[-1])
+
+    return {
+        "empty": False,
+        "start": start, "end": end, "dates": dates, "as_of": last,
+        "kpi": {
+            "sentiment_temperature": sentiment_temp,
+            "turnover_yi": turnover_today,
+            "turnover_change_yi": round(turnover_today - turnover_prev, 1),
+            "max_board_height": max_height[-1],
+            "limit_up": limit_up_cnt[-1], "limit_down": limit_down_cnt[-1],
+            "boards3": boards3[-1], "boards4": boards4[-1], "boards5plus": boards5[-1],
+            "adv_dec_ratio": adv_dec_ratio,
+            "advancers": adv_list[-1], "decliners": dec_list[-1],
+            "above_ma5_pct": above_all[-1],
+        },
+        "turnover_trend": {"dates": dates, "amount_yi": amount_yi},
+        "above_ma5_trend": {"dates": dates, "all": above_all, **above_cap},
+        "limit_distribution": {"dates": dates, "up": limit_up_cnt, "down": limit_down_cnt},
+        "board_ladder": {"dates": dates, "b3": boards3, "b4": boards4, "b5plus": boards5, "max_height": max_height},
+        "index_returns": {"dates": dates, **seg_returns},
+    }
+
+
+def _sentiment_temperature(above_ma5_pct: float, adv_dec_ratio: float, up: int, down: int) -> int:
+    # 三因子合成 0-100：5日线占比(权重0.45) + 涨跌比(0.30) + 涨跌停强弱(0.25)
+    ratio_score = min(100.0, adv_dec_ratio / 3.0 * 100) if adv_dec_ratio else 0.0
+    limit_total = up + down
+    limit_score = (up / limit_total * 100) if limit_total else 50.0
+    temp = above_ma5_pct * 0.45 + ratio_score * 0.30 + limit_score * 0.25
+    return int(max(0, min(100, round(temp))))

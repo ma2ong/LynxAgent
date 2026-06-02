@@ -6,6 +6,9 @@
         <span class="name">LynxAgent</span>
       </div>
       <el-menu :default-active="route.path" router class="menu">
+        <el-menu-item index="/market/sentiment">
+          <el-icon><Odometer /></el-icon><span>大盘情绪</span>
+        </el-menu-item>
         <el-menu-item index="/quant">
           <el-icon><TrendCharts /></el-icon><span>智能选股</span>
         </el-menu-item>
@@ -40,7 +43,7 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
 import {
-  TrendCharts, Histogram, DataLine, Search, Star, Wallet, SwitchButton,
+  Odometer, TrendCharts, Histogram, DataLine, Search, Star, Wallet, SwitchButton,
 } from '@element-plus/icons-vue'
 
 const route = useRoute()

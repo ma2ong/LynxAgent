@@ -2403,6 +2403,20 @@ async def lite_events(limit: int = 100, source_type: str | None = None, sentimen
     }
 
 
+@app.get("/api/lite/market-sentiment")
+async def lite_market_sentiment(start: str | None = None, end: str | None = None):
+    """大盘情绪/市场宽度复盘（基于本地日线，无需 LLM）。"""
+    from quantcore.quant.market_sentiment import compute_market_sentiment
+    today = datetime.now().strftime("%Y-%m-%d")
+    e = end or today
+    s = start or (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    try:
+        data = await asyncio.to_thread(compute_market_sentiment, s, e)
+        return {"success": True, "data": data}
+    except Exception as exc:
+        return {"success": False, "data": None, "message": str(exc)}
+
+
 @app.get("/api/system/config/validate")
 async def validate_config():
     return {

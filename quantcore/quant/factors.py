@@ -58,6 +58,40 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["bb_upper"] = bb_mid + 2 * bb_std
     out["bb_lower"] = bb_mid - 2 * bb_std
 
+    # --- Extra indicators, implemented from standard public definitions ---
+    # ATR (Wilder): true range smoothed with RMA(14)
+    prev_close = out["close"].shift(1)
+    tr = pd.concat([
+        out["high"] - out["low"],
+        (out["high"] - prev_close).abs(),
+        (out["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    out["atr14"] = tr.ewm(alpha=1 / 14, adjust=False).mean()
+
+    # KDJ (9,3,3): stochastic of close within the n-day high/low range
+    low9 = out["low"].rolling(9).min()
+    high9 = out["high"].rolling(9).max()
+    rsv = ((out["close"] - low9) / (high9 - low9).replace(0, pd.NA) * 100).fillna(50.0)
+    out["kdj_k"] = rsv.ewm(alpha=1 / 3, adjust=False).mean()
+    out["kdj_d"] = out["kdj_k"].ewm(alpha=1 / 3, adjust=False).mean()
+    out["kdj_j"] = 3 * out["kdj_k"] - 2 * out["kdj_d"]
+
+    # ADX / DMI (Wilder, 14): directional movement and trend strength
+    up_move = out["high"].diff()
+    down_move = -out["low"].diff()
+    plus_dm = ((up_move > down_move) & (up_move > 0)).astype(float) * up_move.clip(lower=0)
+    minus_dm = ((down_move > up_move) & (down_move > 0)).astype(float) * down_move.clip(lower=0)
+    atr_di = tr.ewm(alpha=1 / 14, adjust=False).mean()
+    plus_di = 100 * plus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr_di.replace(0, pd.NA)
+    minus_di = 100 * minus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr_di.replace(0, pd.NA)
+    out["plus_di"] = plus_di
+    out["minus_di"] = minus_di
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, pd.NA)
+    out["adx14"] = dx.ewm(alpha=1 / 14, adjust=False).mean()
+
+    # Chandelier Exit (long stop): highest-high(22) - 3 * ATR
+    out["chandelier_long"] = out["high"].rolling(22).max() - 3 * out["atr14"]
+
     return out
 
 
@@ -140,3 +174,29 @@ def signal_from_score(score: float) -> str:
     if score >= 45:
         return "hold"
     return "avoid"
+
+
+def indicator_snapshot(df: pd.DataFrame) -> Dict[str, float]:
+    """Latest ATR / KDJ / ADX / Chandelier readings (standard public indicators)."""
+    data = enrich_indicators(df)
+    close = _last(data["close"])
+    atr = _last(data["atr14"])
+    return {
+        "atr": round(atr, 4),
+        "atr_pct": round(atr / close * 100, 2) if close else 0.0,
+        "kdj_k": round(_last(data["kdj_k"], 50.0), 2),
+        "kdj_d": round(_last(data["kdj_d"], 50.0), 2),
+        "kdj_j": round(_last(data["kdj_j"], 50.0), 2),
+        "adx": round(_last(data["adx14"]), 2),
+        "plus_di": round(_last(data["plus_di"]), 2),
+        "minus_di": round(_last(data["minus_di"]), 2),
+        "chandelier_stop": round(_last(data["chandelier_long"]), 2),
+    }
+
+
+def latest_adx(df: pd.DataFrame) -> float:
+    """Latest ADX(14) value; 0.0 on any failure. Used as a trend-strength filter."""
+    try:
+        return float(_last(enrich_indicators(df)["adx14"]))
+    except Exception:
+        return 0.0

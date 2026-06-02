@@ -3410,6 +3410,19 @@ def _build_professional_single_stock_report(
     reclaim_gap = ((reclaim - last_close) / last_close * 100) if last_close and reclaim else 0
     breakout_gap = ((breakout - last_close) / last_close * 100) if last_close and breakout else 0
 
+    # 额外指标（净室实现的 ATR/KDJ/ADX，从量化引擎 latest 快照读取）
+    atr_pct = float(latest.get("atr_pct") or 0)
+    adx_value = float(latest.get("adx") or 0)
+    kdj_j_value = latest.get("kdj_j")
+    chandelier_stop = _safe_number(latest.get("chandelier_stop")) or 0
+    kdj_state = ""
+    if kdj_j_value is not None:
+        jv = float(kdj_j_value)
+        kdj_state = f"KDJ 的 J={jv:.0f}（{'超买区，注意回踩' if jv > 100 else '超卖区，关注反弹' if jv < 0 else '中性'}）。"
+    adx_state = f"ADX {adx_value:.0f}（{'趋势明确' if adx_value >= 25 else '震荡为主' if adx_value < 20 else '趋势中等'}）。" if adx_value else ""
+    atr_state = f"ATR 波动约 {atr_pct:.1f}%。" if atr_pct else ""
+    extra_ind_line = kdj_state + adx_state + atr_state
+
     above_parts = []
     below_parts = []
     for name, value in [("5日线", ma5), ("10日线", ma10), ("20日线", ma20), ("30日线", ma30), ("60日线", ma60)]:
@@ -3458,6 +3471,7 @@ def _build_professional_single_stock_report(
         f"位于上方的均线：{'、'.join(above_parts) if above_parts else '暂无'}；"
         f"仍未站上的均线：{'、'.join(below_parts) if below_parts else '暂无'}。\n\n"
         f"趋势因子 {trend:.0f}，动量因子 {momentum:.0f}，RSI {rsi:.0f}，流动性 {liquidity:.0f}，风控 {risk_control:.0f}。"
+        f"{extra_ind_line}"
         f"{_rsi_profile(rsi)} {_risk_profile(risk_level, volatility, max_drawdown, sharpe)}\n\n"
         f"关键价位：短线承接位 {support:.2f}（距当前约 {support_gap:.1f}%），战术止损位 {hard_stop:.2f}（距当前约 {stop_gap:.1f}%），站稳确认位 {reclaim:.2f}（距当前约 {reclaim_gap:+.1f}%），加速确认位 {breakout:.2f}（距当前约 {breakout_gap:+.1f}%）。"
     )
@@ -3470,6 +3484,7 @@ def _build_professional_single_stock_report(
         f"- 未持有：不建议在涨幅已大时直接追。更好的入场是回踩 {support:.2f} 附近有承接，或放量站稳 {reclaim:.2f} 后再确认。\n"
         f"- 如果突破 {breakout:.2f} 且成交额同步放大，才说明短中期趋势有继续走一段的概率。\n"
         "- 若量化评分跌破 70、动量转弱或风控因子明显下降，应把它从进攻候选降级为观察。"
+        + (f"\n- ATR 自适应止损：吊灯止损位约 {chandelier_stop:.2f}（22 日最高 − 3×ATR），跌破视为趋势止损，比固定百分比更贴合个股波动。" if chandelier_stop else "")
     )
 
     final_report = "\n\n".join([
@@ -3587,11 +3602,27 @@ def build_lite_analysis_result(
     trend_view = "趋势强势" if trend_value >= 70 else "趋势中性" if trend_value >= 45 else "趋势偏弱"
     momentum_view = "短中期动量强" if momentum_value >= 70 else "动量一般" if momentum_value >= 45 else "动量偏弱"
 
+    # 额外指标（ATR/KDJ/ADX，来自量化引擎的 latest 快照）
+    atr_pct = float(latest.get("atr_pct") or 0)
+    chandelier_stop = float(latest.get("chandelier_stop") or 0)
+    adx_value = float(latest.get("adx") or 0)
+    kdj_j_value = latest.get("kdj_j")
+    kdj_text = ""
+    if kdj_j_value is not None:
+        jv = float(kdj_j_value)
+        kdj_state = "超买区，注意回踩" if jv > 100 else ("超卖区，关注反弹" if jv < 0 else "中性区")
+        kdj_text = f"KDJ 的 J 值 {jv:.0f}（{kdj_state}）。"
+    adx_text = ""
+    if adx_value:
+        adx_state = "趋势明确" if adx_value >= 25 else ("趋势偏弱/震荡为主" if adx_value < 20 else "趋势中等")
+        adx_text = f"ADX {adx_value:.0f}（{adx_state}）。"
+    extra_ind_text = f"{kdj_text}{adx_text}" + (f"波动性 ATR≈{atr_pct:.1f}%。" if atr_pct else "")
+
     technical = (
         f"技术结构判断：{trend_view}，{momentum_view}。"
         f"趋势因子 {_fmt_score(trend_value)}，动量因子 {_fmt_score(momentum_value)}，"
         f"RSI 因子 {_fmt_score(rsi_value)}，流动性因子 {_fmt_score(liquidity_value)}。"
-        f"{rsi_text}"
+        f"{rsi_text} {extra_ind_text}"
     )
     stock_name = (stock_meta or {}).get("name") or latest.get("name") or symbol
     score_line = f"{profile['grade']} / {profile['label']}，综合评分 {score:.1f}"
@@ -3615,10 +3646,15 @@ def build_lite_analysis_result(
         "当前 Lite 后端未连接新闻归档，暂不对公告、研报和舆情事件做结论。"
         "生产版建议接入公告、交易所问询、行业政策和主流财经新闻，避免只凭量价信号做决策。"
     )
+    atr_stop_line = (
+        f"\n\nATR 自适应止损参考：吊灯止损位约 {chandelier_stop:.2f}（= 22 日最高价 − 3×ATR），"
+        "跌破即视为趋势止损，比固定百分比更贴合个股波动。"
+        if chandelier_stop > 0 else ""
+    )
     investment_plan = (
         f"操作倾向：{plan['action']}。\n\n"
         f"仓位建议：{plan['position']}。\n\n"
-        f"风控规则：{plan['stop']}。\n\n"
+        f"风控规则：{plan['stop']}。{atr_stop_line}\n\n"
         "适用前提：趋势因子维持在当前水平附近，且最大回撤没有继续扩大。"
     )
     research_team_decision = (

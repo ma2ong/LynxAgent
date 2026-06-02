@@ -16,7 +16,7 @@ from .datalake import AKShareDataLake
 from .local_store import get_local_store
 from .screening import REASON_LABELS, exclusion_reason
 from .factor_agent import FactorResearchAgent
-from .factors import composite_score, compute_factor_scores, risk_metrics, signal_from_score
+from .factors import composite_score, compute_factor_scores, indicator_snapshot, latest_adx, risk_metrics, signal_from_score
 from .integrations import integration_capabilities, kronos_style_forecast, recognize_patterns, run_akquant_backtest_adapter
 from .models import BacktestResult, ForecastResult, PatternRecognitionResult, QuantAnalysisResult, QuantPick
 from .strategies import STRATEGIES
@@ -169,7 +169,9 @@ def _pattern_scan_one(payload: Dict[str, object]) -> Optional[Dict[str, object]]
         amount = _safe_float(quote.get("amount"), _safe_float(latest.get("amount"), 0))
         pattern_score = max(_safe_float(item.get("strength"), 0) for item in matched)
         realtime_score = max(0.0, min(100.0, 55 + pct_chg * 3.8 + min(amount / 100000000, 10) * 2.0))
-        score = round(pattern_score * 0.52 + quant_score * 0.30 + realtime_score * 0.18, 1)
+        adx_val = latest_adx(data)
+        adx_adj = 4.0 if adx_val >= 25 else (-4.0 if 0 < adx_val < 20 else 0.0)
+        score = round(pattern_score * 0.52 + quant_score * 0.30 + realtime_score * 0.18 + adx_adj, 1)
         reasons = []
         for pattern in matched[:4]:
             reasons.append(f"{pattern.get('name')} {float(pattern.get('strength') or 0):.1f}")
@@ -177,6 +179,8 @@ def _pattern_scan_one(payload: Dict[str, object]) -> Optional[Dict[str, object]]
             reasons.append(f"实时涨跌幅 {pct_chg:+.2f}%")
         if amount:
             reasons.append(f"成交额 {amount / 100000000:.2f}亿")
+        if adx_val:
+            reasons.append(f"ADX {adx_val:.0f}")
         industry = str(payload.get("industry") or "")
         return {
             "symbol": symbol, "code": symbol,
@@ -224,6 +228,11 @@ class QuantEngine:
             "volume": float(latest_row.get("volume", 0) or 0),
             "amount": float(latest_row.get("amount", 0) or 0),
         }
+        # Attach ATR / KDJ / ADX / chandelier stop for downstream trade plans & UI.
+        try:
+            latest.update(indicator_snapshot(data))
+        except Exception:
+            pass
         return QuantAnalysisResult(
             symbol=symbol,
             score=score,
@@ -471,7 +480,9 @@ class QuantEngine:
             amount = _safe_float(quote.get("amount"), _safe_float(latest.get("amount"), 0))
             pattern_score = max(_safe_float(item.get("strength"), 0) for item in matched)
             realtime_score = max(0.0, min(100.0, 55 + pct_chg * 3.8 + min(amount / 100000000, 10) * 2.0))
-            score = round(pattern_score * 0.52 + quant_score * 0.30 + realtime_score * 0.18, 1)
+            adx_val = latest_adx(data)
+            adx_adj = 4.0 if adx_val >= 25 else (-4.0 if 0 < adx_val < 20 else 0.0)
+            score = round(pattern_score * 0.52 + quant_score * 0.30 + realtime_score * 0.18 + adx_adj, 1)
             reasons = []
             for pattern in matched[:4]:
                 reasons.append(f"{pattern.get('name')} {float(pattern.get('strength') or 0):.1f}")
@@ -479,6 +490,8 @@ class QuantEngine:
                 reasons.append(f"实时涨跌幅 {pct_chg:+.2f}%")
             if amount:
                 reasons.append(f"成交额 {amount / 100000000:.2f}亿")
+            if adx_val:
+                reasons.append(f"ADX {adx_val:.0f}")
             industry = str(meta.get("industry") or meta.get("board") or meta.get("sector") or "")
             return {
                 "symbol": symbol, "code": symbol,

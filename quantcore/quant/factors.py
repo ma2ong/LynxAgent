@@ -38,7 +38,7 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     delta = out["close"].diff()
     gain = delta.clip(lower=0).rolling(14).mean()
     loss = (-delta.clip(upper=0)).rolling(14).mean()
-    rs = gain / loss.replace(0, pd.NA)
+    rs = gain / loss.replace(0, float("nan"))
     out["rsi14"] = 100 - (100 / (1 + rs))
     out["volatility20"] = out["ret"].rolling(20).std() * (252 ** 0.5)
     out["volume_ma20"] = out.get("volume", pd.Series(index=out.index, dtype=float)).rolling(20).mean()
@@ -71,7 +71,7 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # KDJ (9,3,3): stochastic of close within the n-day high/low range
     low9 = out["low"].rolling(9).min()
     high9 = out["high"].rolling(9).max()
-    rsv = ((out["close"] - low9) / (high9 - low9).replace(0, pd.NA) * 100).fillna(50.0)
+    rsv = ((out["close"] - low9) / (high9 - low9).replace(0, float("nan")) * 100).fillna(50.0)
     out["kdj_k"] = rsv.ewm(alpha=1 / 3, adjust=False).mean()
     out["kdj_d"] = out["kdj_k"].ewm(alpha=1 / 3, adjust=False).mean()
     out["kdj_j"] = 3 * out["kdj_k"] - 2 * out["kdj_d"]
@@ -82,11 +82,11 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     plus_dm = ((up_move > down_move) & (up_move > 0)).astype(float) * up_move.clip(lower=0)
     minus_dm = ((down_move > up_move) & (down_move > 0)).astype(float) * down_move.clip(lower=0)
     atr_di = tr.ewm(alpha=1 / 14, adjust=False).mean()
-    plus_di = 100 * plus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr_di.replace(0, pd.NA)
-    minus_di = 100 * minus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr_di.replace(0, pd.NA)
+    plus_di = 100 * plus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr_di.replace(0, float("nan"))
+    minus_di = 100 * minus_dm.ewm(alpha=1 / 14, adjust=False).mean() / atr_di.replace(0, float("nan"))
     out["plus_di"] = plus_di
     out["minus_di"] = minus_di
-    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, pd.NA)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, float("nan"))
     out["adx14"] = dx.ewm(alpha=1 / 14, adjust=False).mean()
 
     # Chandelier Exit (long stop): highest-high(22) - 3 * ATR
@@ -104,13 +104,13 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     tp_diff = typical.diff()
     pos_mf = raw_mf.where(tp_diff > 0, 0.0).rolling(14).sum()
     neg_mf = raw_mf.where(tp_diff < 0, 0.0).rolling(14).sum()
-    mfr = pos_mf / neg_mf.replace(0, pd.NA)
+    mfr = pos_mf / neg_mf.replace(0, float("nan"))
     out["mfi14"] = 100 - (100 / (1 + mfr))
 
     # Chaikin Money Flow (20)
-    hl = (out["high"] - out["low"]).replace(0, pd.NA)
+    hl = (out["high"] - out["low"]).replace(0, float("nan"))
     mf_mult = ((out["close"] - out["low"]) - (out["high"] - out["close"])) / hl
-    out["cmf20"] = (mf_mult * vol).rolling(20).sum() / vol.rolling(20).sum().replace(0, pd.NA)
+    out["cmf20"] = (mf_mult * vol).rolling(20).sum() / vol.rolling(20).sum().replace(0, float("nan"))
 
     # Keltner Channel (EMA20 ± 2 * ATR)
     kc_mid = out["close"].ewm(span=20, adjust=False).mean()

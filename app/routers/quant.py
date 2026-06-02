@@ -28,7 +28,10 @@ class QuantScreenRequest(BaseModel):
 
 class QuantBacktestRequest(BaseModel):
     symbol: str
-    strategy: str = Field("ma_volume", description="ma_volume/turtle_breakout/rps_breakout/high_tight_flag/limit_up_washout/multi_ma_breakout")
+    strategy: str = Field("ma_volume", description="single strategy name (used when 'strategies' is empty)")
+    strategies: Optional[List[str]] = Field(None, description="compose multiple strategies into one signal")
+    combine: str = Field("and", description="and/or/majority — how to combine 'strategies'")
+    stop_loss_pct: float = Field(0.0, ge=0, le=0.5, description="0 disables; e.g. 0.08 = exit on 8% drawdown from entry")
     engine: str = Field("vector", description="vector/backtrader/akquant")
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -145,6 +148,9 @@ async def backtest_strategy(req: QuantBacktestRequest):
             req.end_date,
             req.initial_cash,
             req.engine,
+            req.strategies,
+            req.combine,
+            req.stop_loss_pct,
         )
         return asdict(result)
     except Exception as exc:

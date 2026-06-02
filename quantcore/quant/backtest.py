@@ -14,10 +14,30 @@ def run_long_only_backtest(
     signal_func: Callable[[pd.DataFrame], pd.Series],
     strategy_name: str,
     initial_cash: float = 100000.0,
+    stop_loss_pct: float = 0.0,
 ) -> BacktestResult:
     data = enrich_indicators(df)
     raw_signal = signal_func(data).fillna(False)
-    position = raw_signal.astype(int).shift(1).fillna(0)
+    if stop_loss_pct and stop_loss_pct > 0:
+        # Stateful: hold while signal true, force-exit if close falls below
+        # entry * (1 - stop_loss_pct). Trades execute next bar (position.shift(1)).
+        closes = data["close"].tolist()
+        sig = raw_signal.astype(bool).tolist()
+        held: List[int] = []
+        in_pos = False
+        entry = 0.0
+        for i in range(len(data)):
+            if in_pos:
+                if closes[i] <= entry * (1 - stop_loss_pct) or not sig[i]:
+                    in_pos = False
+                    entry = 0.0
+            if not in_pos and sig[i]:
+                in_pos = True
+                entry = closes[i]
+            held.append(1 if in_pos else 0)
+        position = pd.Series(held, index=data.index).shift(1).fillna(0)
+    else:
+        position = raw_signal.astype(int).shift(1).fillna(0)
     returns = data["close"].pct_change().fillna(0)
     strategy_returns = returns * position
     equity = initial_cash * (1 + strategy_returns).cumprod()

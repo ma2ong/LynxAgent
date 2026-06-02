@@ -19,7 +19,7 @@ from .factor_agent import FactorResearchAgent
 from .factors import composite_score, compute_factor_scores, indicator_snapshot, latest_adx, risk_metrics, signal_from_score
 from .integrations import integration_capabilities, kronos_style_forecast, recognize_patterns, run_akquant_backtest_adapter
 from .models import BacktestResult, ForecastResult, PatternRecognitionResult, QuantAnalysisResult, QuantPick
-from .strategies import STRATEGIES
+from .strategies import STRATEGIES, resolve_strategy
 
 
 def _market_quote_code(symbol: str) -> str:
@@ -559,29 +559,38 @@ class QuantEngine:
         end_date: Optional[str] = None,
         initial_cash: float = 100000.0,
         engine: str = "vector",
+        strategies: Optional[List[str]] = None,
+        combine: str = "and",
+        stop_loss_pct: float = 0.0,
     ) -> BacktestResult:
-        if strategy not in STRATEGIES:
-            supported = ", ".join(sorted(STRATEGIES))
-            raise ValueError(f"不支持的策略: {strategy}. 支持: {supported}")
+        # Resolve single strategy or a composite (and/or/majority) into one signal.
+        signal_func, label = resolve_strategy(strategy=strategy, strategies=strategies, combine=combine)
 
         df = fetch_stock_dataframe(symbol, start_date or default_start_date(900), end_date)
         data = normalize_ohlcv(df)
         if len(data) < self.min_bars:
             raise ValueError(f"{symbol} 历史K线不足 {self.min_bars} 根，无法回测")
 
+        composite = bool(strategies and len([n for n in strategies if n in STRATEGIES]) > 1)
+        # Stop-loss + composites are only supported by the vector engine.
+        if stop_loss_pct and stop_loss_pct > 0:
+            engine = "vector"
+        if composite and engine == "akquant":
+            engine = "vector"
+
         if engine == "akquant":
-            result_data = run_akquant_backtest_adapter(symbol, data, strategy, initial_cash)
+            result_data = run_akquant_backtest_adapter(symbol, data, label, initial_cash)
             return BacktestResult(**result_data)
 
         if engine == "backtrader":
             try:
-                return run_backtrader_backtest(symbol, data, STRATEGIES[strategy], strategy, initial_cash)
+                return run_backtrader_backtest(symbol, data, signal_func, label, initial_cash)
             except BacktraderUnavailable:
-                result = run_long_only_backtest(symbol, data, STRATEGIES[strategy], strategy, initial_cash)
+                result = run_long_only_backtest(symbol, data, signal_func, label, initial_cash, stop_loss_pct)
                 result.engine = "vector_fallback_backtrader_missing"
                 return result
 
-        result = run_long_only_backtest(symbol, data, STRATEGIES[strategy], strategy, initial_cash)
+        result = run_long_only_backtest(symbol, data, signal_func, label, initial_cash, stop_loss_pct)
         result.engine = "vector"
         return result
 

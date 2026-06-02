@@ -278,7 +278,10 @@ export const quantApi = {
 
   backtest: async (payload: {
     symbol: string
-    strategy: string
+    strategy?: string
+    strategies?: string[]
+    combine?: string
+    stop_loss_pct?: number
     engine?: string
     start_date?: string
     end_date?: string

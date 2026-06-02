@@ -64,3 +64,46 @@ STRATEGIES = {
     "multi_ma_breakout": multi_ma_breakout_signal,
     "keltner_breakout": keltner_breakout_signal,
 }
+
+
+def _combine(funcs, mode: str, threshold: int | None = None):
+    """Combine multiple signal functions into one (and / or / majority)."""
+    def signal(df: pd.DataFrame) -> pd.Series:
+        cols = []
+        for i, f in enumerate(funcs):
+            s = f(df).reindex(df.index).fillna(False).astype(int)
+            s.name = f"s{i}"
+            cols.append(s)
+        if not cols:
+            return pd.Series(False, index=df.index)
+        mat = pd.concat(cols, axis=1).fillna(0)
+        hits = mat.sum(axis=1)
+        if mode == "or":
+            return hits >= 1
+        if mode == "majority":
+            need = threshold or (len(cols) // 2 + 1)
+            return hits >= need
+        return hits >= len(cols)  # default: and
+    return signal
+
+
+def resolve_strategy(strategy=None, strategies=None, combine: str = "and", threshold: int | None = None):
+    """Resolve a single strategy name or a composite into (signal_func, label).
+
+    - single: resolve_strategy("ma_volume")
+    - composite: resolve_strategy(strategies=["ma_volume","keltner_breakout"], combine="and")
+    """
+    names = [n for n in (strategies or []) if n in STRATEGIES]
+    if names:
+        mode = (combine or "and").lower()
+        if mode not in {"and", "or", "majority"}:
+            mode = "and"
+        funcs = [STRATEGIES[n] for n in names]
+        if len(names) == 1:
+            return funcs[0], names[0]
+        label = f"{mode}({'+'.join(names)})"
+        return _combine(funcs, mode, threshold), label
+    if strategy and strategy in STRATEGIES:
+        return STRATEGIES[strategy], strategy
+    supported = ", ".join(sorted(STRATEGIES))
+    raise ValueError(f"不支持的策略: {strategy or strategies}. 支持: {supported}")

@@ -338,15 +338,26 @@
             <el-form-item label="股票代码">
               <el-input v-model="backtestForm.symbol" placeholder="600519" clearable />
             </el-form-item>
-            <el-form-item label="策略">
-              <el-select v-model="backtestForm.strategy" style="width: 100%">
+            <el-form-item label="策略（可多选组合）">
+              <el-select v-model="backtestForm.strategies" multiple collapse-tags style="width: 100%">
                 <el-option label="均线放量" value="ma_volume" />
                 <el-option label="海龟突破" value="turtle_breakout" />
                 <el-option label="RPS 突破" value="rps_breakout" />
                 <el-option label="高窄旗形" value="high_tight_flag" />
                 <el-option label="涨停洗盘修复" value="limit_up_washout" />
                 <el-option label="多均线共振突破" value="multi_ma_breakout" />
+                <el-option label="Keltner 通道突破" value="keltner_breakout" />
               </el-select>
+            </el-form-item>
+            <el-form-item v-if="backtestForm.strategies.length > 1" label="组合方式">
+              <el-select v-model="backtestForm.combine" style="width: 100%">
+                <el-option label="全部满足 (AND)" value="and" />
+                <el-option label="任一满足 (OR)" value="or" />
+                <el-option label="多数满足 (Majority)" value="majority" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="止损 (%，0=不启用)">
+              <el-input-number v-model="backtestForm.stop_loss_pct" :min="0" :max="50" :step="1" style="width: 100%" />
             </el-form-item>
             <el-form-item label="回测引擎">
               <el-select v-model="backtestForm.engine" style="width: 100%">
@@ -490,7 +501,9 @@ const selectedPatternRows = ref<QuantPatternPoolItem[]>([])
 
 const backtestForm = ref({
   symbol: '600519',
-  strategy: 'ma_volume',
+  strategies: ['ma_volume'] as string[],
+  combine: 'and',
+  stop_loss_pct: 0,
   engine: 'vector',
   initial_cash: 100000
 })
@@ -728,15 +741,23 @@ const runBacktest = async () => {
     ElMessage.warning('请输入股票代码')
     return
   }
+  if (!backtestForm.value.strategies.length) {
+    ElMessage.warning('请至少选择一个策略')
+    return
+  }
   backtestLoading.value = true
   try {
     backtestResult.value = await quantApi.backtest({
       symbol: backtestForm.value.symbol.trim(),
-      strategy: backtestForm.value.strategy,
+      strategies: backtestForm.value.strategies,
+      combine: backtestForm.value.combine,
+      stop_loss_pct: (backtestForm.value.stop_loss_pct || 0) / 100,
       engine: backtestForm.value.engine,
       initial_cash: backtestForm.value.initial_cash,
       ...parseRange(backtestRange.value)
     })
+  } catch (error: any) {
+    ElMessage.error(error?.message || '回测失败')
   } finally {
     backtestLoading.value = false
   }

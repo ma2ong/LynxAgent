@@ -58,14 +58,16 @@ _THEME_TIMEOUT = 10  # akshare 新闻接口最多等 10 秒，超时跳过
 
 def _run_theme_agent_safe() -> Dict[str, object]:
     """带超时的 theme_agent 调用：网络超时时返回空主题而不是挂死。"""
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        fut = ex.submit(run_theme_agent)
-        try:
-            return fut.result(timeout=_THEME_TIMEOUT)
-        except FuturesTimeout:
-            return {"stage": "theme_agent", "llm_used": False, "themes": [], "note": "新闻接口超时，已跳过题材分析"}
-        except Exception:
-            return {"stage": "theme_agent", "llm_used": False, "themes": [], "note": "新闻接口异常，已跳过题材分析"}
+    ex = ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(run_theme_agent)
+    try:
+        return fut.result(timeout=_THEME_TIMEOUT)
+    except FuturesTimeout:
+        return {"stage": "theme_agent", "llm_used": False, "themes": [], "note": "新闻接口超时，已跳过题材分析"}
+    except Exception:
+        return {"stage": "theme_agent", "llm_used": False, "themes": [], "note": "新闻接口异常，已跳过题材分析"}
+    finally:
+        ex.shutdown(wait=False)  # 不等挂死的网络线程，让其作为 daemon 线程在后台消亡
 
 RUNS_DIR = os.path.join("runtime", "pipeline_runs")
 

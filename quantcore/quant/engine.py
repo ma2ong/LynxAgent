@@ -422,6 +422,33 @@ class QuantEngine:
             items[i] = _score(metas[i], ma20)
 
         items.sort(key=lambda item: float(item["score"]), reverse=True)
+
+        # 第三段：用多路策略 + critic 对 top 候选做本地 K 线验证，融合提升准确性
+        # 仅在本地有 K 线缓存时生效；无本地数据时跳过，不降低原有速度
+        try:
+            from .pipeline.orchestrator import quick_critic_batch
+            top_symbols = [it["symbol"] for it in items[:max(safe_limit * 3, 60)]]
+            critic_result = quick_critic_batch(top_symbols)
+            critic_scores: Dict[str, float] = {
+                sym: v["score"] for sym, v in critic_result.get("scores", {}).items()
+            }
+            if critic_scores:
+                for it in items:
+                    c = critic_scores.get(it["symbol"])
+                    if c is None:
+                        continue
+                    # critic 0-10 折算到 0-100，与现有分 7:3 融合
+                    base = float(it["score"])
+                    blended = round(base * 0.7 + c * 10 * 0.3, 1)
+                    it["score"] = blended
+                    it["quant_score"] = blended
+                    # critic 通过的加入 reasons；不通过的附注警示
+                    if c >= 6.0 and "AI策略验证通过" not in it.get("reasons", []):
+                        it.setdefault("reasons", []).append(f"AI策略验证 {c:.1f}/10")
+                items.sort(key=lambda item: float(item["score"]), reverse=True)
+        except Exception:
+            pass  # pipeline 不可用时静默降级，不影响结果
+
         return _json_safe({
             "source": f"quant-engine-smart-pool:{pool_source}",
             "universe_size": len(pool),

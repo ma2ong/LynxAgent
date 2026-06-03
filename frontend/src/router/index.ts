@@ -9,6 +9,7 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: '', redirect: '/market/sentiment' },
       { path: 'market/sentiment', name: 'market-sentiment', component: () => import('@/views/Market/Sentiment.vue') },
+      { path: 'limit-up', name: 'limit-up', component: () => import('@/views/LimitUp/Index.vue') },
       { path: 'quant', name: 'quant', component: () => import('@/views/Quant/index.vue') },
       { path: 'stock-report', name: 'stock-report', component: () => import('@/views/StockReport/Report.vue') },
       { path: 'insights/hot-news', name: 'hot-news', component: () => import('@/views/Insights/HotNews.vue') },

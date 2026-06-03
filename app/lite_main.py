@@ -2465,6 +2465,18 @@ async def lite_market_sentiment(start: str | None = None, end: str | None = None
         return {"success": False, "data": None, "message": str(exc)}
 
 
+@app.get("/api/lite/limit-up")
+async def lite_limit_up_distribution(date: str | None = None):
+    """涨停热点分布：单日连板梯队 × 概念板块矩阵（基于本地日线）。"""
+    from quantcore.quant.limit_up import compute_limit_up_distribution
+    target = date or datetime.now().strftime("%Y-%m-%d")
+    try:
+        data = await asyncio.to_thread(compute_limit_up_distribution, target)
+        return {"success": True, "data": data}
+    except Exception as exc:
+        return {"success": False, "data": None, "message": str(exc)}
+
+
 @app.get("/api/system/config/validate")
 async def validate_config():
     return {

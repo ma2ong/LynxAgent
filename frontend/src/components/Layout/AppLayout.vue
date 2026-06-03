@@ -9,6 +9,9 @@
         <el-menu-item index="/market/sentiment">
           <el-icon><Odometer /></el-icon><span>大盘情绪</span>
         </el-menu-item>
+        <el-menu-item index="/limit-up">
+          <el-icon><Histogram /></el-icon><span>涨停热点</span>
+        </el-menu-item>
         <el-menu-item index="/quant">
           <el-icon><TrendCharts /></el-icon><span>智能选股</span>
         </el-menu-item>

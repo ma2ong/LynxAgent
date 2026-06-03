@@ -58,7 +58,6 @@
         <div class="chart-card"><div class="ct">大盘情绪（5日线占比）趋势</div><div ref="ma5El" class="chart"></div></div>
       </div>
       <div class="chart-card full"><div class="ct">涨跌停板分布对比</div><div ref="limitEl" class="chart wide"></div></div>
-      <div class="chart-card full"><div class="ct">涨停动因连板高度阶梯图</div><div ref="causeLadderEl" class="chart wide"></div></div>
       <div class="chart-row">
         <div class="chart-card"><div class="ct">连板梯队结构</div><div ref="ladderEl" class="chart"></div></div>
         <div class="chart-card"><div class="ct">板块涨跌幅（区间累计）</div><div ref="indexEl" class="chart"></div></div>
@@ -83,7 +82,6 @@ const gaugeEl = ref<HTMLDivElement>()
 const turnoverEl = ref<HTMLDivElement>()
 const ma5El = ref<HTMLDivElement>()
 const limitEl = ref<HTMLDivElement>()
-const causeLadderEl = ref<HTMLDivElement>()
 const ladderEl = ref<HTMLDivElement>()
 const indexEl = ref<HTMLDivElement>()
 const charts: echarts.ECharts[] = []
@@ -99,7 +97,7 @@ const fmtTurnover = (yi?: number) => {
 }
 
 const defaultRange = (): [string, string] => {
-  const end = new Date(); end.setDate(end.getDate() - 1)
+  const end = new Date()
   const start = new Date(); start.setDate(start.getDate() - 30)
   const f = (d: Date) => d.toISOString().slice(0, 10)
   return [f(start), f(end)]
@@ -166,31 +164,6 @@ const renderAll = () => {
   })
 
   const lad = d.board_ladder
-  const causeLadder = d.cause_ladder || []
-  mk(causeLadderEl.value)?.setOption({
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: { type: 'shadow' },
-      formatter: (params: any) => {
-        const cause = params?.[0]?.axisValue
-        const item = causeLadder.find((x: any) => x.cause === cause)
-        const stocks = (item?.stocks || []).map((s: any) => `${s.name}(${s.height}板)`).join('、')
-        return `${cause}<br/>${params.map((p: any) => `${p.seriesName}: ${p.value}`).join('<br/>')}<br/>${stocks}`
-      },
-    },
-    legend: { top: 0, data: ['1板', '2板', '3板', '4板', '5板+'], itemHeight: 8, textStyle: { fontSize: 10 } },
-    grid: { left: 72, right: 20, top: 32, bottom: 30 },
-    xAxis: { type: 'value', name: '家数' },
-    yAxis: { type: 'category', data: causeLadder.map((x: any) => x.cause), axisLabel: { fontSize: 11 } },
-    series: [
-      { name: '1板', type: 'bar', stack: 'ladder', data: causeLadder.map((x: any) => x.b1), itemStyle: { color: '#91cc75' } },
-      { name: '2板', type: 'bar', stack: 'ladder', data: causeLadder.map((x: any) => x.b2), itemStyle: { color: '#fac858' } },
-      { name: '3板', type: 'bar', stack: 'ladder', data: causeLadder.map((x: any) => x.b3), itemStyle: { color: '#ee6666' } },
-      { name: '4板', type: 'bar', stack: 'ladder', data: causeLadder.map((x: any) => x.b4), itemStyle: { color: '#9a60b4' } },
-      { name: '5板+', type: 'bar', stack: 'ladder', data: causeLadder.map((x: any) => x.b5plus), itemStyle: { color: '#d81e06' } },
-    ],
-  })
-
   mk(ladderEl.value)?.setOption({
     tooltip: { trigger: 'axis' }, legend: { top: 0, data: ['3板', '4板', '5板+', '最高板'], itemHeight: 8, textStyle: { fontSize: 10 } },
     grid: { left: 40, right: 44, top: 28, bottom: 28 },

@@ -58,21 +58,22 @@ def default_start_date(days: int = 420) -> str:
     return (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
 
 
-def _compact_date(value: Optional[str]) -> Optional[str]:
-    return value.replace("-", "") if value else None
-
-
 def _fetch_from_akshare(symbol: str, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
-    import akshare as ak
+    from .data_sources import AKShareSource
 
-    clean_symbol = symbol.strip()
-    return ak.stock_zh_a_hist(
-        symbol=clean_symbol,
-        period="daily",
-        start_date=_compact_date(start_date) or _compact_date(default_start_date()),
-        end_date=_compact_date(end_date) or _compact_date(date.today().strftime("%Y-%m-%d")),
-        adjust="qfq",
-    )
+    return AKShareSource().history(symbol, start_date, end_date)
+
+
+def _fetch_from_efinance(symbol: str, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
+    from .data_sources import EFinanceSource
+
+    return EFinanceSource().history(symbol, start_date, end_date)
+
+
+def _fetch_from_baostock(symbol: str, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
+    from .data_sources import BaoStockSource
+
+    return BaoStockSource().history(symbol, start_date, end_date)
 
 
 def _fetch_from_yfinance(symbol: str, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
@@ -92,7 +93,17 @@ def _fetch_from_yfinance(symbol: str, start_date: Optional[str], end_date: Optio
 
 
 def fetch_stock_dataframe(symbol: str, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
-    for fetcher in (_fetch_from_akshare, _fetch_from_yfinance):
+    from .data_sources import fetch_history
+
+    try:
+        df, _, _ = fetch_history(symbol, start_date, end_date)
+        df = normalize_ohlcv(df)
+        if not df.empty:
+            return df
+    except Exception:
+        pass
+
+    for fetcher in (_fetch_from_yfinance,):
         try:
             df = normalize_ohlcv(fetcher(symbol, start_date, end_date))
             if not df.empty:

@@ -33,6 +33,9 @@ export interface QuantAnalysisResult {
   integrations?: {
     pattern_recognition?: PatternRecognitionResult
     kronos_forecast?: ForecastResult
+    wyckoff?: WyckoffAnalysis
+    ml_features?: MlFeatureSnapshot
+    multi_asset_hmm?: MultiAssetHmm
     [key: string]: unknown
   }
 }
@@ -183,6 +186,47 @@ export interface PatternRecognitionResult {
   }>
 }
 
+export interface WyckoffAnalysis {
+  phase: string
+  bias: string
+  score: number
+  accumulation_score?: number
+  distribution_score?: number
+  vol_spread_ratio?: number
+  signals?: string[]
+  reasons?: string[]
+}
+
+export interface MlFeatureSnapshot {
+  feature_score: number
+  trend_persistence: number
+  risk_adjusted_momentum: number
+  volatility_rank: number
+  liquidity_quality: number
+  drawdown_repair: number
+}
+
+export interface MultiAssetHmm {
+  state: string
+  peer_count?: number
+  probabilities: Record<string, number>
+  dimensions: {
+    trend_regime: number
+    volatility_regime: number
+    cross_asset_correlation: number
+    liquidity_regime: number
+    mean_reversion_potential: number
+  }
+  mean_reversion: {
+    score: number
+    distance_to_lower_pct: number
+    deviation_pct: number
+    price: number
+    bb_lower: number
+    bb_mid: number
+  }
+}
+
 export interface IntegrationCapability {
   name: string
   project: string
@@ -197,6 +241,23 @@ export interface QuantCapabilitiesResult {
   integrations: IntegrationCapability[]
 }
 
+export interface DataSourceStatusItem {
+  key: string
+  name: string
+  installed: boolean
+  enabled: boolean
+  priority: number
+  capabilities: string[]
+  notes: string
+}
+
+export interface DataSourceStatusResult {
+  sources: DataSourceStatusItem[]
+  active_order: string[]
+  primary: string
+  fallback_enabled: boolean
+}
+
 const unwrap = <T>(response: any): T => {
   if (response && typeof response === 'object' && 'data' in response && 'success' in response) {
     return response.data as T
@@ -207,6 +268,24 @@ const unwrap = <T>(response: any): T => {
 export const quantApi = {
   capabilities: async () =>
     unwrap<QuantCapabilitiesResult>(await ApiClient.get('/api/quant/capabilities', undefined, { timeout: 60000 })),
+
+  dataSources: async () =>
+    unwrap<DataSourceStatusResult>(await ApiClient.get('/api/quant/data-sources', undefined, { timeout: 30000 })),
+
+  quickCritic: async (symbols: string[], names?: Record<string, string>) =>
+    unwrap<{ scores: Record<string, { score: number; keep: boolean; reject_reason: string | null }>; total: number }>(
+      await ApiClient.post('/api/quant/pipeline/quick-critic', { symbols, names }, { timeout: 30000 })
+    ),
+
+  pipelineRun: (universe?: string[], maxCandidates = 40) =>
+    ApiClient.post<any>('/api/quant/pipeline/run', { universe, max_candidates: maxCandidates }, { timeout: 300000 }),
+
+  pipelineRuns: () => ApiClient.get<any>('/api/quant/pipeline/runs'),
+
+  pipelineRunDetail: (runId: string) => ApiClient.get<any>(`/api/quant/pipeline/runs/${runId}`),
+
+  pipelineT5Review: (runId?: string) =>
+    ApiClient.post<any>('/api/quant/pipeline/t5-review', null, { params: { run_id: runId }, timeout: 120000 }),
 
   smartPool: async (limit = 20, universeLimit = 300) => {
     const raw = unwrap<any>(await ApiClient.get('/api/lite/smart-pool', { limit, universe_limit: universeLimit }, { timeout: 300000 }))

@@ -1004,6 +1004,50 @@ def _query_news_events(limit: int = 100, source_type: str | None = None, sentime
     return [_row_to_event(row) for row in rows]
 
 
+def _build_a_share_sentiment(events: list[dict[str, Any]]) -> dict[str, Any]:
+    if not events:
+        return {
+            "temperature": 50,
+            "stance": "中性",
+            "positive": 0,
+            "negative": 0,
+            "neutral": 0,
+            "top_themes": [],
+            "risk_flags": [],
+            "brief": "暂无足够 A 股舆情事件，先以量化和行情信号为主。",
+        }
+    pos = sum(1 for item in events if item.get("sentiment") == "利好")
+    neg = sum(1 for item in events if item.get("sentiment") == "利空")
+    neu = max(0, len(events) - pos - neg)
+    score_sum = sum(float(item.get("sentiment_score") or 0) for item in events)
+    temperature = int(max(0, min(100, 50 + score_sum / max(1, len(events)) * 35 + (pos - neg) / max(1, len(events)) * 30)))
+    stance = "偏热" if temperature >= 65 else "偏冷" if temperature <= 40 else "中性"
+    themes: dict[str, dict[str, Any]] = {}
+    risk_flags: list[str] = []
+    for item in events:
+        for tag in (item.get("tags") or [])[:3]:
+            bucket = themes.setdefault(str(tag), {"name": str(tag), "count": 0, "score": 0.0})
+            bucket["count"] += 1
+            bucket["score"] += max(0.1, abs(float(item.get("sentiment_score") or 0)))
+        if item.get("sentiment") == "利空" or item.get("event_type") == "regulatory_risk":
+            title = str(item.get("title") or "")
+            if title:
+                risk_flags.append(title)
+    top_themes = sorted(themes.values(), key=lambda x: (x["count"], x["score"]), reverse=True)[:6]
+    lead = top_themes[0]["name"] if top_themes else "热点扩散"
+    brief = f"A股舆情当前{stance}，利好 {pos} 条、利空 {neg} 条；重点看 {lead} 的持续性。"
+    return {
+        "temperature": temperature,
+        "stance": stance,
+        "positive": pos,
+        "negative": neg,
+        "neutral": neu,
+        "top_themes": [{"name": x["name"], "count": x["count"], "score": round(x["score"], 2)} for x in top_themes],
+        "risk_flags": list(dict.fromkeys(risk_flags))[:5],
+        "brief": brief,
+    }
+
+
 HOT_NEWS_RELEVANT_KEYWORDS = (
     "A股", "沪深", "创业板", "科创板", "北交所", "半导体", "芯片", "存储", "算力", "AI",
     "机器人", "低空", "电力", "数据中心", "新能源", "锂电", "光伏", "军工", "通信",
@@ -2066,7 +2110,7 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
 
 @app.get("/api/lite/hot-news")
 async def lite_hot_news(limit: int = 30):
-    cache_key = f"hot-news:{limit}"
+    cache_key = f"hot-news:sentiment-v2:{limit}"
     cached = _cache_get(cache_key, 300)
     if cached:
         return cached
@@ -2160,6 +2204,10 @@ async def lite_hot_news(limit: int = 30):
             {"name": "研报", "count": 0},
             {"name": "市场新闻", "count": 0},
         ],
+        "sentiment_analysis": _build_a_share_sentiment([
+            event for event in unique_events
+            if _is_actionable_hot_event(event) or _is_secondary_hot_event(event)
+        ][:160]),
         "items": items,
         "failed_sources": [],
         "source_note": "真实源：东方财富公告、东方财富研报、财新市场新闻；不可用源不会用模拟数据冒充。",
@@ -3458,7 +3506,26 @@ def _build_professional_single_stock_report(
         mom_bits.append(f"Aroon 上{aroon_up_v:.0f}/下{aroon_down_v:.0f}")
     mom_bits.append("OBV 上升" if obv_rising else "OBV 走平/下降")
     mom_state = ("动量补充：" + "、".join(mom_bits) + "。") if mom_bits else ""
-    extra_ind_line = kdj_state + adx_state + atr_state + mf_state + mom_state
+    wyckoff = (quant_result.get("integrations") or {}).get("wyckoff") or {}
+    wyckoff_line = ""
+    if wyckoff:
+        wyckoff_phase = str(wyckoff.get("phase") or "neutral-range")
+        wyckoff_bias = str(wyckoff.get("bias") or "neutral")
+        wyckoff_score = float(wyckoff.get("score") or 50)
+        wyckoff_reasons = "；".join(str(item) for item in (wyckoff.get("reasons") or [])[:2])
+        wyckoff_line = (
+            f"Wyckoff/VSA：{wyckoff_phase}，bias={wyckoff_bias}，score={wyckoff_score:.0f}。"
+            f"{wyckoff_reasons}。"
+        )
+    ml_features = (quant_result.get("integrations") or {}).get("ml_features") or {}
+    ml_line = ""
+    if ml_features:
+        ml_line = (
+            f"ML特征摘要：feature_score={float(ml_features.get('feature_score') or 50):.0f}，"
+            f"趋势持续性={float(ml_features.get('trend_persistence') or 50):.0f}，"
+            f"波动分位={float(ml_features.get('volatility_rank') or 50):.0f}。"
+        )
+    extra_ind_line = kdj_state + adx_state + atr_state + mf_state + mom_state + wyckoff_line + ml_line
 
     above_parts = []
     below_parts = []
@@ -4194,18 +4261,24 @@ async def multi_source_status():
 
 @app.get("/api/sync/multi-source/sources/status")
 async def multi_source_sources_status():
+    from quantcore.quant.data_sources import data_source_status
+
+    status = await asyncio.to_thread(data_source_status)
     return {
         "success": True,
         "data": [
             {
-                "name": "akshare",
-                "priority": 100,
-                "available": True,
-                "description": "SaaS Lite 默认本地数据源",
+                "name": item["key"],
+                "display_name": item["name"],
+                "priority": item["priority"],
+                "available": item["enabled"],
+                "description": item["notes"],
                 "token_source": "env",
+                "capabilities": item["capabilities"],
             }
+            for item in status["sources"]
         ],
-        "message": "SaaS Lite 未运行同步任务",
+        "message": "SaaS Lite 多数据源状态",
     }
 
 

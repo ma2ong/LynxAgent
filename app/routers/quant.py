@@ -7,6 +7,9 @@ from pydantic import BaseModel, Field
 
 from quantcore.quant import QuantEngine
 from quantcore.quant.chart_service import build_chart_payload
+from quantcore.quant.data_sources import data_source_status
+from quantcore.quant.report_service import build_stock_report
+from quantcore.quant.pipeline import run_pipeline, list_runs, get_run, run_t5_review, quick_critic_batch
 
 
 router = APIRouter(prefix="/api/quant", tags=["quant"])
@@ -87,6 +90,11 @@ async def quant_capabilities():
     return engine.capabilities()
 
 
+@router.get("/data-sources")
+async def quant_data_sources():
+    return await asyncio.to_thread(data_source_status)
+
+
 @router.get("/smart-pool")
 async def quant_smart_pool(limit: int = 20, universe_limit: int = 300):
     try:
@@ -100,12 +108,6 @@ async def quant_pattern_pool(limit: int = 20, universe_limit: int = 5000, min_st
                             exclude_fundamental: bool = True):
     try:
         result = await asyncio.to_thread(engine.pattern_pool, limit, universe_limit, min_strength, exclude_fundamental)
-        # 复用 smart-pool 的行业富集（cninfo，7天缓存）填充返回结果的行业/板块
-        try:
-            from app.lite_main import _enrich_smart_pool_industries
-            result["items"] = await _enrich_smart_pool_industries(result.get("items", []))
-        except Exception:
-            pass
         return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -177,5 +179,63 @@ async def sync_datalake(req: QuantPoolRequest):
 async def research_factors(req: QuantResearchRequest):
     try:
         return await asyncio.to_thread(engine.research_factors, req.symbols, req.start_date, req.end_date, req.initial_cash)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---- 个股 AI 研报 (feature A) ----
+@router.get("/report")
+async def quant_report(symbol: str):
+    try:
+        return await asyncio.to_thread(build_stock_report, symbol)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---- 多 Agent 选股流水线 (feature B) ----
+class PipelineRunRequest(BaseModel):
+    universe: Optional[List[str]] = None
+    max_candidates: int = Field(40, ge=1, le=200)
+
+
+@router.post("/pipeline/run")
+async def quant_pipeline_run(req: PipelineRunRequest):
+    try:
+        return await asyncio.to_thread(run_pipeline, req.universe, req.max_candidates, True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/pipeline/runs")
+async def quant_pipeline_runs():
+    return {"runs": list_runs()}
+
+
+@router.get("/pipeline/runs/{run_id}")
+async def quant_pipeline_run_detail(run_id: str):
+    try:
+        return get_run(run_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/pipeline/t5-review")
+async def quant_pipeline_t5(run_id: Optional[str] = None):
+    from quantcore.quant.pipeline.orchestrator import RUNS_DIR
+    import os
+    run_dir = os.path.join(RUNS_DIR, run_id) if run_id else None
+    return await asyncio.to_thread(run_t5_review, run_dir, None)
+
+
+class QuickCriticRequest(BaseModel):
+    symbols: List[str] = Field(..., min_length=1, max_length=100)
+    names: Optional[dict] = None
+
+
+@router.post("/pipeline/quick-critic")
+async def pipeline_quick_critic(req: QuickCriticRequest):
+    """对给定股票列表做快速规则 critic 打分，供一键推荐/形态智选结果富集 AI 评审分。"""
+    try:
+        return await asyncio.to_thread(quick_critic_batch, req.symbols, req.names)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -246,3 +246,56 @@ def get_run(run_id: str) -> Dict[str, object]:
         return {"error": "run not found", "run_id": run_id}
     with open(picks, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def quick_critic_batch(
+    symbols: List[str],
+    names: Optional[Dict[str, str]] = None,
+) -> Dict[str, object]:
+    """对给定股票列表做纯规则 critic 打分（不发网络请求，只用本地 K 线）。
+
+    供 smart_pool / pattern_pool 结果的 AI 评审富集，调用方传入 symbol 列表，
+    返回 {symbol: {score, keep, reject_reason}} 供前端添加列。
+    本地无 K 线的股票直接跳过（不返回）。
+    """
+    from .critic import attach_factors, run_critic
+
+    candidates = []
+    for sym in symbols[:100]:
+        sym = str(sym).zfill(6)
+        df = get_ohlcv(sym, days=200)
+        if df is None or df.empty or len(df) < 30:
+            continue
+        factors = attach_factors(sym, df)
+        snapshot: Dict[str, float] = {}
+        try:
+            from ..factors import enrich_indicators
+            e = enrich_indicators(df)
+            if "rsi14" in e:
+                rsi_s = e["rsi14"].dropna()
+                if not rsi_s.empty:
+                    snapshot["rsi"] = float(rsi_s.iloc[-1])
+        except Exception:
+            pass
+        candidates.append({
+            "symbol": sym,
+            "name": (names or {}).get(sym, ""),
+            "sources": ["quick_eval"],
+            "factors": factors,
+            "snapshot": snapshot,
+            "reason": "",
+            "source_reasons": [],
+        })
+
+    if not candidates:
+        return {"scores": {}, "total": 0}
+
+    critic_out = run_critic(candidates)
+    scores: Dict[str, object] = {}
+    for item in critic_out.get("kept", []) + critic_out.get("rejected", []):
+        scores[item["symbol"]] = {
+            "score": item["score"],
+            "keep": item["keep"],
+            "reject_reason": item.get("reject_reason"),
+        }
+    return {"scores": scores, "total": len(candidates)}

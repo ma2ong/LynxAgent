@@ -89,11 +89,25 @@
         </div>
 
         <div class="panel-block">
-          <div class="panel-title">AI解读</div>
-          <p>
-            当前榜单优先保留重组、订单、增持、业绩、审核进展等交易相关事件，
-        过滤例行制度公告、低相关海外资讯和非 A 股噪音，再回到单股分析里验证趋势、量能和风险。
-          </p>
+          <div class="panel-title">A股舆情分析</div>
+          <div class="sentiment-box">
+            <strong>{{ sentimentAnalysis.temperature ?? 50 }}%</strong>
+            <span>{{ sentimentAnalysis.stance || '中性' }}</span>
+          </div>
+          <p>{{ sentimentAnalysis.brief || '当前按 A 股事件库和热点标签生成舆情摘要。' }}</p>
+          <div class="sentiment-counts">
+            <el-tag size="small" type="danger">利好 {{ sentimentAnalysis.positive || 0 }}</el-tag>
+            <el-tag size="small" type="success">利空 {{ sentimentAnalysis.negative || 0 }}</el-tag>
+            <el-tag size="small" type="info">中性 {{ sentimentAnalysis.neutral || 0 }}</el-tag>
+          </div>
+          <div class="theme-list">
+            <el-tag v-for="item in sentimentAnalysis.top_themes || []" :key="item.name" effect="plain">
+              {{ item.name }} · {{ item.count }}
+            </el-tag>
+          </div>
+          <ul v-if="sentimentAnalysis.risk_flags?.length" class="risk-list">
+            <li v-for="item in sentimentAnalysis.risk_flags" :key="item">{{ item }}</li>
+          </ul>
         </div>
       </aside>
     </div>
@@ -112,6 +126,7 @@ const summary = ref<Record<string, any>>({})
 const newsItems = ref<HotNewsItem[]>([])
 const categories = ref<Array<{ name: string; count: number }>>([])
 const failedSources = ref<string[]>([])
+const sentimentAnalysis = ref<Record<string, any>>({})
 
 const loadData = async () => {
   loading.value = true
@@ -121,6 +136,7 @@ const loadData = async () => {
     summary.value = data.summary || {}
     newsItems.value = data.items || []
     categories.value = data.categories || []
+    sentimentAnalysis.value = data.sentiment_analysis || {}
     failedSources.value = data.failed_sources || []
   } catch (error: any) {
     console.error('加载热点新闻失败:', error)
@@ -299,6 +315,34 @@ onMounted(loadData)
   color: var(--el-text-color-secondary);
   line-height: 1.7;
   margin: 0;
+}
+
+.sentiment-box {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+
+  strong {
+    font-size: 28px;
+    color: var(--el-color-danger);
+  }
+}
+
+.sentiment-counts,
+.theme-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.risk-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+  font-size: 13px;
 }
 
 @media (max-width: 900px) {

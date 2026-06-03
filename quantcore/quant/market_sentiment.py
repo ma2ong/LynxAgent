@@ -44,6 +44,30 @@ def _cap_band(symbol: str) -> str:
     return "小盘股"
 
 
+def _limit_cause(name: str, industry: str, segment: str) -> str:
+    text = f"{name}{industry}"
+    rules = [
+        ("AI算力", ("算力", "数据中心", "服务器", "光模块", "通信", "光电")),
+        ("半导体", ("半导体", "芯片", "集成电路", "电子元件", "存储")),
+        ("机器人", ("机器人", "自动化", "电气设备", "专用设备")),
+        ("电力能源", ("电力", "能源", "煤炭", "油气", "光伏", "风电")),
+        ("低空经济", ("低空", "航空", "无人机", "通航")),
+        ("消费医药", ("消费", "食品", "医药", "创新药", "医疗")),
+        ("并购重组", ("重组", "并购", "资产注入")),
+        ("金融地产", ("证券", "银行", "保险", "地产")),
+    ]
+    for label, keys in rules:
+        if any(key in text for key in keys):
+            return label
+    fallback = {
+        "沪主板": "主板活跃",
+        "深主板": "主板活跃",
+        "创业板": "成长股活跃",
+        "科创板": "科技成长",
+    }
+    return industry or fallback.get(segment, "其他")
+
+
 def compute_market_sentiment(start: str, end: str, buffer_days: int = 24) -> Dict[str, object]:
     store = get_local_store()
     conn = store._conn()
@@ -79,6 +103,14 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24) -> Dic
     df["board_height"] = df["limit_up"].groupby([df["symbol"], grp]).cumsum().where(df["limit_up"], 0).astype(int)
     df["seg"] = df["symbol"].map(_segment)
     df["cap"] = df["symbol"].map(_cap_band)
+    meta_rows = conn.execute("SELECT symbol, name, industry FROM stock_meta").fetchall()
+    meta = {str(s).zfill(6): {"name": n or "", "industry": i or ""} for s, n, i in meta_rows}
+    df["name"] = df["symbol"].map(lambda s: meta.get(str(s).zfill(6), {}).get("name", ""))
+    df["industry"] = df["symbol"].map(lambda s: meta.get(str(s).zfill(6), {}).get("industry", ""))
+    df["limit_cause"] = df.apply(
+        lambda row: _limit_cause(str(row.get("name") or ""), str(row.get("industry") or ""), str(row.get("seg") or "")),
+        axis=1,
+    )
 
     # 仅保留展示窗口
     win = df[(df["date"] >= start) & (df["date"] <= end)].copy()
@@ -121,6 +153,31 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24) -> Dic
     boards4 = [board_count(daily.get_group(d), "4") for d in dates]
     boards5 = [board_count(daily.get_group(d), "5+") for d in dates]
     max_height = [int(daily.get_group(d)["board_height"].max() or 0) for d in dates]
+    latest_limit = daily.get_group(dates[-1])
+    latest_limit = latest_limit[latest_limit["limit_up"]].copy()
+    cause_ladder = []
+    if not latest_limit.empty:
+        for cause, frame in latest_limit.groupby("limit_cause"):
+            stocks = frame.sort_values(["board_height", "amount"], ascending=False).head(8)
+            cause_ladder.append({
+                "cause": cause,
+                "total": int(len(frame)),
+                "b1": int((frame["board_height"] == 1).sum()),
+                "b2": int((frame["board_height"] == 2).sum()),
+                "b3": int((frame["board_height"] == 3).sum()),
+                "b4": int((frame["board_height"] == 4).sum()),
+                "b5plus": int((frame["board_height"] >= 5).sum()),
+                "max_height": int(frame["board_height"].max() or 0),
+                "stocks": [
+                    {
+                        "symbol": str(row.symbol).zfill(6),
+                        "name": str(row.name or row.symbol),
+                        "height": int(row.board_height),
+                    }
+                    for row in stocks.itertuples(index=False)
+                ],
+            })
+        cause_ladder.sort(key=lambda item: (item["max_height"], item["total"]), reverse=True)
 
     # 板块等权累计涨跌幅
     seg_returns: Dict[str, List[float]] = {}
@@ -156,6 +213,7 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24) -> Dic
         "above_ma5_trend": {"dates": dates, "all": above_all, **above_cap},
         "limit_distribution": {"dates": dates, "up": limit_up_cnt, "down": limit_down_cnt},
         "board_ladder": {"dates": dates, "b3": boards3, "b4": boards4, "b5plus": boards5, "max_height": max_height},
+        "cause_ladder": cause_ladder[:12],
         "index_returns": {"dates": dates, **seg_returns},
     }
 

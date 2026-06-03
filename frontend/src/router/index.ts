@@ -10,6 +10,7 @@ const routes: RouteRecordRaw[] = [
       { path: '', redirect: '/market/sentiment' },
       { path: 'market/sentiment', name: 'market-sentiment', component: () => import('@/views/Market/Sentiment.vue') },
       { path: 'quant', name: 'quant', component: () => import('@/views/Quant/index.vue') },
+      { path: 'stock-report', name: 'stock-report', component: () => import('@/views/StockReport/Report.vue') },
       { path: 'insights/hot-news', name: 'hot-news', component: () => import('@/views/Insights/HotNews.vue') },
       { path: 'insights/catalyst', name: 'catalyst', component: () => import('@/views/Insights/CatalystMonitor.vue') },
       { path: 'analysis/single', name: 'single-analysis', component: () => import('@/views/Analysis/SingleAnalysis.vue') },

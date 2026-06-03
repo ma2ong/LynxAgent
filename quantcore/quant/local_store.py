@@ -1,12 +1,14 @@
 """全市场量化数据的本地 SQLite 存储（与认证库分离）。"""
 from __future__ import annotations
 import os
+from pathlib import Path
 import threading
 from typing import Dict, List, Optional
 
 import pandas as pd
 
-DEFAULT_DB_PATH = os.environ.get("QUANT_DATA_DB_PATH", "runtime/quant_data.sqlite")
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_DB_PATH = os.environ.get("QUANT_DATA_DB_PATH", str(_PROJECT_ROOT / "runtime" / "quant_data.sqlite"))
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS stock_meta (
@@ -75,7 +77,7 @@ class LocalQuantStore:
     def load_meta(self) -> List[Dict[str, object]]:
         conn = self._conn()
         cur = conn.execute("SELECT symbol,name,industry,list_date FROM stock_meta ORDER BY symbol")
-        return [{"symbol": s, "name": n, "industry": i, "list_date": ld} for s, n, i, ld in cur.fetchall()]
+        return [{"symbol": s, "name": n, "industry": i, "list_date": ld, "market": "A股"} for s, n, i, ld in cur.fetchall()]
 
     def symbol_count(self) -> int:
         return self._conn().execute("SELECT COUNT(*) FROM stock_meta").fetchone()[0]
@@ -114,6 +116,30 @@ class LocalQuantStore:
 
     def kline_symbol_count(self) -> int:
         return self._conn().execute("SELECT COUNT(DISTINCT symbol) FROM daily_kline").fetchone()[0]
+
+    def latest_snapshots(self) -> Dict[str, Dict[str, float]]:
+        sql = """
+        WITH ranked AS (
+            SELECT symbol, close, amount,
+                   ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+            FROM daily_kline
+        )
+        SELECT latest.symbol, latest.close, latest.amount, prev.close
+        FROM ranked latest
+        LEFT JOIN ranked prev ON latest.symbol = prev.symbol AND prev.rn = 2
+        WHERE latest.rn = 1
+        """
+        rows = self._conn().execute(sql).fetchall()
+        out: Dict[str, Dict[str, float]] = {}
+        for symbol, close, amount, prev_close in rows:
+            close_f = _f(close)
+            prev_f = _f(prev_close)
+            out[str(symbol)] = {
+                "price": close_f,
+                "amount": _f(amount),
+                "pct_chg": (close_f / prev_f - 1) * 100 if prev_f else 0.0,
+            }
+        return out
 
     # ---- 状态 ----
     def set_state(self, key: str, value: str) -> None:

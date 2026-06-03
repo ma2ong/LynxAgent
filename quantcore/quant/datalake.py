@@ -4,9 +4,9 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Dict, List
 
-import pandas as pd
-
 from .models import DataLakeSyncResult
+from .data_sources import fetch_stock_pool
+from .local_store import get_local_store
 
 
 DEFAULT_A_SHARE_POOL = [
@@ -48,43 +48,25 @@ DEFAULT_A_SHARE_POOL = [
 ]
 
 
-def _safe_str(value: Any) -> str:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return ""
-    return str(value).strip()
-
-
 class AKShareDataLake:
     stock_pool_collection = "quant_stock_pool"
 
     def fetch_a_share_pool(self, limit: int = 5000) -> List[Dict[str, Any]]:
-        try:
-            import akshare as ak
-
-            df = ak.stock_info_a_code_name()
-            if df is None or df.empty:
-                return DEFAULT_A_SHARE_POOL[:limit]
-
-            records: List[Dict[str, Any]] = []
-            for _, row in df.head(limit).iterrows():
-                symbol = _safe_str(row.get("code") or row.get("证券代码") or row.get("股票代码"))
-                name = _safe_str(row.get("name") or row.get("证券简称") or row.get("股票简称"))
-                if symbol:
-                    records.append({"symbol": symbol.zfill(6), "name": name, "market": "A股"})
-            return records or DEFAULT_A_SHARE_POOL[:limit]
-        except Exception:
-            return DEFAULT_A_SHARE_POOL[:limit]
+        records, source, _ = fetch_stock_pool(limit)
+        if records:
+            return [{**item, "source": item.get("source") or source} for item in records]
+        return DEFAULT_A_SHARE_POOL[:limit]
 
     async def sync_a_share_pool(self, db=None, limit: int = 5000) -> DataLakeSyncResult:
         pool = self.fetch_a_share_pool(limit)
         if db is None:
             return DataLakeSyncResult(
-                source="akshare",
+                source=pool[0].get("source", "multi-source") if pool else "multi-source",
                 collection=self.stock_pool_collection,
                 total=len(pool),
                 inserted=0,
                 updated=0,
-                errors=["MongoDB is not available; returned live AKShare pool only"],
+                errors=["MongoDB is not available; returned live multi-source pool only"],
             )
 
         collection = db[self.stock_pool_collection]
@@ -92,7 +74,7 @@ class AKShareDataLake:
         updated = 0
         now = datetime.utcnow()
         for item in pool:
-            doc = {**item, "source": "akshare", "updated_at": now}
+            doc = {**item, "source": item.get("source", "multi-source"), "updated_at": now}
             result = await collection.update_one(
                 {"symbol": item["symbol"]},
                 {"$set": doc, "$setOnInsert": {"created_at": now}},
@@ -104,7 +86,7 @@ class AKShareDataLake:
         await collection.create_index("symbol", unique=True)
         await collection.create_index([("market", 1), ("updated_at", -1)])
         return DataLakeSyncResult(
-            source="akshare",
+            source=pool[0].get("source", "multi-source") if pool else "multi-source",
             collection=self.stock_pool_collection,
             total=len(pool),
             inserted=inserted,
@@ -117,8 +99,13 @@ class AKShareDataLake:
             if docs:
                 return {"source": "mongodb", "total": len(docs), "items": docs}
 
+        local_items = [{**item, "source": "local-store"} for item in get_local_store().load_meta()[:limit]]
+        if local_items:
+            return {"source": "local-store", "total": len(local_items), "items": local_items}
+
         items = self.fetch_a_share_pool(limit)
-        return {"source": "akshare", "total": len(items), "items": items}
+        source = items[0].get("source", "multi-source") if items else "multi-source"
+        return {"source": source, "total": len(items), "items": items}
 
 
 def dataclass_to_dict(result: DataLakeSyncResult) -> Dict[str, Any]:

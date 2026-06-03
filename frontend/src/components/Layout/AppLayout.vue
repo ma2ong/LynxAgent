@@ -12,6 +12,9 @@
         <el-menu-item index="/quant">
           <el-icon><TrendCharts /></el-icon><span>智能选股</span>
         </el-menu-item>
+        <el-menu-item index="/stock-report">
+          <el-icon><Tickets /></el-icon><span>个股研报</span>
+        </el-menu-item>
         <el-menu-item index="/insights/hot-news">
           <el-icon><Histogram /></el-icon><span>A股热点</span>
         </el-menu-item>
@@ -44,6 +47,7 @@
 import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, TrendCharts, Histogram, DataLine, Search, Star, Wallet, SwitchButton,
+  Tickets,
 } from '@element-plus/icons-vue'
 
 const route = useRoute()

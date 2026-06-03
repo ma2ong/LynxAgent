@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from datetime import date, timedelta
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -16,10 +16,12 @@ from .datalake import AKShareDataLake
 from .local_store import get_local_store
 from .screening import REASON_LABELS, exclusion_reason
 from .factor_agent import FactorResearchAgent
-from .factors import composite_score, compute_factor_scores, indicator_snapshot, latest_adx, risk_metrics, signal_from_score
+from .factors import composite_score, compute_factor_scores, indicator_snapshot, latest_adx, ml_feature_snapshot, risk_metrics, signal_from_score
+from .hmm import multi_asset_hmm
 from .integrations import integration_capabilities, kronos_style_forecast, recognize_patterns, run_akquant_backtest_adapter
 from .models import BacktestResult, ForecastResult, PatternRecognitionResult, QuantAnalysisResult, QuantPick
 from .strategies import STRATEGIES, resolve_strategy
+from .wyckoff import analyze_wyckoff
 
 
 def _market_quote_code(symbol: str) -> str:
@@ -163,6 +165,7 @@ def _pattern_scan_one(payload: Dict[str, object]) -> Optional[Dict[str, object]]
         factors = compute_factor_scores(data)
         quant_score = composite_score(factors)
         risk = risk_metrics(data)
+        wyckoff = analyze_wyckoff(data)
         latest = data.iloc[-1]
         price = _safe_float(quote.get("price"), _safe_float(latest.get("close"), 0))
         pct_chg = _safe_float(quote.get("pct_chg"), 0)
@@ -171,7 +174,8 @@ def _pattern_scan_one(payload: Dict[str, object]) -> Optional[Dict[str, object]]
         realtime_score = max(0.0, min(100.0, 55 + pct_chg * 3.8 + min(amount / 100000000, 10) * 2.0))
         adx_val = latest_adx(data)
         adx_adj = 4.0 if adx_val >= 25 else (-4.0 if 0 < adx_val < 20 else 0.0)
-        score = round(pattern_score * 0.52 + quant_score * 0.30 + realtime_score * 0.18 + adx_adj, 1)
+        wyckoff_adj = (float(wyckoff.get("score") or 50.0) - 50.0) * 0.08
+        score = round(pattern_score * 0.52 + quant_score * 0.30 + realtime_score * 0.18 + adx_adj + wyckoff_adj, 1)
         reasons = []
         for pattern in matched[:4]:
             reasons.append(f"{pattern.get('name')} {float(pattern.get('strength') or 0):.1f}")
@@ -181,6 +185,8 @@ def _pattern_scan_one(payload: Dict[str, object]) -> Optional[Dict[str, object]]
             reasons.append(f"成交额 {amount / 100000000:.2f}亿")
         if adx_val:
             reasons.append(f"ADX {adx_val:.0f}")
+        if wyckoff.get("phase"):
+            reasons.append(f"Wyckoff {wyckoff.get('phase')} {float(wyckoff.get('score') or 0):.0f}")
         industry = str(payload.get("industry") or "")
         return {
             "symbol": symbol, "code": symbol,
@@ -189,6 +195,7 @@ def _pattern_scan_one(payload: Dict[str, object]) -> Optional[Dict[str, object]]
             "score": score, "quant_score": score, "pattern_score": round(pattern_score, 1),
             "signal": signal_from_score(score), "close": price, "pct_chg": pct_chg, "amount": amount,
             "factors": factors, "risk": risk, "patterns": matched, "matched_patterns": matched,
+            "wyckoff": wyckoff,
             "reasons": list(dict.fromkeys(reasons))[:8],
         }
     except Exception:
@@ -200,6 +207,16 @@ class QuantEngine:
         self.min_bars = min_bars
         self.datalake = AKShareDataLake()
         self.factor_agent = FactorResearchAgent()
+
+    def _scan_pool(self, limit: int) -> tuple[List[Dict[str, object]], str]:
+        """Use the synced local universe first; fall back to AKShare only when empty."""
+        try:
+            local_items = get_local_store().load_meta()
+            if local_items:
+                return local_items[:limit], "local-store"
+        except Exception:
+            pass
+        return self.datalake.fetch_a_share_pool(limit), "akshare-live"
 
     def analyze_dataframe(self, symbol: str, df: pd.DataFrame) -> QuantAnalysisResult:
         data = normalize_ohlcv(df)
@@ -214,6 +231,9 @@ class QuantEngine:
         risk = risk_metrics(data)
         patterns = recognize_patterns(symbol, data)
         forecast = kronos_style_forecast(symbol, data, horizon=10)
+        wyckoff = analyze_wyckoff(data)
+        ml_features = ml_feature_snapshot(data)
+        hmm = multi_asset_hmm(symbol)
         latest_row = data.iloc[-1].to_dict()
         prev_close = float(data.iloc[-2]["close"]) if len(data) >= 2 else 0.0
         latest_close = float(latest_row["close"])
@@ -244,6 +264,9 @@ class QuantEngine:
             integrations={
                 "pattern_recognition": asdict(patterns),
                 "kronos_forecast": asdict(forecast),
+                "wyckoff": wyckoff,
+                "ml_features": ml_features,
+                "multi_asset_hmm": hmm,
             },
         )
 
@@ -295,7 +318,7 @@ class QuantEngine:
         safe_limit = max(1, min(limit, 50))
         # 全市场最多约 5000 只；评分主要来自批量实时行情，可覆盖全市场
         safe_universe_limit = max(safe_limit, min(universe_limit, 5000))
-        pool = self.datalake.fetch_a_share_pool(safe_universe_limit)
+        pool, pool_source = self._scan_pool(safe_universe_limit)
         errors: Dict[str, str] = {}
         symbols = [str(meta.get("symbol") or "").strip().zfill(6) for meta in pool]
         quote_map = _fetch_tencent_quotes(symbols)
@@ -400,7 +423,7 @@ class QuantEngine:
 
         items.sort(key=lambda item: float(item["score"]), reverse=True)
         return _json_safe({
-            "source": "quant-engine-smart-pool",
+            "source": f"quant-engine-smart-pool:{pool_source}",
             "universe_size": len(pool),
             "analyzed": len(items),
             "items": items[:safe_limit],
@@ -411,9 +434,20 @@ class QuantEngine:
                      exclude_fundamental: bool = True) -> Dict[str, object]:
         safe_limit = max(1, min(limit, 50))
         safe_universe_limit = max(safe_limit, min(universe_limit, 5000))
-        pool = self.datalake.fetch_a_share_pool(safe_universe_limit)
+        pool, pool_source = self._scan_pool(safe_universe_limit)
         symbols = [str(meta.get("symbol") or "").strip().zfill(6) for meta in pool if meta.get("symbol")]
-        quote_map = _fetch_tencent_quotes(symbols)
+        local_kline_count = get_local_store().kline_symbol_count()
+        local_ready = local_kline_count >= 500
+        if local_ready:
+            local_snapshot = get_local_store().latest_snapshots()
+            symbol_set = set(symbols)
+            quote_map = {
+                symbol: {**snapshot, "name": ""}
+                for symbol, snapshot in local_snapshot.items()
+                if symbol in symbol_set
+            }
+        else:
+            quote_map = _fetch_tencent_quotes(symbols)
         errors: Dict[str, str] = {}
         items: List[Dict[str, object]] = []
 
@@ -442,13 +476,18 @@ class QuantEngine:
                 continue
             candidates.append(meta)
 
-        # 本地数据是否就绪：就绪则纯本地扫描（缺失即跳过，不做慢回退）；未就绪则 live 回退并限量，避免数千次实时抓取超时
-        local_ready = get_local_store().kline_symbol_count() >= 500
+        def _activity(meta: Dict[str, object]) -> float:
+            q = quote_map.get(str(meta.get("symbol") or "").strip().zfill(6), {})
+            return _safe_float(q.get("amount"), 0) / 1e8 + abs(_safe_float(q.get("pct_chg"), 0)) * 0.5
+
+        # 本地数据就绪时用本地最新K线做预筛；未就绪才用实时行情回退。
+        scan_cap = min(len(candidates), max(safe_limit * 5, 80))
         if not local_ready:
-            def _activity(meta: Dict[str, object]) -> float:
-                q = quote_map.get(str(meta.get("symbol") or "").strip().zfill(6), {})
-                return _safe_float(q.get("amount"), 0) / 1e8 + abs(_safe_float(q.get("pct_chg"), 0)) * 0.5
-            candidates = sorted(candidates, key=_activity, reverse=True)[:min(len(candidates), 800)]
+            scan_cap = min(len(candidates), max(safe_limit * 5, 80))
+        candidates = sorted(candidates, key=_activity, reverse=True)[:scan_cap]
+        if local_ready:
+            scan_symbols = [str(meta.get("symbol") or "").strip().zfill(6) for meta in candidates if meta.get("symbol")]
+            quote_map.update(_fetch_tencent_quotes(scan_symbols))
 
         def analyze_meta(meta: Dict[str, object]) -> Optional[Dict[str, object]]:
             symbol = str(meta.get("symbol") or "").strip().zfill(6)
@@ -473,6 +512,7 @@ class QuantEngine:
             factors = compute_factor_scores(data)
             quant_score = composite_score(factors)
             risk = risk_metrics(data)
+            wyckoff = analyze_wyckoff(data)
             quote = quote_map.get(symbol, {})
             latest = data.iloc[-1]
             price = _safe_float(quote.get("price"), _safe_float(latest.get("close"), 0))
@@ -482,7 +522,8 @@ class QuantEngine:
             realtime_score = max(0.0, min(100.0, 55 + pct_chg * 3.8 + min(amount / 100000000, 10) * 2.0))
             adx_val = latest_adx(data)
             adx_adj = 4.0 if adx_val >= 25 else (-4.0 if 0 < adx_val < 20 else 0.0)
-            score = round(pattern_score * 0.52 + quant_score * 0.30 + realtime_score * 0.18 + adx_adj, 1)
+            wyckoff_adj = (float(wyckoff.get("score") or 50.0) - 50.0) * 0.08
+            score = round(pattern_score * 0.52 + quant_score * 0.30 + realtime_score * 0.18 + adx_adj + wyckoff_adj, 1)
             reasons = []
             for pattern in matched[:4]:
                 reasons.append(f"{pattern.get('name')} {float(pattern.get('strength') or 0):.1f}")
@@ -492,6 +533,8 @@ class QuantEngine:
                 reasons.append(f"成交额 {amount / 100000000:.2f}亿")
             if adx_val:
                 reasons.append(f"ADX {adx_val:.0f}")
+            if wyckoff.get("phase"):
+                reasons.append(f"Wyckoff {wyckoff.get('phase')} {float(wyckoff.get('score') or 0):.0f}")
             industry = str(meta.get("industry") or meta.get("board") or meta.get("sector") or "")
             return {
                 "symbol": symbol, "code": symbol,
@@ -500,11 +543,13 @@ class QuantEngine:
                 "score": score, "quant_score": score, "pattern_score": round(pattern_score, 1),
                 "signal": signal_from_score(score), "close": price, "pct_chg": pct_chg, "amount": amount,
                 "factors": factors, "risk": risk, "patterns": matched, "matched_patterns": matched,
+                "wyckoff": wyckoff,
                 "reasons": list(dict.fromkeys(reasons))[:8],
             }
 
         if local_ready:
-            # 本地数据就绪：形态识别是 CPU 密集（GIL 下线程无法并行），用进程池真并行
+            # Windows 下 ProcessPool 在 uvicorn/交互启动场景容易 BrokenProcessPool；
+            # 这里优先保证形态智选稳定刷新。
             payloads = [{
                 "symbol": str(meta.get("symbol") or "").strip().zfill(6),
                 "name": meta.get("name"),
@@ -514,9 +559,9 @@ class QuantEngine:
                 "min_bars": self.min_bars,
                 "quote": quote_map.get(str(meta.get("symbol") or "").strip().zfill(6), {}),
             } for meta in candidates]
-            workers = max(2, min(8, (os.cpu_count() or 4)))
-            with ProcessPoolExecutor(max_workers=workers) as executor:
-                for item in executor.map(_pattern_scan_one, payloads, chunksize=16):
+            workers = max(8, min(24, (os.cpu_count() or 8) * 2))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                for item in executor.map(_pattern_scan_one, payloads):
                     if item:
                         items.append(item)
         else:
@@ -536,6 +581,8 @@ class QuantEngine:
         source = "local-full-scan" if local_ready else "live-fallback"
         return _json_safe({
             "source": source,
+            "pool_source": pool_source,
+            "local_kline_symbols": local_kline_count,
             "universe_size": len(pool),
             "excluded": excluded_total,
             "excluded_reasons": {REASON_LABELS.get(k, k): v for k, v in excluded_reasons.items()},
@@ -595,6 +642,9 @@ class QuantEngine:
         return result
 
     async def stock_pool(self, db=None, limit: int = 200) -> Dict[str, object]:
+        local_items, source = self._scan_pool(max(1, min(limit, 6000)))
+        if source == "local-store":
+            return {"source": source, "total": len(local_items), "items": local_items[:limit]}
         return await self.datalake.get_stock_pool(db=db, limit=limit)
 
     async def sync_stock_pool(self, db=None, limit: int = 5000) -> Dict[str, object]:

@@ -76,7 +76,25 @@
                   <span :class="changeClass(row.pct_chg)">{{ signedPercent(row.pct_chg) }}</span>
                 </template>
               </el-table-column>
-              <el-table-column label="入选理由" min-width="460">
+              <el-table-column label="AI评审" width="100" :sort-method="(a:any,b:any)=>(criticScores[a.symbol]?.score??-1)-(criticScores[b.symbol]?.score??-1)" sortable>
+                <template #header>
+                  AI评审 <el-icon v-if="criticLoading" class="is-loading"><Loading /></el-icon>
+                </template>
+                <template #default="{ row }">
+                  <template v-if="criticScores[row.symbol]">
+                    <b :style="{ color: criticScores[row.symbol].keep ? '#ef232a' : '#909399' }">
+                      {{ criticScores[row.symbol].score.toFixed(1) }}
+                    </b>
+                    <el-tooltip v-if="!criticScores[row.symbol].keep && criticScores[row.symbol].reject_reason"
+                      :content="criticScores[row.symbol].reject_reason!" placement="top">
+                      <el-icon style="color:#e6a23c;margin-left:2px"><Warning /></el-icon>
+                    </el-tooltip>
+                  </template>
+                  <span v-else-if="criticLoading" style="color:#ccc">…</span>
+                  <span v-else style="color:#ccc">-</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="入选理由" min-width="400">
                 <template #default="{ row }">
                   <el-tag v-for="reason in row.reasons" :key="reason" class="capability-tag" effect="plain">
                     {{ reason }}
@@ -232,20 +250,129 @@
         </div>
       </el-tab-pane>
 
+      <!-- AI选股 tab：嵌入原流水线页功能 -->
+      <el-tab-pane label="AI选股" name="pipeline">
+        <div class="pipeline-panel">
+          <div class="pipe-head">
+            <div>
+              <p style="margin:0;color:var(--el-text-color-secondary);font-size:13px">多 Agent 流水线：题材 Agent → 多路选股 → Critic 打分优汰 → T+5 反向闭环。无 LLM 密钥时自动降级为规则模式。</p>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <el-input v-model="pipeUniverseInput" placeholder="可选：指定代码（逗号分隔），留空跑全市场池" style="width:340px" clearable />
+              <el-button type="primary" :loading="pipeRunning" @click="runPipeline">跑一次流水线</el-button>
+              <el-button :loading="pipeT5Loading" @click="runT5">T+5 反向复盘</el-button>
+            </div>
+          </div>
+
+          <section class="kpi-band" v-loading="pipeRunning">
+            <div class="kpi-card"><span class="kpi-title">候选数</span><strong class="kpi-num">{{ pipeResult?.candidates ?? '-' }}</strong></div>
+            <div class="kpi-card"><span class="kpi-title">保留</span><strong class="kpi-num" style="color:#ef232a">{{ pipeKept.length }}</strong></div>
+            <div class="kpi-card"><span class="kpi-title">拒绝</span><strong class="kpi-num" style="color:#14b143">{{ pipeRejected.length }}</strong></div>
+            <div class="kpi-card">
+              <span class="kpi-title">模式</span>
+              <strong class="kpi-num" style="font-size:14px">
+                题材 {{ pipeResult?.llm_used?.theme ? 'AI' : '规则' }} ｜ 评审 {{ pipeResult?.llm_used?.critic ? 'AI' : '规则' }}
+              </strong>
+            </div>
+          </section>
+
+          <el-alert v-if="pipeResult?.feedback_notes?.length" :closable="false" type="info" show-icon style="margin-bottom:10px">
+            <template #title>反馈优汰：{{ pipeResult.feedback_notes.join('；') }}</template>
+          </el-alert>
+
+          <div v-if="pipeThemes.length" style="margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+            <span style="font-size:13px;color:var(--el-text-color-secondary)">热点主题：</span>
+            <el-tag v-for="t in pipeThemes" :key="t.name" effect="plain"
+              :type="t.heat >= 70 ? 'danger' : t.heat >= 40 ? 'warning' : 'info'">
+              {{ t.name }} <b style="margin-left:4px">{{ t.heat }}</b>
+            </el-tag>
+          </div>
+
+          <el-tabs v-model="pipeTab">
+            <el-tab-pane :label="`保留 (${pipeKept.length})`" name="kept">
+              <el-table :data="pipeKept" stripe size="small" v-loading="pipeRunning" empty-text="暂无结果，先跑一次流水线">
+                <el-table-column prop="symbol" label="代码" width="90" />
+                <el-table-column prop="name" label="名称" width="110" />
+                <el-table-column label="Critic评分" width="110" sortable :sort-method="(a:any,b:any)=>a.score-b.score">
+                  <template #default="{ row }"><b :style="{ color: row.score>=7.5?'#ef232a':row.score>=6?'#e6a23c':'#14b143' }">{{ row.score }}</b> / 10</template>
+                </el-table-column>
+                <el-table-column label="来源" min-width="160">
+                  <template #default="{ row }">
+                    <el-tag v-for="s in row.sources" :key="s" size="small" effect="plain" style="margin-right:4px">{{ pipeSrcLabel(s) }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="LLM/规则点评" min-width="200">
+                  <template #default="{ row }">{{ row.llm_comment || '—' }}</template>
+                </el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane :label="`拒绝 (${pipeRejected.length})`" name="rejected">
+              <el-table :data="pipeRejected" stripe size="small" empty-text="无拒绝项">
+                <el-table-column prop="symbol" label="代码" width="90" />
+                <el-table-column prop="name" label="名称" width="110" />
+                <el-table-column label="评分" width="90"><template #default="{ row }">{{ row.score }} / 10</template></el-table-column>
+                <el-table-column label="拒绝理由" min-width="200"><template #default="{ row }"><span style="color:#14b143">{{ row.reject_reason }}</span></template></el-table-column>
+              </el-table>
+            </el-tab-pane>
+            <el-tab-pane label="历史运行" name="pipe-runs">
+              <el-table :data="pipeRuns" stripe size="small" empty-text="暂无历史" @row-click="openPipeRun">
+                <el-table-column prop="run_id" label="运行ID" min-width="160" />
+                <el-table-column prop="date" label="日期" width="120" />
+                <el-table-column prop="candidates" label="候选" width="80" />
+                <el-table-column prop="kept" label="保留" width="80" />
+                <el-table-column prop="rejected" label="拒绝" width="80" />
+              </el-table>
+            </el-tab-pane>
+          </el-tabs>
+
+          <el-alert v-if="pipeT5Result" :closable="true" type="success" show-icon style="margin-top:10px">
+            <template #title>
+              T+5 复盘：评估 {{ pipeT5Result.evaluated }} 只，胜率 {{ pipeT5Result.win_rate ?? '-' }}，
+              写回 {{ (pipeT5Result.rules || []).length }} 条优汰规则。
+            </template>
+          </el-alert>
+        </div>
+      </el-tab-pane>
+
       <el-tab-pane label="数据同步" name="lake">
         <div class="sync-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
           <el-button type="primary" :loading="syncRunning" @click="startSync(true)">全量同步</el-button>
           <el-button :loading="syncRunning" @click="startSync(false)">增量同步</el-button>
           <span v-if="syncStatus.total">进度 {{ syncStatus.done }}/{{ syncStatus.total }}（{{ syncStatus.phase }}）失败 {{ syncStatus.errors_count }}</span>
+          <span v-if="syncStatus.local_kline_symbols">本地K线 {{ syncStatus.local_kline_symbols }} 只</span>
+          <span v-if="syncStatus.last_full_sync">上次全量 {{ syncStatus.last_full_sync }}</span>
           <el-progress v-if="syncStatus.total" :percentage="syncPct" style="flex:1;min-width:200px;" />
         </div>
+        <section class="data-source-panel">
+          <div class="source-head">
+            <div>
+              <h3>数据源获取端</h3>
+              <p>主源 {{ dataSourceStatus?.primary || '-' }}，按顺序自动回退：{{ dataSourceOrder }}</p>
+            </div>
+            <el-button size="small" :loading="dataSourcesLoading" @click="loadDataSources">刷新状态</el-button>
+          </div>
+          <div class="source-grid">
+            <div v-for="source in dataSourceStatus?.sources || []" :key="source.key" class="source-card">
+              <div>
+                <b>{{ source.name }}</b>
+                <el-tag size="small" :type="source.enabled ? 'success' : (source.installed ? 'warning' : 'danger')" effect="plain">
+                  {{ source.enabled ? '可用' : (source.installed ? '备用' : '缺包') }}
+                </el-tag>
+              </div>
+              <p>{{ source.notes }}</p>
+              <el-tag v-for="cap in source.capabilities" :key="cap" class="capability-tag" effect="plain">
+                {{ cap }}
+              </el-tag>
+            </div>
+          </div>
+        </section>
         <div class="tool-layout">
           <el-form class="control-panel" label-position="top" @submit.prevent>
             <el-form-item label="股票池数量">
               <el-input-number v-model="poolLimit" :min="1" :max="5000" style="width: 100%" />
             </el-form-item>
             <el-button native-type="button" :loading="poolLoading" @click="loadPool">读取股票池</el-button>
-            <el-button type="primary" native-type="button" :loading="syncLoading" @click="syncLake">同步 AKShare 数据湖</el-button>
+            <el-button type="primary" native-type="button" :loading="syncRunning" @click="startSync(true)">同步本地K线</el-button>
           </el-form>
           <section class="result-panel">
             <div v-if="syncResult" class="mini-summary">
@@ -311,7 +438,7 @@
                 <div><span>夏普</span><b>{{ analysisResult.risk.sharpe.toFixed(2) }}</b></div>
               </div>
 
-              <div v-if="analysisPatterns.length || analysisForecast" class="integration-grid">
+              <div v-if="analysisPatterns.length || analysisForecast || analysisWyckoff || analysisMlFeatures || analysisHmm" class="integration-grid">
                 <section v-if="analysisPatterns.length" class="integration-card">
                   <h3>形态识别</h3>
                   <el-tag v-for="pattern in analysisPatterns" :key="pattern.key" type="primary" effect="plain">
@@ -325,6 +452,38 @@
                     <div><span>上行概率</span><b>{{ percent(analysisForecast.upside_probability) }}</b></div>
                     <div><span>预期收益</span><b>{{ percent(analysisForecast.expected_return) }}</b></div>
                   </div>
+                </section>
+                <section v-if="analysisWyckoff" class="integration-card">
+                  <h3>Wyckoff/VSA 量价结构</h3>
+                  <div class="metric-grid compact">
+                    <div><span>阶段</span><b>{{ analysisWyckoff.phase }}</b></div>
+                    <div><span>方向</span><b>{{ analysisWyckoff.bias }}</b></div>
+                    <div><span>评分</span><b>{{ analysisWyckoff.score.toFixed(1) }}</b></div>
+                  </div>
+                  <p v-if="analysisWyckoff.reasons?.length" class="muted-text">
+                    {{ analysisWyckoff.reasons.slice(0, 2).join('；') }}
+                  </p>
+                </section>
+                <section v-if="analysisMlFeatures" class="integration-card">
+                  <h3>ML 特征摘要</h3>
+                  <div class="metric-grid compact">
+                    <div><span>综合</span><b>{{ analysisMlFeatures.feature_score.toFixed(1) }}</b></div>
+                    <div><span>趋势持续</span><b>{{ analysisMlFeatures.trend_persistence.toFixed(1) }}</b></div>
+                    <div><span>风险动量</span><b>{{ analysisMlFeatures.risk_adjusted_momentum.toFixed(1) }}</b></div>
+                    <div><span>波动分位</span><b>{{ analysisMlFeatures.volatility_rank.toFixed(1) }}</b></div>
+                  </div>
+                </section>
+                <section v-if="analysisHmm" class="integration-card">
+                  <h3>多资产 HMM 状态</h3>
+                  <div class="metric-grid compact">
+                    <div><span>状态</span><b>{{ analysisHmm.state }}</b></div>
+                    <div><span>均值回归</span><b>{{ analysisHmm.dimensions.mean_reversion_potential.toFixed(1) }}</b></div>
+                    <div><span>距布林下轨</span><b>{{ analysisHmm.mean_reversion.distance_to_lower_pct.toFixed(2) }}%</b></div>
+                    <div><span>资产数</span><b>{{ analysisHmm.peer_count || '-' }}</b></div>
+                  </div>
+                  <p class="muted-text">
+                    现价 {{ analysisHmm.mean_reversion.price }}，布林下轨 {{ analysisHmm.mean_reversion.bb_lower }}，偏离中轨 {{ analysisHmm.mean_reversion.deviation_pct.toFixed(2) }}%。
+                  </p>
                 </section>
               </div>
             </template>
@@ -443,7 +602,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { DataLine, Search, TrendCharts } from '@element-plus/icons-vue'
+import { DataLine, Loading, Search, TrendCharts, Warning } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { favoritesApi } from '@/api/favorites'
 import KLineProChart from '@/components/KLineProChart.vue'
@@ -451,6 +610,7 @@ import {
   quantApi,
   type BacktestResult,
   type DataLakeSyncResult,
+  type DataSourceStatusResult,
   type FactorResearchResult,
   type ForecastResult,
   type PatternRecognitionResult,
@@ -466,6 +626,60 @@ import {
 const activeTab = ref('screen')
 
 const router = useRouter()
+
+// ---- AI选股流水线（嵌入 tab）----
+const pipeUniverseInput = ref('')
+const pipeRunning = ref(false)
+const pipeT5Loading = ref(false)
+const pipeTab = ref('kept')
+const pipeResult = ref<any>(null)
+const pipeRuns = ref<any[]>([])
+const pipeT5Result = ref<any>(null)
+const pipeKept = computed(() => pipeResult.value?.kept || [])
+const pipeRejected = computed(() => pipeResult.value?.rejected || [])
+const pipeThemes = computed(() => pipeResult.value?.themes || [])
+const PIPE_SRC: Record<string, string> = {
+  strategy: '策略库', money_follow: '资金跟随', market: '随市趋势',
+  contrarian: '逆向超跌', retail_sentiment: '情绪低吸', theme: '题材热点',
+}
+const pipeSrcLabel = (s: string) => PIPE_SRC[s] || s
+
+const runPipeline = async () => {
+  pipeRunning.value = true
+  try {
+    const universe = pipeUniverseInput.value.split(/[，,\s]+/).map((s: string) => s.trim()).filter(Boolean)
+    const res: any = await quantApi.pipelineRun(universe.length ? universe : undefined)
+    pipeResult.value = res?.data || res
+    pipeTab.value = 'kept'
+    loadPipeRuns()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '跑流水线失败')
+  } finally {
+    pipeRunning.value = false
+  }
+}
+const loadPipeRuns = async () => {
+  try {
+    const res: any = await quantApi.pipelineRuns()
+    pipeRuns.value = (res?.data || res)?.runs || []
+  } catch { /**/ }
+}
+const openPipeRun = async (row: any) => {
+  try {
+    const res: any = await quantApi.pipelineRunDetail(row.run_id)
+    pipeResult.value = res?.data || res
+    pipeTab.value = 'kept'
+  } catch (e: any) { ElMessage.error(e?.message || '加载失败') }
+}
+const runT5 = async () => {
+  pipeT5Loading.value = true
+  try {
+    const res: any = await quantApi.pipelineT5Review(pipeResult.value?.run_id)
+    pipeT5Result.value = res?.data || res
+    ElMessage.success('T+5 反向复盘完成')
+  } catch (e: any) { ElMessage.error(e?.message || 'T+5 复盘失败') }
+  finally { pipeT5Loading.value = false }
+}
 
 const poolLimit = ref(200)
 const poolLoading = ref(false)
@@ -487,6 +701,8 @@ const smartPoolLoading = ref(false)
 const smartPoolResult = ref<QuantSmartPoolResult | null>(null)
 const smartTableRef = ref<any>()
 const selectedSmartRows = ref<QuantSmartPoolItem[]>([])
+const criticScores = ref<Record<string, { score: number; keep: boolean; reject_reason: string | null }>>({})
+const criticLoading = ref(false)
 const patternPoolForm = ref({ limit: 20, universe_limit: 5000, min_strength: 70, exclude_fundamental: true })
 const patternPoolLoading = ref(false)
 const patternPoolResult = ref<QuantPatternPoolResult | null>(null)
@@ -516,6 +732,9 @@ const analysisForecast = computed<ForecastResult | null>(() => (
 const analysisPatterns = computed<PatternRecognitionResult['patterns']>(() => (
   ((analysisResult.value?.integrations?.pattern_recognition as PatternRecognitionResult | undefined)?.patterns || [])
 ))
+const analysisWyckoff = computed(() => analysisResult.value?.integrations?.wyckoff || null)
+const analysisMlFeatures = computed(() => analysisResult.value?.integrations?.ml_features || null)
+const analysisHmm = computed(() => analysisResult.value?.integrations?.multi_asset_hmm || null)
 
 const normalizedEquity = computed(() => {
   const curve = backtestResult.value?.equity_curve || []
@@ -538,16 +757,33 @@ const parseSymbols = (text: string) =>
 const syncStatus = ref<any>({ running: false, phase: 'idle', done: 0, total: 0, errors_count: 0 })
 const syncRunning = computed(() => !!syncStatus.value.running)
 const syncPct = computed(() => syncStatus.value.total ? Math.floor(syncStatus.value.done / syncStatus.value.total * 100) : 0)
+const dataSourceStatus = ref<DataSourceStatusResult | null>(null)
+const dataSourcesLoading = ref(false)
+const dataSourceOrder = computed(() => dataSourceStatus.value?.active_order?.join(' → ') || '-')
 let syncTimer: number | undefined
 let syncWatching = false
+const loadDataSources = async () => {
+  dataSourcesLoading.value = true
+  try {
+    dataSourceStatus.value = await quantApi.dataSources()
+  } catch (error: any) {
+    ElMessage.error(error?.message || '读取数据源状态失败')
+  } finally {
+    dataSourcesLoading.value = false
+  }
+}
 const pollSync = async () => {
   syncStatus.value = await quantApi.syncStatus()
+  if (syncStatus.value?.data_sources) dataSourceStatus.value = syncStatus.value.data_sources
   if (syncStatus.value.running) {
     syncTimer = window.setTimeout(pollSync, 2500)
   } else if (syncWatching) {
     syncWatching = false
     const s = syncStatus.value
-    ElMessage.success(`同步完成：${s.done}/${s.total} 只，失败 ${s.errors_count || 0}。形态智选现在可扫全市场。`)
+    await loadPool()
+    smartPoolResult.value = null
+    patternPoolResult.value = null
+    ElMessage.success(`同步完成：${s.done}/${s.total} 只，失败 ${s.errors_count || 0}。本地K线 ${s.local_kline_symbols || 0} 只，智选结果已清空，请重新扫描。`)
   }
 }
 const startSync = async (full: boolean) => {
@@ -563,7 +799,15 @@ const startSync = async (full: boolean) => {
     ElMessage.error(error?.message || '启动同步失败')
   }
 }
-onMounted(() => { quantApi.syncStatus().then(s => { syncStatus.value = s; if (s.running) pollSync() }) })
+onMounted(() => {
+  quantApi.syncStatus().then(s => {
+    syncStatus.value = s
+    if (s?.data_sources) dataSourceStatus.value = s.data_sources
+    if (s.running) pollSync()
+  })
+  loadDataSources()
+  loadPipeRuns()
+})
 onUnmounted(() => { if (syncTimer) window.clearTimeout(syncTimer) })
 
 const loadPool = async () => {
@@ -630,9 +874,22 @@ const runScreen = async () => {
 const loadSmartPool = async () => {
   smartPoolLoading.value = true
   try {
+    smartPoolResult.value = null
+    criticScores.value = {}
     smartPoolResult.value = await quantApi.smartPool(smartPoolForm.value.limit, smartPoolForm.value.universe_limit)
     screenResult.value = null
     selectedSmartRows.value = []
+    ElMessage.success(`一键智选已刷新：推荐 ${smartPoolResult.value?.items?.length || 0} 只`)
+    // 异步 AI 评审打分（不阻塞主流程）
+    const symbols = (smartPoolResult.value?.items || []).map((r: any) => r.symbol).filter(Boolean)
+    if (symbols.length) {
+      criticLoading.value = true
+      quantApi.quickCritic(symbols).then(res => {
+        criticScores.value = res?.scores || {}
+      }).catch(() => {}).finally(() => { criticLoading.value = false })
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.message || '一键智选失败，请重试')
   } finally {
     smartPoolLoading.value = false
   }
@@ -649,12 +906,14 @@ const displayScore = (row: QuantSmartPoolItem) => formatScore(row.quant_score ??
 const loadPatternPool = async () => {
     patternPoolLoading.value = true
     try {
+        patternPoolResult.value = null
         patternPoolResult.value = await quantApi.patternPool(
             patternPoolForm.value.limit,
             patternPoolForm.value.universe_limit,
             patternPoolForm.value.min_strength
         )
         selectedPatternRows.value = []
+        ElMessage.success(`形态智选已刷新：命中 ${patternPoolResult.value?.items?.length || 0} 只`)
     } catch (error: any) {
         ElMessage.error(error?.message || '形态扫描失败，请重试')
         patternPoolResult.value = null
@@ -963,6 +1222,61 @@ const openChart = async (row: any) => {
   min-height: 0;
 }
 
+.data-source-panel {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: var(--el-fill-color-extra-light);
+}
+
+.source-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+
+  h3 {
+    margin: 0;
+    font-size: 15px;
+  }
+
+  p {
+    margin: 4px 0 0;
+    color: var(--el-text-color-secondary);
+    font-size: 13px;
+  }
+}
+
+.source-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.source-card {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--el-bg-color);
+
+  > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  p {
+    margin: 8px 0;
+    min-height: 36px;
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}
+
 .advanced-tools {
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
@@ -1122,7 +1436,8 @@ const openChart = async (row: any) => {
   .metric-grid,
   .factor-grid,
   .integration-grid,
-  .smart-settings {
+  .smart-settings,
+  .source-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1140,4 +1455,13 @@ const openChart = async (row: any) => {
 :deep(.el-table .cell) { line-height: 1.3; font-size: 12px; padding-left: 6px; padding-right: 6px; }
 :deep(.el-table th.el-table__cell) { padding: 6px 0; }
 :deep(.el-tag) { height: 20px; line-height: 18px; padding: 0 5px; font-size: 11px; }
+
+/* AI选股 tab */
+.pipeline-panel { display: flex; flex-direction: column; gap: 12px; }
+.pipe-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.kpi-band { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.kpi-card { background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+.kpi-title { font-size: 12px; color: var(--el-text-color-secondary); }
+.kpi-num { font-size: 24px; font-weight: 700; }
+@media (max-width: 900px) { .kpi-band { grid-template-columns: 1fr 1fr; } }
 </style>

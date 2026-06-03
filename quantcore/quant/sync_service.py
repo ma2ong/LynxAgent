@@ -9,6 +9,7 @@ import pandas as pd
 import requests
 
 from .local_store import LocalQuantStore, get_local_store
+from .data_sources import data_source_status, fetch_stock_pool
 
 FULL_HISTORY_DAYS = 760  # 约 2 年自然日，覆盖形态与中长期均线
 
@@ -42,23 +43,31 @@ class MarketSyncService:
         }
 
     def _fetch_universe(self) -> List[Dict[str, object]]:
-        import akshare as ak
-        df = ak.stock_info_a_code_name()
-        rows: List[Dict[str, object]] = []
-        if df is not None and not df.empty:
-            for _, r in df.iterrows():
-                code = str(r.get("code") or r.get("证券代码") or "").zfill(6)
-                name = str(r.get("name") or r.get("证券简称") or "")
-                if code.isdigit():
-                    rows.append({"symbol": code, "name": name, "industry": ""})
-        return rows
+        local_rows = self.store.load_meta()
+        if local_rows:
+            self._progress["universe_source"] = "local-store"
+            self._progress["source_errors"] = {}
+            return [
+                {"symbol": item.get("symbol"), "name": item.get("name", ""), "industry": item.get("industry", ""), "source": "local-store"}
+                for item in local_rows
+                if str(item.get("symbol") or "").isdigit()
+            ]
+
+        rows, source, errors = fetch_stock_pool(6000)
+        self._progress["universe_source"] = source or "none"
+        self._progress["source_errors"] = errors
+        return [
+            {"symbol": item.get("symbol"), "name": item.get("name", ""), "industry": "", "source": item.get("source", source)}
+            for item in rows
+            if str(item.get("symbol") or "").isdigit()
+        ]
 
     def _fetch_kline(self, symbol: str, start: str) -> pd.DataFrame:
-        """腾讯日线为主（HTTP、稳定、几乎不限流），失败回退 akshare/东财（保留原能力）。"""
+        """全市场同步只走腾讯快链路；外部库保留给单股查询，避免批量同步被三方源阻塞。"""
         df = self._fetch_kline_tencent(symbol, start)
         if df is not None and not df.empty:
             return df
-        return self._fetch_kline_akshare(symbol, start)
+        return pd.DataFrame()
 
     def _fetch_kline_tencent(self, symbol: str, start: str) -> pd.DataFrame:
         code = _tencent_code(symbol)
@@ -82,15 +91,15 @@ class MarketSyncService:
                          "volume": v, "amount": c * v * 100})
         return pd.DataFrame(rows)
 
-    def _fetch_kline_akshare(self, symbol: str, start: str) -> pd.DataFrame:
-        # 回退源：东方财富对持续高频请求会限流，用退避重试提升成功率
+    def _fetch_kline_external(self, symbol: str, start: str) -> pd.DataFrame:
+        # 回退源：efinance / AKShare / BaoStock，带退避重试。
         import time
-        from .data import _fetch_from_akshare, normalize_ohlcv
+        from .data import fetch_stock_dataframe
         end = date.today().strftime("%Y-%m-%d")
         last_exc: Optional[Exception] = None
         for attempt in range(3):
             try:
-                df = normalize_ohlcv(_fetch_from_akshare(symbol, start, end))
+                df = fetch_stock_dataframe(symbol, start, end)
                 if df is not None and not df.empty:
                     return df
             except Exception as exc:
@@ -136,7 +145,16 @@ class MarketSyncService:
         return []
 
     def status(self) -> Dict[str, object]:
-        return dict(self._progress)
+        status = dict(self._progress)
+        try:
+            status["local_meta_symbols"] = self.store.symbol_count()
+            status["local_kline_symbols"] = self.store.kline_symbol_count()
+            status["last_full_sync"] = self.store.get_state("last_full_sync") or ""
+            status["last_incremental_sync"] = self.store.get_state("last_incremental_sync") or ""
+            status["data_sources"] = data_source_status()
+        except Exception as exc:
+            status["last_error"] = str(exc)[:200]
+        return status
 
     def run_sync(self, full: bool = False, block: bool = False) -> Dict[str, object]:
         with self._lock:

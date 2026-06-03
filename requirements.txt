@@ -17,8 +17,9 @@ langgraph
 chromadb
 setuptools
 akshare>=1.17.86
+efinance>=0.5.8
 tushare
-baostock
+baostock>=0.8.9
 backtrader>=1.9.78.123
 finnhub-python
 parsel

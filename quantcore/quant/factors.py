@@ -266,3 +266,52 @@ def latest_adx(df: pd.DataFrame) -> float:
         return float(_last(enrich_indicators(df)["adx14"]))
     except Exception:
         return 0.0
+
+
+def ml_feature_snapshot(df: pd.DataFrame) -> Dict[str, float]:
+    """Lightweight ML-style feature summary for downstream agent reasoning.
+
+    This is not a trained model. It mirrors common financial feature-engineering
+    practice: trend persistence, risk-adjusted momentum, volatility rank,
+    liquidity quality, and drawdown repair.
+    """
+    data = enrich_indicators(df)
+    if data.empty or len(data) < 60:
+        return {
+            "feature_score": 50.0,
+            "trend_persistence": 50.0,
+            "risk_adjusted_momentum": 50.0,
+            "volatility_rank": 50.0,
+            "liquidity_quality": 50.0,
+            "drawdown_repair": 50.0,
+        }
+
+    close = data["close"]
+    amount = data.get("amount", pd.Series(0.0, index=data.index)).fillna(0.0)
+    vol = data["volatility20"].replace([float("inf"), -float("inf")], float("nan"))
+    drawdown = data["drawdown"].fillna(0.0)
+    momentum_60 = _last(data["momentum_60"])
+    vol_last = _last(vol, 0.35)
+    vol_rank = float(vol.tail(120).rank(pct=True).iloc[-1] * 100) if len(vol.dropna()) else 50.0
+
+    trend_persistence = float((close.tail(60) > data["ma20"].tail(60)).mean() * 100)
+    risk_adjusted_momentum = _clip_score(50 + momentum_60 * 180 - vol_last * 35)
+    low_vol_quality = _clip_score(100 - vol_rank)
+    liquidity_quality = _clip_score(40 + _last(amount.rolling(20).mean()) / 10_000_000 * 6)
+    drawdown_repair = _clip_score(100 + _last(drawdown) * 180)
+    feature_score = (
+        trend_persistence * 0.30
+        + risk_adjusted_momentum * 0.28
+        + low_vol_quality * 0.18
+        + liquidity_quality * 0.14
+        + drawdown_repair * 0.10
+    )
+
+    return {
+        "feature_score": round(_clip_score(feature_score), 1),
+        "trend_persistence": round(_clip_score(trend_persistence), 1),
+        "risk_adjusted_momentum": round(risk_adjusted_momentum, 1),
+        "volatility_rank": round(_clip_score(vol_rank), 1),
+        "liquidity_quality": round(liquidity_quality, 1),
+        "drawdown_repair": round(drawdown_repair, 1),
+    }

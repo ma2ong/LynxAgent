@@ -15,7 +15,8 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from .local_store import get_local_store
-from .market_sentiment import CONCEPT_BY_NAME, _limit_cause, _limit_threshold, _segment
+from .concept_lookup import get_concept
+from .market_sentiment import _limit_cause, _limit_threshold, _segment
 
 
 CONCEPT_ORDER = ["AI硬件", "光通信/CPO", "机器人", "国产芯片", "煤炭", "电力", "大消费", "航天军工", "公告", "其他"]
@@ -132,7 +133,7 @@ def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
         lambda s: meta.get(str(s).zfill(6), {}).get("industry", "")
     )
     df["cause"] = df.apply(
-        lambda r: _limit_cause(
+        lambda r: get_concept(str(r.get("name") or "")) or _limit_cause(
             str(r.get("name") or ""),
             str(r.get("industry") or ""),
             str(r.get("seg") or ""),
@@ -178,7 +179,7 @@ def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
                 "name": r["name"] or str(r["symbol"]).zfill(6),
                 "boards": b,
                 "cause": r["cause"],
-                "classification": "明确映射" if str(r["name"] or "") in CONCEPT_BY_NAME else "关键词/行业",
+                "classification": "明确映射" if get_concept(str(r["name"] or "")) else "关键词/行业",
                 "segment": r["seg"],
                 "is_one_price": bool(r["is_one_price"]),
                 "is_big": bool(r["is_big"]),

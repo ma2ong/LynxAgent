@@ -65,9 +65,13 @@ def fundamentals(symbol: str) -> Dict[str, Optional[float]]:
     if df is None or df.empty:
         return {}
 
-    # stock_financial_abstract 形如: 列为报告期(从新到旧)，行为指标名(在"指标"列)。
-    idx_col = next((c for c in df.columns if "指标" in str(c) or str(c) in ("选项", "")), df.columns[0])
-    period_cols = [c for c in df.columns if c != idx_col]
+    # stock_financial_abstract 形如: 第0列='选项'(类别), 第1列='指标'(指标名), 其余为报告期。
+    # 必须精确选 '指标' 列；若按关键词搜索会先命中 '选项' 导致所有 metric() 匹配失败。
+    idx_col = next(
+        (c for c in df.columns if str(c) == "指标"),
+        df.columns[1] if len(df.columns) > 1 else df.columns[0],
+    )
+    period_cols = [c for c in df.columns if c not in (df.columns[0], idx_col) and str(c)[0:1].isdigit()]
     # 取最近两期用于同比
     if not period_cols:
         return {}

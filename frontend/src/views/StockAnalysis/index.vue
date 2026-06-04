@@ -270,7 +270,9 @@ const pctClass = (v?: number | null) => (v == null ? '' : v >= 0 ? 'up' : 'down'
 
 const renderKline = () => {
   if (!klineEl.value || !data.value?.kline?.dates?.length) return
-  if (!klineChart) klineChart = echarts.init(klineEl.value)
+  // 每次重新分析都销毁旧实例再重建，避免二次渲染白屏
+  if (klineChart) { klineChart.dispose(); klineChart = null }
+  klineChart = echarts.init(klineEl.value)
   const k = data.value.kline
   klineChart.setOption({
     tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
@@ -294,7 +296,7 @@ const analyze = async () => {
   deepResult.value = null
   deepError.value = ''
   try {
-    const res: any = await ApiClient.get(`/api/quant/stock-analysis/${sym}`)
+    const res: any = await ApiClient.get(`/api/quant/stock-analysis/${sym}`, { _ts: Date.now() })
     data.value = res?.data || null
     if (data.value?.available) {
       await nextTick()

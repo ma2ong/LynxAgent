@@ -64,14 +64,35 @@ def _load_kline(symbol: str) -> pd.DataFrame:
 
 # --- 子区块 -------------------------------------------------------------
 
+def _local_name(symbol: str) -> str:
+    """从本地 SQLite stock_meta 读取股票名称，网络不可用时兜底。"""
+    try:
+        from .local_store import get_local_store
+        store = get_local_store()
+        row = store._conn().execute(
+            "SELECT name FROM stock_meta WHERE symbol=?", (symbol,)
+        ).fetchone()
+        return str(row[0] or "").strip() if row else ""
+    except Exception:
+        return ""
+
+
 def _header(symbol: str, prof: Dict, data: pd.DataFrame) -> Dict[str, object]:
     last_close = _f(data["close"].iloc[-1]) if not data.empty else None
+    prev_close = _f(data["close"].iloc[-2]) if len(data) >= 2 else None
+    pct_chg = round((last_close - prev_close) / prev_close * 100, 2) if last_close and prev_close else None
+    market_cap_yi = round(_f(prof.get("total_mv"), 0) / 1e8, 2) if prof.get("total_mv") else None
+    # 名称：优先 akshare profile，其次本地 SQLite，最后 symbol 兜底
+    name = (prof.get("name") or "").strip() or _local_name(symbol) or symbol
     return {
         "symbol": symbol,
-        "name": (prof.get("name") or "").strip() or symbol,
-        "industry": (prof.get("industry") or "").strip() or "暂无",
+        "name": name,
+        "sector": (prof.get("industry") or "").strip() or "",
+        "industry": (prof.get("industry") or "").strip() or "",
         "last_price": round(last_close, 2) if last_close else None,
+        "pct_chg": pct_chg,
         "total_mv": prof.get("total_mv"),
+        "market_cap_yi": market_cap_yi,
     }
 
 

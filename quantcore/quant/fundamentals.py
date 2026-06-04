@@ -23,8 +23,9 @@ def profile(symbol: str) -> Dict[str, object]:
     """个股概况：名称/行业/总市值/PE/PB（来自东财个股信息）。"""
     symbol = str(symbol).zfill(6)
     try:
+        import pandas as pd
+        pd.options.future.infer_string = False
         import akshare as ak
-
         df = ak.stock_individual_info_em(symbol=symbol)
     except Exception:
         return {}

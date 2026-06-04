@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -44,46 +44,114 @@ def _cap_band(symbol: str) -> str:
     return "小盘股"
 
 
+CONCEPT_BY_NAME = {
+    "亨通光电": "光通信/CPO",
+    "天洋新材": "光通信/CPO",
+    "青山纸业": "光通信/CPO",
+    "中广核技": "光通信/CPO",
+    "晶赛科技": "光通信/CPO",
+    "大唐电信": "光通信/CPO",
+    "惠丰钻石": "AI硬件",
+    "红星发展": "AI硬件",
+    "东材科技": "AI硬件",
+    "国机精工": "AI硬件",
+    "王子新材": "AI硬件",
+    "迅捷兴": "AI硬件",
+    "一博科技": "AI硬件",
+    "恒星科技": "AI硬件",
+    "通富微电": "国产芯片",
+    "实益达": "国产芯片",
+    "华特气体": "国产芯片",
+    "三孚股份": "国产芯片",
+    "三祥新材": "国产芯片",
+    "康强电子": "国产芯片",
+    "中旗新材": "国产芯片",
+    "华源控股": "国产芯片",
+    "肯特催化": "国产芯片",
+    "模塑科技": "机器人",
+    "北投科技": "机器人",
+    "美湖股份": "机器人",
+    "移远通信": "机器人",
+    "长华集团": "机器人",
+    "祥鑫科技": "机器人",
+    "德昌股份": "机器人",
+    "欧克科技": "机器人",
+    "神驰机电": "机器人",
+    "泰禾智能": "机器人",
+    "中重科技": "机器人",
+    "一彬科技": "机器人",
+    "协昌科技": "机器人",
+    "郑州煤电": "煤炭",
+    "大有能源": "煤炭",
+    "华电辽能": "电力",
+    "豫能控股": "电力",
+    "京能电力": "电力",
+    "广西能源": "电力",
+    "恒盛能源": "电力",
+    "西昌电力": "电力",
+    "新中港": "电力",
+    "久之洋": "航天军工",
+    "海特高新": "航天军工",
+    "元祖股份": "大消费",
+    "瑞贝卡": "大消费",
+    "利仁科技": "大消费",
+    "安奈儿": "大消费",
+    "上海凤凰": "大消费",
+    "节能铁汉": "公告",
+    "金海高科": "公告",
+    "联检科技": "公告",
+    "蓝科高新": "公告",
+}
+
+
 def _limit_cause(name: str, industry: str, segment: str) -> str:
-    """将涨停个股归入具体概念板块（精细分类优先，按规则顺序匹配首条）。"""
     text = f"{name}{industry}"
+    if name in CONCEPT_BY_NAME:
+        return CONCEPT_BY_NAME[name]
     rules = [
-        # ─── AI & 科技硬件 ─── (精确词优先)
-        ("光通信/CPO",  ("光通信", "CPO", "光模块", "光纤", "光芯片", "光电子", "激光", "硅光", "光网络", "光电", "光器件")),
-        ("AI算力",      ("算力", "数据中心", "服务器", "GPU", "AIGC", "大模型", "AI芯片", "智算")),
-        ("AI硬件",      ("人工智能", "智能驾驶", "自动驾驶", "智慧城市")),
-        ("半导体/芯片", ("半导体", "芯片", "集成电路", "晶圆", "EDA", "存储器", "微电子", "封测")),
-        ("国产替代",    ("信创", "国产替代", "自主可控", "鸿蒙", "工业软件")),
-        # ─── 新型制造 ───
-        ("人形机器人",  ("人形机器人", "具身智能", "仿生机器人")),
-        ("机器人",      ("机器人", "减速器", "丝杠", "工业自动", "伺服", "数控", "精密")),
-        ("低空经济",    ("低空", "eVTOL", "无人机", "通用航空", "飞行汽车")),
-        ("航天/卫星",   ("航天", "卫星", "火箭", "北斗", "商业航天")),
-        ("新能源车",    ("新能源车", "电动车", "充电桩", "动力电池", "燃料电池")),
-        # ─── 能源资源 ───
-        ("煤炭",        ("煤炭", "煤矿", "煤电", "焦煤", "动力煤", "焦化", "煤化工", "采煤", "洗煤")),
-        ("能源",        ("能源", "油气", "石油", "天然气", "炼化", "页岩")),
-        ("电力/储能",   ("电力", "储能", "特高压", "电网", "光伏", "风电", "绿电", "水电", "核电")),
-        ("有色金属",    ("黄金", "白银", "铜", "铝", "镍", "钴", "锂", "稀土", "钼", "钨")),
-        # ─── 消费 ───
-        ("大消费",      ("消费", "食品", "饮料", "白酒", "啤酒", "家电", "零售", "餐饮", "旅游", "酒店")),
-        ("医药/医疗",   ("医药", "创新药", "医疗", "生物制药", "CXO", "疫苗", "医院", "医械")),
-        ("农业",        ("农业", "种业", "化肥", "农药", "养殖", "畜牧", "水产")),
-        # ─── 传统行业 ───
-        ("金融",        ("证券", "银行", "保险", "基金", "信托")),
-        ("地产",        ("房地产", "地产", "建筑", "物业", "装修")),
-        ("并购重组",    ("重组", "并购", "资产注入", "借壳", "定增")),
-        ("交运/港口",   ("航运", "港口", "物流", "高铁", "航空公司", "快递")),
+        ("光通信/CPO", ("光模块", "CPO", "光通信", "光电", "光缆", "光纤", "通信设备")),
+        ("AI硬件", ("算力", "服务器", "数据中心", "PCB", "铜缆", "连接器", "液冷", "AIPC", "消费电子")),
+        ("国产芯片", ("半导体", "芯片", "集成电路", "电子元件", "存储", "封测", "光刻胶")),
+        ("机器人", ("机器人", "自动化", "电气设备", "专用设备")),
+        ("煤炭", ("煤炭", "煤电", "焦煤", "焦炭")),
+        ("电力", ("电力", "能源", "火电", "水电", "核电", "光伏", "风电")),
+        ("航天军工", ("航天", "航空", "军工", "无人机", "卫星", "红外")),
+        ("大消费", ("消费", "食品", "服装", "家电", "日化", "零售")),
+        ("公告", ("重组", "并购", "资产注入", "中标", "订单", "增持")),
     ]
     for label, keys in rules:
         if any(key in text for key in keys):
             return label
-    if industry and industry not in ("", "-"):
-        return industry[:5]
     return "其他"
 
 
-def compute_market_sentiment(start: str, end: str, buffer_days: int = 24) -> Dict[str, object]:
+def _append_realtime_rows(df: pd.DataFrame, end: str, realtime_quotes: Optional[Dict[str, Dict[str, object]]]) -> pd.DataFrame:
+    if not realtime_quotes:
+        return df
+    today = date.today().strftime("%Y-%m-%d")
+    if end < today:
+        return df
+    rows = []
+    for symbol, quote in realtime_quotes.items():
+        price = quote.get("price") or quote.get("close") or quote.get("current_price")
+        if price is None or float(price or 0) <= 0:
+            continue
+        rows.append(
+            {
+                "symbol": str(symbol).zfill(6),
+                "date": today,
+                "close": float(price),
+                "amount": float(quote.get("amount") or 0),
+            }
+        )
+    if not rows:
+        return df
+    symbols = {row["symbol"] for row in rows}
+    df = df[~((df["date"] == today) & (df["symbol"].astype(str).str.zfill(6).isin(symbols)))].copy()
+    return pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
+
+
+def compute_market_sentiment(start: str, end: str, buffer_days: int = 24, realtime_quotes: Optional[Dict[str, Dict[str, object]]] = None) -> Dict[str, object]:
     store = get_local_store()
     conn = store._conn()
     win_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=buffer_days)).strftime("%Y-%m-%d")
@@ -99,6 +167,7 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24) -> Dic
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
     df = df.dropna(subset=["close"])
     df = df[df["close"] > 0]
+    df = _append_realtime_rows(df, end, realtime_quotes)
     # 修正同步层单位不一致：科创板(688)源的 volume 为「股」却仍按「手」×100，
     # 使其 amount 被放大 100 倍（实测 688 板块单只均值 ~680 亿 vs 主板 ~5 亿）。
     # 对 688 回退 100 倍后，全市场成交额回到 ~2-3 万亿的合理量级。
@@ -213,6 +282,8 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24) -> Dic
     return {
         "empty": False,
         "start": start, "end": end, "dates": dates, "as_of": last,
+        "as_of_time": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+        "realtime": bool(realtime_quotes and last == date.today().strftime("%Y-%m-%d")),
         "kpi": {
             "sentiment_temperature": sentiment_temp,
             "turnover_yi": turnover_today,

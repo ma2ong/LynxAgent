@@ -3,7 +3,10 @@
     <div class="page-head">
       <div>
         <h1>市场情绪分析</h1>
-        <p>基于历史与公开数据的市场资金流向与指标研究。仅供研究分析，不构成投资建议。</p>
+        <p>基于本地日线与实时行情的市场资金流向与指标研究。仅供研究分析，不构成投资建议。</p>
+        <small v-if="data?.as_of_time" class="as-of">
+          更新至 {{ data.as_of }} {{ data.realtime ? '实时行情' : '本地日线' }} ｜ {{ data.as_of_time }}
+        </small>
       </div>
     </div>
 
@@ -164,6 +167,7 @@ const renderAll = () => {
   })
 
   const lad = d.board_ladder
+
   mk(ladderEl.value)?.setOption({
     tooltip: { trigger: 'axis' }, legend: { top: 0, data: ['3板', '4板', '5板+', '最高板'], itemHeight: 8, textStyle: { fontSize: 10 } },
     grid: { left: 40, right: 44, top: 28, bottom: 28 },
@@ -215,6 +219,7 @@ onUnmounted(disposeAll)
 
 <style scoped lang="scss">
 .page-head { margin-bottom: 12px; h1 { margin: 0 0 4px; font-size: 22px; } p { margin: 0; color: var(--el-text-color-secondary); font-size: 13px; } }
+.as-of { display: inline-block; margin-top: 5px; color: var(--el-color-primary); font-size: 12px; }
 .kpi-band { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
 .kpi-card {
   background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 10px;

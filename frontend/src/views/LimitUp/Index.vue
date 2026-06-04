@@ -50,7 +50,13 @@
       <section class="matrix-card">
         <div class="matrix-title">
           {{ fmtDate(data.date) }}　涨停热点分布
-          <span class="matrix-note">粗体=一字板 / 橙色=成交额>5亿 / 20%涨停股带★</span>
+          <span class="matrix-note">按明确概念归类，无法确认的只放「其他」</span>
+        </div>
+        <div class="theme-strip">
+          <button v-for="cause in data.causes" :key="cause" class="theme-pill" :class="`theme-${themeClass(cause)}`">
+            <span>{{ cause }}</span>
+            <b>{{ data.cause_total[cause] || 0 }}</b>
+          </button>
         </div>
         <div class="matrix-wrap">
           <table class="matrix-table">
@@ -79,7 +85,7 @@
                       'chip-20pct': stock.is_20pct,
                     }"
                     @click="goAnalysis(stock.symbol)"
-                    :title="`${stock.symbol} ${stock.is_one_price?'一字板':''} ${stock.is_20pct?'20%涨幅':''}`"
+                    :title="`${stock.symbol}｜${stock.reason || ''}`"
                   >
                     {{ stock.name }}<sup v-if="stock.is_20pct">★</sup>
                   </div>
@@ -136,6 +142,11 @@
             <template #default="{ row }"><span class="up">+{{ row.pct_chg }}%</span></template>
           </el-table-column>
           <el-table-column prop="amount_yi" label="成交额(亿)" width="100" sortable />
+          <el-table-column prop="reason" label="涨停动因" min-width="360" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span class="reason-text">{{ row.reason }}</span>
+            </template>
+          </el-table-column>
           <el-table-column label="操作" width="80" fixed="right">
             <template #default="{ row }">
               <el-button link size="small" type="primary" @click="goAnalysis(row.symbol)">深研</el-button>
@@ -204,6 +215,19 @@ const levelClass = (level: string) => {
   return '1'
 }
 
+const themeClass = (cause: string) => {
+  if (cause.includes('光通信')) return 'optical'
+  if (cause.includes('AI')) return 'ai'
+  if (cause.includes('机器人')) return 'robot'
+  if (cause.includes('芯片')) return 'chip'
+  if (cause.includes('煤炭')) return 'coal'
+  if (cause.includes('电力')) return 'power'
+  if (cause.includes('消费')) return 'consumer'
+  if (cause.includes('军工')) return 'aero'
+  if (cause.includes('公告')) return 'notice'
+  return 'other'
+}
+
 const goAnalysis = (symbol: string) => {
   router.push({ name: 'single-analysis', query: { symbol } })
 }
@@ -236,15 +260,29 @@ onMounted(load)
 
 /* Matrix */
 .matrix-card { background: var(--el-bg-color); border: 1px solid var(--el-border-color-light);
-  border-radius: 10px; padding: 14px; }
-.matrix-title { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
+  border-radius: 8px; padding: 14px; }
+.matrix-title { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
 .matrix-note { font-size: 12px; font-weight: 400; color: var(--el-text-color-secondary); margin-left: 8px; }
+.theme-strip { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; }
+.theme-pill { border: 1px solid var(--el-border-color-light); background: var(--el-fill-color-extra-light);
+  border-radius: 6px; padding: 6px 10px; display: inline-flex; gap: 8px; align-items: center;
+  color: var(--el-text-color-primary); font-size: 13px; }
+.theme-pill b { font-size: 16px; line-height: 1; }
+.theme-optical { border-color: #409eff; background: #ecf5ff; }
+.theme-ai { border-color: #8e44ad; background: #f5edff; }
+.theme-robot { border-color: #00a870; background: #ecfff7; }
+.theme-chip { border-color: #d35400; background: #fff4e6; }
+.theme-coal { border-color: #7f8c8d; background: #f4f6f7; }
+.theme-power { border-color: #f1c40f; background: #fffbe6; }
+.theme-consumer { border-color: #e84393; background: #fff0f6; }
+.theme-aero { border-color: #34495e; background: #eef2f7; }
+.theme-notice { border-color: #16a085; background: #edfdf9; }
 .matrix-wrap { overflow-x: auto; }
 
 .matrix-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .matrix-table th, .matrix-table td {
   border: 1px solid var(--el-border-color-lighter); padding: 6px 8px; vertical-align: top; }
-.matrix-table thead th { background: var(--el-fill-color-light); font-weight: 700;
+.matrix-table thead th { background: #eaf4ff; color: #12314f; font-weight: 800;
   text-align: center; white-space: nowrap; }
 .col-level { width: 76px; min-width: 76px; }
 .col-cause { min-width: 100px; text-align: center; }
@@ -290,10 +328,11 @@ sup { font-size: 9px; color: #9254de; }
 .leg-20 { color: #9254de; }
 
 /* Detail */
-.detail-card { background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 10px; padding: 14px; }
+.detail-card { background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 8px; padding: 14px; }
 .detail-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .detail-title { font-size: 15px; font-weight: 700; }
 .up { color: #ef232a; }
+.reason-text { color: var(--el-text-color-regular); }
 
 .boards-tag { font-size: 12px; padding: 1px 6px; border-radius: 10px; font-weight: 600; }
 .boards-1 { background: #f0f9eb; color: #5a9e47; }

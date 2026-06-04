@@ -2459,7 +2459,13 @@ async def lite_market_sentiment(start: str | None = None, end: str | None = None
     e = end or today
     s = start or (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
     try:
-        data = await asyncio.to_thread(compute_market_sentiment, s, e)
+        realtime_quotes = {}
+        if e >= today:
+            try:
+                realtime_quotes = await asyncio.to_thread(_load_realtime_quotes_snapshot, 60)
+            except Exception:
+                realtime_quotes = {}
+        data = await asyncio.to_thread(compute_market_sentiment, s, e, 24, realtime_quotes)
         return {"success": True, "data": data}
     except Exception as exc:
         return {"success": False, "data": None, "message": str(exc)}

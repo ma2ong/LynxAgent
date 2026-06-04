@@ -15,7 +15,58 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from .local_store import get_local_store
-from .market_sentiment import _limit_cause, _limit_threshold, _segment
+from .market_sentiment import CONCEPT_BY_NAME, _limit_cause, _limit_threshold, _segment
+
+
+CONCEPT_ORDER = ["AI硬件", "光通信/CPO", "机器人", "国产芯片", "煤炭", "电力", "大消费", "航天军工", "公告", "其他"]
+
+REASON_BY_NAME = {
+    "亨通光电": "光纤光缆+CPO液冷，成交额显著放大，光通信主线资金承接强。",
+    "天洋新材": "电子胶+光学膜材料，受AI硬件材料链扩产预期带动。",
+    "惠丰钻石": "培育钻石+高端材料，叠加AI硬件散热/材料想象空间。",
+    "红星发展": "钡盐材料+锰系材料，材料端涨价和AI硬件链延伸预期共振。",
+    "郑州煤电": "煤炭供给偏紧预期+连板高度打开，短线资金聚焦煤炭弹性标的。",
+    "大有能源": "煤炭+地方国资，一字封板显示资金对煤炭补涨线认可度高。",
+    "节能铁汉": "公告/事件驱动叠加超跌低价属性，20%涨停强化辨识度。",
+    "模塑科技": "汽车零部件+机器人轻量化部件预期，二连板放大题材辨识度。",
+    "北投科技": "机器人/智能装备方向发酵，连续涨停说明资金沿设备端扩散。",
+    "金海高科": "公告催化+高端材料属性，二连板后成为公告线辨识度标的。",
+    "通富微电": "先进封测+国产芯片核心股，成交额放大说明大资金参与度高。",
+    "实益达": "电子制造+国产芯片链，连续涨停体现资金对低位电子股补涨偏好。",
+    "华电辽能": "电力+区域能源，电力板块活跃下资金选择低位补涨。",
+    "豫能控股": "电力+地方能源平台，板块扩散时资金偏好弹性电力股。",
+    "京能电力": "火电+电力运营，成交额放大确认电力方向资金承接。",
+    "久之洋": "红外探测+航天军工，军工电子方向资金短线回流。",
+    "海特高新": "航空维修+军工属性，航天军工线扩散带动。",
+}
+
+
+def _limit_reason(name: str, cause: str, boards: int, is_one_price: bool, is_big: bool, is_20pct: bool) -> str:
+    if name in REASON_BY_NAME:
+        return REASON_BY_NAME[name]
+    templates = {
+        "AI硬件": "AI硬件链扩散，材料/PCB/连接器等上游环节被资金挖掘。",
+        "光通信/CPO": "光通信/CPO主线活跃，光模块、光纤光缆或通信设备方向资金承接。",
+        "机器人": "机器人产业链延续活跃，零部件、自动化设备或执行机构方向被资金关注。",
+        "国产芯片": "国产芯片链走强，封测、材料、电子元件等环节出现补涨。",
+        "煤炭": "煤炭板块短线走强，能源价格和低估值补涨逻辑共振。",
+        "电力": "电力板块活跃，火电/地方能源平台获得资金轮动。",
+        "大消费": "大消费方向轮动，低位消费股获得短线资金修复。",
+        "航天军工": "航天军工方向回流，军工电子/航空装备标的辨识度提升。",
+        "公告": "公告或事件催化带动资金抢筹，短线情绪强于行业基本面归因。",
+        "其他": "未匹配到明确主线概念，保留在其他，避免强行归类。",
+    }
+    reason = templates.get(cause, templates["其他"])
+    tags = []
+    if boards >= 2:
+        tags.append(f"{boards}连板")
+    if is_one_price:
+        tags.append("一字封板")
+    if is_big:
+        tags.append("成交额放大")
+    if is_20pct:
+        tags.append("20cm高弹性")
+    return reason if not tags else f"{reason}（{'+'.join(tags)}）"
 
 
 def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
@@ -127,6 +178,7 @@ def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
                 "name": r["name"] or str(r["symbol"]).zfill(6),
                 "boards": b,
                 "cause": r["cause"],
+                "classification": "明确映射" if str(r["name"] or "") in CONCEPT_BY_NAME else "关键词/行业",
                 "segment": r["seg"],
                 "is_one_price": bool(r["is_one_price"]),
                 "is_big": bool(r["is_big"]),
@@ -138,16 +190,19 @@ def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
         )
 
     stocks.sort(key=lambda s: (-s["boards"], -s["amount_yi"]))
+    for s in stocks:
+        s["reason"] = _limit_reason(
+            str(s["name"]),
+            str(s["cause"]),
+            int(s["boards"]),
+            bool(s["is_one_price"]),
+            bool(s["is_big"]),
+            bool(s["is_20pct"]),
+        )
 
     # 构建矩阵 {board_label: {cause: [stock...]}}
     # 行：连板高度分级；列：概念板块
-    from collections import Counter, defaultdict
-
-    cause_counts = Counter(s["cause"] for s in stocks)
-    # 保留出现 ≥ 2 次的概念，其余归入"其他"；最多展示 9 列
-    top_causes = [c for c, _ in cause_counts.most_common(9) if cause_counts[c] >= 2]
-    if not top_causes:
-        top_causes = [c for c, _ in cause_counts.most_common(5)]
+    from collections import defaultdict
 
     def board_label(b: int) -> str:
         if b >= 5:
@@ -159,21 +214,22 @@ def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
     matrix: Dict[str, Dict[str, List]] = defaultdict(lambda: defaultdict(list))
     for s in stocks:
         bl = board_label(s["boards"])
-        cause = s["cause"] if s["cause"] in top_causes else "其他"
+        cause = s["cause"] if s["cause"] in CONCEPT_ORDER else "其他"
         matrix[bl][cause].append(
             {
                 "symbol": s["symbol"],
                 "name": s["name"],
+                "reason": s["reason"],
                 "is_one_price": s["is_one_price"],
                 "is_big": s["is_big"],
                 "is_20pct": s["is_20pct"],
             }
         )
 
-    # 确保"其他"出现在 top_causes 末尾
-    all_causes = list(top_causes)
-    if any(s["cause"] not in top_causes for s in stocks):
-        all_causes.append("其他")
+    all_causes = [
+        cause for cause in CONCEPT_ORDER
+        if any((s["cause"] if s["cause"] in CONCEPT_ORDER else "其他") == cause for s in stocks)
+    ]
 
     # 行顺序
     level_order = ["5板+", "4连板", "3连板", "2连板", "首板"]

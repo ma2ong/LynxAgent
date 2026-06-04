@@ -368,17 +368,44 @@ def build_stock_report(symbol: str) -> Dict[str, object]:
     except Exception:
         news = []
 
+    # K线图数据（近120日，供前端 ECharts candlestick）
+    kline: Dict[str, object] = {}
+    if has_data:
+        df120 = data.tail(120).copy()
+        idx = df120.index
+        kline = {
+            "dates": (idx.strftime("%Y-%m-%d").tolist() if hasattr(idx, "strftime") else df120.get("date", pd.Series()).astype(str).tolist()),
+            "open": df120["open"].round(2).tolist(),
+            "high": df120["high"].round(2).tolist(),
+            "low": df120["low"].round(2).tolist(),
+            "close": df120["close"].round(2).tolist(),
+        }
+
+    # 操作建议价位（基于历史波动率估算）
+    vol = _f(risk.get("volatility"), 0.0) if has_data else 0.0
+    stop_loss = round(last_close * (1 - vol * 0.5), 2) if vol and last_close else None
+    target = round(last_close * (1 + vol * 1.5), 2) if vol and last_close and signal in ("buy", "strong_buy") else None
+    entry_low = round(last_close * 0.98, 2) if last_close else None
+    entry_high = round(last_close * 1.02, 2) if last_close else None
+
     return {
         "available": has_data or bool(prof) or bool(fund),
         "header": header,
         "rating": {
             "signal": signal,
             "label": _SIGNAL_LABEL.get(signal, signal),
+            "tech_score": round(tech_score, 1),
+            "factors": factors,
             "position": valuation.get("position") if valuation.get("available") else None,
             "position_note": valuation.get("position_note") if valuation.get("available") else None,
             "rating_bands": valuation.get("rating_bands") if valuation.get("available") else None,
+            "stop_loss": stop_loss,
+            "target": target,
+            "entry_low": entry_low,
+            "entry_high": entry_high,
         },
         "core_summary": _core_summary(header, tech_score, fund_score, signal, perf),
+        "kline": kline,
         "valuation_forest": valuation,
         "key_indicators": _key_indicators(data) if has_data else [],
         "scores": {

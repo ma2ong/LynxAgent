@@ -4363,3 +4363,16 @@ async def lite_datalake_health(auto_start: bool = True):
     health["last_incremental_sync"] = status.get("last_incremental_sync")
     health["auto_started"] = auto_started
     return {"success": True, "data": health}
+
+
+@app.get("/api/quant/stock-analysis/{symbol}")
+async def stock_analysis(symbol: str, current_user=Depends(get_current_lite_user)):
+    """合并个股研报 + 技术分析，供新版「个股分析」页使用。
+    深度多智能体分析仍走原有 /api/analysis/single 异步入口。
+    """
+    from quantcore.quant.report_service import build_stock_report
+    try:
+        report = await asyncio.to_thread(build_stock_report, symbol)
+    except Exception as exc:
+        report = {"available": False, "error": str(exc)}
+    return {"success": True, "data": report}

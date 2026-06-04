@@ -1,5 +1,11 @@
-"""全市场日线同步服务：后台线程 + 进度跟踪。"""
+"""Full-market daily K-line sync service: background thread + progress tracking.
+
+This intentionally mirrors the working TradingAgents sync flow: every manual
+incremental sync walks the whole local universe and upserts Tencent daily bars.
+It avoids slow per-symbol third-party fallbacks during batch sync.
+"""
 from __future__ import annotations
+
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
@@ -8,10 +14,10 @@ from typing import Dict, List, Optional
 import pandas as pd
 import requests
 
-from .local_store import LocalQuantStore, get_local_store
 from .data_sources import data_source_status, fetch_stock_pool
+from .local_store import LocalQuantStore, get_local_store
 
-FULL_HISTORY_DAYS = 760  # 约 2 年自然日，覆盖形态与中长期均线
+FULL_HISTORY_DAYS = 760
 
 
 def _tencent_code(symbol: str) -> str:
@@ -23,10 +29,10 @@ def _tencent_code(symbol: str) -> str:
     return f"sz{s}"
 
 
-def _f(v) -> float:
+def _f(value) -> float:
     try:
-        x = float(v)
-        return x if x == x else 0.0
+        number = float(value)
+        return number if number == number else 0.0
     except (TypeError, ValueError):
         return 0.0
 
@@ -38,8 +44,14 @@ class MarketSyncService:
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._progress: Dict[str, object] = {
-            "running": False, "phase": "idle", "done": 0, "total": 0,
-            "errors_count": 0, "last_error": "", "started_at": "", "finished_at": "",
+            "running": False,
+            "phase": "idle",
+            "done": 0,
+            "total": 0,
+            "errors_count": 0,
+            "last_error": "",
+            "started_at": "",
+            "finished_at": "",
         }
 
     def _fetch_universe(self) -> List[Dict[str, object]]:
@@ -48,7 +60,12 @@ class MarketSyncService:
             self._progress["universe_source"] = "local-store"
             self._progress["source_errors"] = {}
             return [
-                {"symbol": item.get("symbol"), "name": item.get("name", ""), "industry": item.get("industry", ""), "source": "local-store"}
+                {
+                    "symbol": item.get("symbol"),
+                    "name": item.get("name", ""),
+                    "industry": item.get("industry", ""),
+                    "source": "local-store",
+                }
                 for item in local_rows
                 if str(item.get("symbol") or "").isdigit()
             ]
@@ -57,13 +74,17 @@ class MarketSyncService:
         self._progress["universe_source"] = source or "none"
         self._progress["source_errors"] = errors
         return [
-            {"symbol": item.get("symbol"), "name": item.get("name", ""), "industry": "", "source": item.get("source", source)}
+            {
+                "symbol": item.get("symbol"),
+                "name": item.get("name", ""),
+                "industry": "",
+                "source": item.get("source", source),
+            }
             for item in rows
             if str(item.get("symbol") or "").isdigit()
         ]
 
     def _fetch_kline(self, symbol: str, start: str) -> pd.DataFrame:
-        """全市场同步只走腾讯快链路；外部库保留给单股查询，避免批量同步被三方源阻塞。"""
         df = self._fetch_kline_tencent(symbol, start)
         if df is not None and not df.empty:
             return df
@@ -78,49 +99,45 @@ class MarketSyncService:
             bars = payload.get("qfqday") or payload.get("day") or []
         except Exception:
             return pd.DataFrame()
+
         rows = []
-        for b in bars:
-            if len(b) < 6:
+        for bar in bars:
+            if len(bar) < 6:
                 continue
-            d = str(b[0])
-            if d < start:
+            trade_date = str(bar[0])
+            if trade_date < start:
                 continue
-            # 腾讯字段顺序：date, open, close, high, low, volume(手)
-            o, c, h, l, v = _f(b[1]), _f(b[2]), _f(b[3]), _f(b[4]), _f(b[5])
-            rows.append({"date": d, "open": o, "high": h, "low": l, "close": c,
-                         "volume": v, "amount": c * v * 100})
+            open_price = _f(bar[1])
+            close_price = _f(bar[2])
+            high_price = _f(bar[3])
+            low_price = _f(bar[4])
+            volume = _f(bar[5])
+            rows.append(
+                {
+                    "date": trade_date,
+                    "open": open_price,
+                    "high": high_price,
+                    "low": low_price,
+                    "close": close_price,
+                    "volume": volume,
+                    "amount": close_price * volume * 100,
+                }
+            )
         return pd.DataFrame(rows)
 
-    def _fetch_kline_external(self, symbol: str, start: str) -> pd.DataFrame:
-        # 回退源：efinance / AKShare / BaoStock，带退避重试。
-        import time
-        from .data import fetch_stock_dataframe
-        end = date.today().strftime("%Y-%m-%d")
-        last_exc: Optional[Exception] = None
-        for attempt in range(3):
-            try:
-                df = fetch_stock_dataframe(symbol, start, end)
-                if df is not None and not df.empty:
-                    return df
-            except Exception as exc:
-                last_exc = exc
-            time.sleep(0.6 * (attempt + 1))
-        if last_exc is not None:
-            raise last_exc
-        return pd.DataFrame()
-
     def _fetch_fundamental_flags(self) -> List[Dict[str, object]]:
-        """拉取最近报告期业绩预告，返回基本面利空股票标记（首亏/续亏/预减等）。批量、不踩限流。"""
         import akshare as ak
+
         from .screening import BAD_FORECAST_TYPES
-        # 候选报告期：最近 5 个季度末，取第一个有数据的
+
         today = date.today()
         periods: List[str] = []
-        y = today.year
-        for (m, d) in [(12, 31), (9, 30), (6, 30), (3, 31)]:
-            for yy in (y, y - 1):
-                periods.append(f"{yy}{m:02d}{d:02d}")
+        current_year = today.year
+        for month, day in [(12, 31), (9, 30), (6, 30), (3, 31)]:
+            for year in (current_year, current_year - 1):
+                periods.append(f"{year}{month:02d}{day:02d}")
         periods = sorted({p for p in periods if p <= today.strftime("%Y%m%d")}, reverse=True)[:5]
+
         for period in periods:
             try:
                 df = ak.stock_yjyg_em(date=period)
@@ -131,15 +148,22 @@ class MarketSyncService:
             code_col = "股票代码" if "股票代码" in df.columns else df.columns[1]
             chg_col = "业绩变动幅度" if "业绩变动幅度" in df.columns else None
             rows: List[Dict[str, object]] = []
-            for _, r in df.iterrows():
-                ftype = str(r.get("预告类型") or "")
-                if not any(bad in ftype for bad in BAD_FORECAST_TYPES):
+            for _, row in df.iterrows():
+                forecast_type = str(row.get("预告类型") or "")
+                if not any(bad in forecast_type for bad in BAD_FORECAST_TYPES):
                     continue
-                code = str(r.get(code_col) or "").zfill(6)
+                code = str(row.get(code_col) or "").zfill(6)
                 if not code.isdigit():
                     continue
-                rows.append({"symbol": code, "bad_forecast": True, "forecast_type": ftype,
-                             "change": str(r.get(chg_col)) if chg_col else "", "period": period})
+                rows.append(
+                    {
+                        "symbol": code,
+                        "bad_forecast": True,
+                        "forecast_type": forecast_type,
+                        "change": str(row.get(chg_col)) if chg_col else "",
+                        "period": period,
+                    }
+                )
             if rows:
                 return rows
         return []
@@ -151,6 +175,8 @@ class MarketSyncService:
             status["local_kline_symbols"] = self.store.kline_symbol_count()
             status["last_full_sync"] = self.store.get_state("last_full_sync") or ""
             status["last_incremental_sync"] = self.store.get_state("last_incremental_sync") or ""
+            if hasattr(self.store, "kline_health"):
+                status["health"] = self.store.kline_health()
             status["data_sources"] = data_source_status()
         except Exception as exc:
             status["last_error"] = str(exc)[:200]
@@ -160,10 +186,18 @@ class MarketSyncService:
         with self._lock:
             if self._progress["running"]:
                 return self.status()
-            self._progress.update({"running": True, "phase": "starting", "done": 0,
-                                   "total": 0, "errors_count": 0, "last_error": "",
-                                   "started_at": datetime.now().isoformat(timespec="seconds"),
-                                   "finished_at": ""})
+            self._progress.update(
+                {
+                    "running": True,
+                    "phase": "starting",
+                    "done": 0,
+                    "total": 0,
+                    "errors_count": 0,
+                    "last_error": "",
+                    "started_at": datetime.now().isoformat(timespec="seconds"),
+                    "finished_at": "",
+                }
+            )
         if block:
             self._do_sync(full)
         else:
@@ -190,21 +224,22 @@ class MarketSyncService:
                     last = self.store.last_kline_date(symbol)
                     start = last or full_start
                 df = self._fetch_kline(symbol, start)
-                self.store.upsert_kline(symbol, df)
+                return self.store.upsert_kline(symbol, df)
 
             done = 0
-            with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
-                futures = {ex.submit(work, m): m for m in universe}
-                for fut in as_completed(futures):
+            written_rows = 0
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = {executor.submit(work, meta): meta for meta in universe}
+                for future in as_completed(futures):
                     try:
-                        fut.result()
+                        written_rows += int(future.result() or 0)
                     except Exception as exc:
                         self._progress["errors_count"] = int(self._progress["errors_count"]) + 1
                         self._progress["last_error"] = str(exc)[:200]
                     done += 1
                     self._progress["done"] = done
+                    self._progress["written_rows"] = written_rows
 
-            # 基本面利空标记（业绩预告），批量一次，失败不影响主流程
             self._progress["phase"] = "fundamental"
             try:
                 flags = self._fetch_fundamental_flags()

@@ -117,6 +117,61 @@ class LocalQuantStore:
     def kline_symbol_count(self) -> int:
         return self._conn().execute("SELECT COUNT(DISTINCT symbol) FROM daily_kline").fetchone()[0]
 
+    def kline_health(self) -> Dict[str, object]:
+        from datetime import date, datetime
+
+        conn = self._conn()
+        meta_count = int(conn.execute("SELECT COUNT(*) FROM stock_meta").fetchone()[0] or 0)
+        kline_symbols = int(conn.execute("SELECT COUNT(DISTINCT symbol) FROM daily_kline").fetchone()[0] or 0)
+        rows = conn.execute(
+            "SELECT date, COUNT(DISTINCT symbol) FROM daily_kline GROUP BY date ORDER BY date DESC LIMIT 20"
+        ).fetchall()
+        latest_date = str(rows[0][0]) if rows else ""
+        latest_count = int(rows[0][1]) if rows else 0
+        today = date.today().strftime("%Y-%m-%d")
+        today_count = next((int(count) for d, count in rows if str(d) == today), 0)
+        threshold = max(500, int(meta_count * 0.80)) if meta_count else 500
+        latest_complete_date = ""
+        latest_complete_count = 0
+        for d, count in rows:
+            if int(count) >= threshold:
+                latest_complete_date = str(d)
+                latest_complete_count = int(count)
+                break
+        weekday = datetime.strptime(today, "%Y-%m-%d").weekday()
+        today_is_weekday = weekday < 5
+        ready = kline_symbols >= 500 and bool(latest_complete_date)
+        today_complete = today_count >= threshold
+        needs_incremental_sync = bool(ready and today_is_weekday and not today_complete)
+        if not ready:
+            status = "empty" if kline_symbols == 0 else "insufficient"
+            message = "本地K线不足，请先做一次全量同步。"
+        elif today_complete:
+            status = "fresh"
+            message = f"数据已更新到今天，覆盖 {today_count}/{meta_count} 只。"
+        elif needs_incremental_sync:
+            status = "partial_today" if today_count else "stale_today"
+            message = f"今天数据正在补齐或尚未同步，当前覆盖 {today_count}/{meta_count} 只；筛选会先使用最近完整交易日 {latest_complete_date}。"
+        else:
+            status = "ready"
+            message = f"本地数据可用，最近完整交易日 {latest_complete_date}。"
+        return {
+            "status": status,
+            "ready": ready,
+            "meta_count": meta_count,
+            "kline_symbols": kline_symbols,
+            "latest_date": latest_date,
+            "latest_date_count": latest_count,
+            "today": today,
+            "today_count": today_count,
+            "complete_threshold": threshold,
+            "latest_complete_date": latest_complete_date,
+            "latest_complete_count": latest_complete_count,
+            "today_complete": today_complete,
+            "needs_incremental_sync": needs_incremental_sync,
+            "message": message,
+        }
+
     def latest_snapshots(self) -> Dict[str, Dict[str, float]]:
         sql = """
         WITH ranked AS (

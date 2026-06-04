@@ -98,6 +98,31 @@ export interface QuantPatternPoolResult {
   scanned?: number
 }
 
+export interface QuantDataHealth {
+  status: string
+  ready: boolean
+  meta_count: number
+  kline_symbols: number
+  latest_date: string
+  latest_date_count: number
+  today: string
+  today_count: number
+  complete_threshold: number
+  latest_complete_date: string
+  latest_complete_count: number
+  today_complete: boolean
+  needs_incremental_sync: boolean
+  message: string
+  sync_running?: boolean
+  sync_phase?: string
+  sync_done?: number
+  sync_total?: number
+  sync_errors_count?: number
+  last_full_sync?: string
+  last_incremental_sync?: string
+  auto_started?: boolean
+}
+
 export interface BacktestResult {
   symbol: string
   strategy: string
@@ -204,12 +229,14 @@ const unwrap = <T>(response: any): T => {
   return response as T
 }
 
+const nonce = () => Date.now()
+
 export const quantApi = {
   capabilities: async () =>
     unwrap<QuantCapabilitiesResult>(await ApiClient.get('/api/quant/capabilities', undefined, { timeout: 60000 })),
 
   smartPool: async (limit = 20, universeLimit = 300) => {
-    const raw = unwrap<any>(await ApiClient.get('/api/lite/smart-pool', { limit, universe_limit: universeLimit }, { timeout: 300000 }))
+    const raw = unwrap<any>(await ApiClient.get('/api/lite/smart-pool', { limit, universe_limit: universeLimit, _ts: nonce() }, { timeout: 300000 }))
     const items = (raw.items || []).map((item: any) => ({
       ...item,
       symbol: item.symbol || item.code,
@@ -235,7 +262,8 @@ export const quantApi = {
       limit,
       universe_limit: universeLimit,
       min_strength: minStrength,
-      exclude_fundamental: excludeFundamental
+      exclude_fundamental: excludeFundamental,
+      _ts: nonce()
     }, { timeout: 300000 }))
     const items = (raw.items || []).map((item: any) => ({
       ...item,
@@ -298,10 +326,13 @@ export const quantApi = {
     unwrap<FactorResearchResult>(await ApiClient.post('/api/quant/research', payload, { timeout: 240000 })),
 
   syncMarket: async (full = false) =>
-    unwrap<any>(await ApiClient.post('/api/lite/datalake/sync', {}, { params: { full }, timeout: 30000 })),
+    unwrap<any>(await ApiClient.post('/api/lite/datalake/sync', {}, { params: { full, _ts: nonce() }, timeout: 30000 })),
 
   syncStatus: async () =>
-    unwrap<any>(await ApiClient.get('/api/lite/datalake/sync/status', undefined, { timeout: 15000 })),
+    unwrap<any>(await ApiClient.get('/api/lite/datalake/sync/status', { _ts: nonce() }, { timeout: 15000 })),
+
+  dataHealth: async (autoStart = true) =>
+    unwrap<QuantDataHealth>(await ApiClient.get('/api/lite/datalake/health', { auto_start: autoStart, _ts: nonce() }, { timeout: 20000 })),
 
   klineDetail: async (symbol: string, name = '', days = 250) =>
     unwrap<any>(await ApiClient.get('/api/quant/kline', { symbol, name, days }, { timeout: 60000 })),

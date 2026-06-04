@@ -21,7 +21,7 @@ class DataSourceInfo:
     notes: str
 
 
-DEFAULT_SOURCE_ORDER = ("akshare", "baostock")
+DEFAULT_SOURCE_ORDER = ("akshare", "efinance", "baostock")
 DISPLAY_SOURCE_ORDER = ("akshare", "efinance", "baostock")
 
 
@@ -100,7 +100,7 @@ class EFinanceSource:
         return _module_available("efinance")
 
     def enabled(self) -> bool:
-        return False
+        return True
 
     def stock_pool(self, limit: int = 5000) -> List[Dict[str, Any]]:
         def fetch() -> pd.DataFrame:

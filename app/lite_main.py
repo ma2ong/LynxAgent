@@ -4328,3 +4328,38 @@ async def lite_datalake_sync(full: bool = False):
 async def lite_datalake_sync_status():
     svc = get_sync_service()
     return {"success": True, "data": svc.status()}
+
+
+@app.get("/api/lite/datalake/health")
+async def lite_datalake_health(auto_start: bool = True):
+    svc = get_sync_service()
+    status = svc.status()
+    health = dict(status.get("health") or {})
+    auto_started = False
+    should_full_sync = auto_start and not health.get("ready") and not status.get("running")
+    should_incremental_sync = auto_start and health.get("needs_incremental_sync") and not status.get("running")
+    if should_full_sync or should_incremental_sync:
+        store = svc.store
+        now = datetime.now()
+        attempt_key = "last_auto_full_sync_attempt" if should_full_sync else "last_auto_incremental_sync_attempt"
+        last_attempt = store.get_state(attempt_key) or ""
+        can_start = True
+        if last_attempt:
+            try:
+                can_start = (now - datetime.fromisoformat(last_attempt)).total_seconds() >= 1800
+            except Exception:
+                can_start = True
+        if can_start:
+            store.set_state(attempt_key, now.isoformat(timespec="seconds"))
+            status = await asyncio.to_thread(svc.run_sync, should_full_sync, False)
+            health = dict(status.get("health") or health)
+            auto_started = True
+    health["sync_running"] = bool(status.get("running"))
+    health["sync_phase"] = status.get("phase")
+    health["sync_done"] = status.get("done")
+    health["sync_total"] = status.get("total")
+    health["sync_errors_count"] = status.get("errors_count")
+    health["last_full_sync"] = status.get("last_full_sync")
+    health["last_incremental_sync"] = status.get("last_incremental_sync")
+    health["auto_started"] = auto_started
+    return {"success": True, "data": health}

@@ -8,6 +8,27 @@
       <el-tag effect="plain" type="info">研究与模拟，不直接下单</el-tag>
     </section>
 
+    <section v-if="dataHealth" class="data-health" :class="`health-${dataHealth.status}`">
+      <div>
+        <b>{{ healthTitle }}</b>
+        <span>{{ dataHealth.message }}</span>
+      </div>
+      <div class="health-meta">
+        <span>股票池 {{ dataHealth.meta_count }}</span>
+        <span>K线 {{ dataHealth.kline_symbols }}</span>
+        <span>最新完整 {{ dataHealth.latest_complete_date || '-' }}</span>
+        <span>今日 {{ dataHealth.today_count }}/{{ dataHealth.meta_count }}</span>
+      </div>
+      <div class="health-actions">
+        <el-tag v-if="dataHealth.sync_running || syncRunning" type="warning" effect="plain">
+          同步中 {{ syncStatus.done || dataHealth.sync_done || 0 }}/{{ syncStatus.total || dataHealth.sync_total || 0 }}
+        </el-tag>
+        <el-button size="small" :loading="healthLoading || syncRunning" @click="refreshDataHealth(true)">刷新状态</el-button>
+        <el-button size="small" type="primary" :loading="syncRunning" @click="startSync(false)">补齐今日数据</el-button>
+        <el-button size="small" type="danger" plain :loading="syncRunning" @click="startSync(true)">重建全量数据</el-button>
+      </div>
+    </section>
+
     <el-tabs v-model="activeTab" class="quant-tabs">
       <el-tab-pane label="一键推荐" name="screen">
         <div class="smart-home">
@@ -163,7 +184,7 @@
               <b>命中 {{ patternPoolResult.matched || patternPoolResult.items.length }} 只</b>
               <span v-if="patternPoolResult.analyzed">已分析 {{ patternPoolResult.analyzed }} 只</span>
               <span v-if="patternPoolResult?.excluded">已排除 {{ patternPoolResult.excluded }} 只</span>
-              <span v-if="patternPoolResult?.source === 'live-fallback'" style="color:#e6a23c">本地数据未就绪，请先到「数据同步」做全量同步以扫描全市场</span>
+              <span v-if="patternPoolResult?.source === 'live-fallback'" style="color:#e6a23c">本地K线不足，系统已尝试补齐；当前先用实时行情兜底。</span>
               <div class="table-actions">
                 <el-button size="small" @click="togglePatternSelection">全选/取消</el-button>
                 <el-button size="small" type="success" :disabled="!selectedPatternRows.length" @click="addSelectedPatternsToFavorites">
@@ -241,17 +262,26 @@
         </div>
         <div class="tool-layout">
           <el-form class="control-panel" label-position="top" @submit.prevent>
+            <el-alert
+              v-if="dataHealth"
+              :title="dataHealth.message"
+              :type="dataHealth.ready ? 'success' : 'warning'"
+              :closable="false"
+              show-icon
+              class="smart-tip"
+            />
             <el-form-item label="股票池数量">
               <el-input-number v-model="poolLimit" :min="1" :max="5000" style="width: 100%" />
             </el-form-item>
             <el-button native-type="button" :loading="poolLoading" @click="loadPool">读取股票池</el-button>
-            <el-button type="primary" native-type="button" :loading="syncLoading" @click="syncLake">同步 AKShare 数据湖</el-button>
+            <el-button type="primary" native-type="button" :loading="syncRunning" @click="startSync(false)">同步今日K线</el-button>
+            <el-button type="danger" plain native-type="button" :loading="syncRunning" @click="startSync(true)">重建全量K线</el-button>
           </el-form>
           <section class="result-panel">
-            <div v-if="syncResult" class="mini-summary">
-              <span>集合 {{ syncResult.collection }}</span>
-              <b>{{ syncResult.total }}</b>
-              <span>新增 {{ syncResult.inserted }} / 更新 {{ syncResult.updated }}</span>
+            <div v-if="dataHealth" class="mini-summary">
+              <span>状态 {{ healthTitle }}</span>
+              <b>{{ dataHealth.kline_symbols }}</b>
+              <span>最近完整交易日 {{ dataHealth.latest_complete_date || '-' }}</span>
             </div>
             <el-table v-if="poolResult?.items.length" :data="poolResult.items" height="520">
               <el-table-column prop="symbol" label="代码" min-width="110" fixed />
@@ -450,10 +480,10 @@ import KLineProChart from '@/components/KLineProChart.vue'
 import {
   quantApi,
   type BacktestResult,
-  type DataLakeSyncResult,
   type FactorResearchResult,
   type ForecastResult,
   type PatternRecognitionResult,
+  type QuantDataHealth,
   type QuantAnalysisResult,
   type QuantPatternPoolItem,
   type QuantPatternPoolResult,
@@ -469,9 +499,9 @@ const router = useRouter()
 
 const poolLimit = ref(200)
 const poolLoading = ref(false)
-const syncLoading = ref(false)
 const poolResult = ref<QuantStockPoolResult | null>(null)
-const syncResult = ref<DataLakeSyncResult | null>(null)
+const dataHealth = ref<QuantDataHealth | null>(null)
+const healthLoading = ref(false)
 
 const analysisForm = ref({ symbol: '600519' })
 const analysisRange = ref<[string, string] | null>(null)
@@ -538,16 +568,30 @@ const parseSymbols = (text: string) =>
 const syncStatus = ref<any>({ running: false, phase: 'idle', done: 0, total: 0, errors_count: 0 })
 const syncRunning = computed(() => !!syncStatus.value.running)
 const syncPct = computed(() => syncStatus.value.total ? Math.floor(syncStatus.value.done / syncStatus.value.total * 100) : 0)
+const healthTitle = computed(() => {
+  const status = dataHealth.value?.status
+  if (status === 'fresh') return '今日已更新'
+  if (status === 'partial_today') return '今日补齐中'
+  if (status === 'stale_today') return '等待今日数据'
+  if (status === 'ready') return '本地数据可用'
+  if (status === 'insufficient') return '本地数据不足'
+  if (status === 'empty') return '本地数据为空'
+  return '数据状态'
+})
 let syncTimer: number | undefined
 let syncWatching = false
 const pollSync = async () => {
   syncStatus.value = await quantApi.syncStatus()
+  if (syncStatus.value.health) dataHealth.value = syncStatus.value.health
   if (syncStatus.value.running) {
     syncTimer = window.setTimeout(pollSync, 2500)
   } else if (syncWatching) {
     syncWatching = false
     const s = syncStatus.value
-    ElMessage.success(`同步完成：${s.done}/${s.total} 只，失败 ${s.errors_count || 0}。形态智选现在可扫全市场。`)
+    await refreshDataHealth(false)
+    smartPoolResult.value = null
+    patternPoolResult.value = null
+    ElMessage.success(`同步完成：${s.done}/${s.total} 只，失败 ${s.errors_count || 0}。已刷新本地数据状态。`)
   }
 }
 const startSync = async (full: boolean) => {
@@ -557,13 +601,54 @@ const startSync = async (full: boolean) => {
     syncWatching = true
     ElMessage.success(full
       ? '已开始全量同步（约 5000 只日线，后台进行，可切换页面，完成约需几分钟）'
-      : '已开始增量同步')
+      : '已开始补齐今日数据')
     pollSync()
   } catch (error: any) {
     ElMessage.error(error?.message || '启动同步失败')
   }
 }
-onMounted(() => { quantApi.syncStatus().then(s => { syncStatus.value = s; if (s.running) pollSync() }) })
+const refreshDataHealth = async (autoStart = true) => {
+  healthLoading.value = true
+  try {
+    const health = await quantApi.dataHealth(autoStart)
+    dataHealth.value = health
+    if (health.sync_running || health.auto_started) {
+      syncWatching = true
+      pollSync()
+    }
+    return health
+  } catch (error: any) {
+    ElMessage.error(error?.message || '检查本地数据状态失败')
+    return null
+  } finally {
+    healthLoading.value = false
+  }
+}
+
+const ensureDataBeforeScan = async () => {
+  const health = await refreshDataHealth(true)
+  if (!health) return false
+  if (!health.ready) {
+    activeTab.value = 'lake'
+    ElMessage.warning('本地K线不足，已切到数据同步；请先完成一次全量同步。')
+    return false
+  }
+  if (health.needs_incremental_sync || health.sync_running || health.auto_started) {
+    ElMessage.info('今日数据正在自动补齐；本次先使用最近完整交易日数据，完成后会自动刷新。')
+  }
+  return true
+}
+
+onMounted(async () => {
+  try {
+    const s = await quantApi.syncStatus()
+    syncStatus.value = s
+    if (s.health) dataHealth.value = s.health
+    if (s.running) pollSync()
+  } finally {
+    refreshDataHealth(true)
+  }
+})
 onUnmounted(() => { if (syncTimer) window.clearTimeout(syncTimer) })
 
 const loadPool = async () => {
@@ -577,25 +662,6 @@ const loadPool = async () => {
     ElMessage.error(error?.message || '读取股票池失败')
   } finally {
     poolLoading.value = false
-  }
-}
-
-const syncLake = async () => {
-  syncLoading.value = true
-  try {
-    const res = await quantApi.syncDataLake({ limit: poolLimit.value })
-    syncResult.value = res
-    poolResult.value = await quantApi.pool(poolLimit.value)
-    const errs = (res as any)?.errors || []
-    if (errs.length) {
-      ElMessage.warning(`已拉取实时股票池 ${res?.total ?? 0} 只，但未持久化：${errs[0]}`)
-    } else {
-      ElMessage.success(`数据湖同步完成：新增 ${res?.inserted ?? 0} / 更新 ${res?.updated ?? 0}`)
-    }
-  } catch (error: any) {
-    ElMessage.error(error?.message || '同步数据湖失败')
-  } finally {
-    syncLoading.value = false
   }
 }
 
@@ -630,6 +696,7 @@ const runScreen = async () => {
 const loadSmartPool = async () => {
   smartPoolLoading.value = true
   try {
+    if (!(await ensureDataBeforeScan())) return
     smartPoolResult.value = await quantApi.smartPool(smartPoolForm.value.limit, smartPoolForm.value.universe_limit)
     screenResult.value = null
     selectedSmartRows.value = []
@@ -649,6 +716,7 @@ const displayScore = (row: QuantSmartPoolItem) => formatScore(row.quant_score ??
 const loadPatternPool = async () => {
     patternPoolLoading.value = true
     try {
+        if (!(await ensureDataBeforeScan())) return
         patternPoolResult.value = await quantApi.patternPool(
             patternPoolForm.value.limit,
             patternPoolForm.value.universe_limit,
@@ -840,6 +908,53 @@ const openChart = async (row: any) => {
     margin: 4px 0 0;
     color: var(--el-text-color-secondary);
   }
+}
+
+.data-health {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-fill-color-extra-light);
+
+  b {
+    display: block;
+    margin-bottom: 2px;
+  }
+
+  span {
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+  }
+}
+
+.health-fresh,
+.health-ready {
+  border-color: #b7eb8f;
+  background: #f6ffed;
+}
+
+.health-partial_today,
+.health-stale_today {
+  border-color: #ffe58f;
+  background: #fffbe6;
+}
+
+.health-empty,
+.health-insufficient {
+  border-color: #ffccc7;
+  background: #fff2f0;
+}
+
+.health-meta,
+.health-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .quant-tabs {

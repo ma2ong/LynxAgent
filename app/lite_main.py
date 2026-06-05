@@ -1439,11 +1439,12 @@ def _catalyst_reasons(factors: dict[str, Any], pct: float, score: float) -> list
 
 SMART_POOL_RECOMMENDER = {
     "name": "全市场综合优选",
-    "description": "系统自动优先筛短中期进攻型股票，要求趋势、动量、入场触发和实时涨跌幅同时达标，剔除低波慢股和缺少爆发信号的防守型股票。",
+    "description": "系统自动优先筛短中期进攻型股票，并叠加 AI 因子模型 Top-K 排名作为机器学习评分因子。",
     "weights": {
-        "quant": 0.20,
-        "trend": 0.27,
-        "momentum": 0.24,
+        "quant": 0.18,
+        "ai_factor": 0.10,
+        "trend": 0.25,
+        "momentum": 0.22,
         "rsi": 0.06,
         "trigger": 0.16,
         "catalyst": 0.05,
@@ -1786,6 +1787,71 @@ def _smart_pool_candidates(events: list[dict[str, Any]]) -> list[dict[str, str]]
     return [{"symbol": symbol, "name": name} for symbol, name in ordered.items()]
 
 
+def _load_ai_factor_pool(limit: int, universe_limit: int) -> dict[str, Any]:
+    """Load cached LightGBM Top-K picks for one-click smart-pool scoring.
+
+    Missing cache starts the background factor job and returns quickly.
+    """
+    try:
+        from quantcore.quant.ml.service import request_ml_factor
+
+        result = request_ml_factor(
+            universe_limit=max(100, min(int(universe_limit or 500), 5000)),
+            horizon=5,
+            k=max(50, min(200, limit * 4)),
+            mode="rolling",
+            neutralize=True,
+            retrain_every=20,
+            min_rows=250,
+            force=False,
+        )
+    except Exception as exc:
+        return {"status": "error", "error": str(exc), "scores": {}, "picks": []}
+
+    if result.get("status") not in {None, "ready"} or result.get("error"):
+        return {"status": result.get("status") or "computing", "error": result.get("error"), "scores": {}, "picks": []}
+
+    picks = list(result.get("picks") or [])
+    total = max(1, len(picks) - 1)
+    scores: dict[str, dict[str, Any]] = {}
+    normalized_picks: list[dict[str, str]] = []
+    for idx, pick in enumerate(picks, start=1):
+        symbol = str(pick.get("symbol") or "").strip().zfill(6)
+        if not re.fullmatch(r"\d{6}", symbol):
+            continue
+        rank_score = round(100.0 - ((idx - 1) / total) * 30.0, 1) if len(picks) > 1 else 100.0
+        scores[symbol] = {
+            "score": rank_score,
+            "rank": idx,
+            "raw_score": pick.get("score"),
+            "pick_date": result.get("pick_date"),
+        }
+        normalized_picks.append({"symbol": symbol, "name": str(pick.get("name") or symbol)})
+    return {
+        "status": "ready",
+        "scores": scores,
+        "picks": normalized_picks,
+        "pick_date": result.get("pick_date"),
+        "universe": result.get("universe"),
+    }
+
+
+def _ai_factor_proxy_score(factors: dict[str, Any], ml_features: dict[str, Any] | None = None) -> float:
+    if ml_features and ml_features.get("feature_score") is not None:
+        try:
+            return round(float(ml_features.get("feature_score") or 0), 1)
+        except (TypeError, ValueError):
+            pass
+    try:
+        trend = float(factors.get("trend") or 0)
+        momentum = float(factors.get("momentum") or 0)
+        liquidity = float(factors.get("liquidity") or 0)
+        risk = float(factors.get("risk_control") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return round(max(0.0, min(100.0, trend * 0.35 + momentum * 0.30 + liquidity * 0.20 + risk * 0.15)), 1)
+
+
 async def _smart_pool_quant(symbol: str) -> dict[str, Any]:
     return await asyncio.to_thread(lambda target=symbol: asdict(lite_quant_engine.analyze(target)))
 
@@ -1821,6 +1887,8 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
     preset = SMART_POOL_RECOMMENDER
     safe_limit = max(5, min(limit, 50))
     safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
+    ai_factor_pool = await asyncio.to_thread(_load_ai_factor_pool, safe_limit, safe_universe)
+    ai_factor_scores: dict[str, dict[str, Any]] = ai_factor_pool.get("scores") or {}
 
     # Keep the stock-screening smart pool aligned with Quant Center's one-click recommendation.
     try:
@@ -1855,6 +1923,14 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
             reasons = [str(item) for item in (raw.get("reasons") or []) if item]
             if amount > 0 and not any("成交" in reason for reason in reasons):
                 reasons.insert(1, f"成交额 {amount / 100000000:.2f} 亿")
+            ai_factor = ai_factor_scores.get(symbol)
+            ml_features = (raw.get("integrations") or {}).get("ml_features") if isinstance(raw.get("integrations"), dict) else {}
+            ai_factor_score = float(ai_factor.get("score") or 0) if ai_factor else _ai_factor_proxy_score(factors, ml_features or {})
+            display_score = round(score * 0.9 + ai_factor_score * 0.1, 1) if ai_factor_score else score
+            if ai_factor:
+                reasons.insert(0, f"AI因子TopK第{ai_factor.get('rank')}名 {ai_factor_score:.0f}")
+            elif ai_factor_score:
+                reasons.insert(0, f"AI因子即时分 {ai_factor_score:.0f}")
             item = {
                 "symbol": symbol,
                 "code": symbol,
@@ -1864,15 +1940,18 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
                 "close": close,
                 "pct_chg": pct_chg,
                 "amount": amount,
-                "smart_score": score,
+                "smart_score": display_score,
                 "raw_score": score,
-                "score": score,
+                "score": display_score,
                 "quant_score": score,
+                "ai_factor_score": round(ai_factor_score, 1),
+                "ai_factor_rank": ai_factor.get("rank") if ai_factor else None,
+                "ai_factor_source": "lightgbm_topk" if ai_factor else "ml_feature_proxy",
                 "trigger_score": to_float(factors.get("trend"), 0),
                 "catalyst_score": to_float(raw.get("catalyst_score"), 0),
                 "risk_score": to_float(factors.get("risk_control"), 0),
                 "liquidity_score": to_float(factors.get("liquidity"), 0),
-                "grade": "核心候选" if score >= 90 else "高质量候选" if score >= 85 else "重点观察",
+                "grade": "核心候选" if display_score >= 90 else "高质量候选" if display_score >= 85 else "重点观察",
                 "signal": raw.get("signal") or "",
                 "reasons": reasons[:8],
                 "latest_events": raw.get("latest_events") or [],
@@ -1883,22 +1962,28 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
 
         items.sort(key=lambda item: float(item.get("smart_score") or 0), reverse=True)
         items = await _enrich_smart_pool_industries(items[:safe_limit])
-        return {
-            "strategy": "quant_center_smart_pool",
-            "preset": {
-                "name": "全市场综合优选",
-                "description": "复用量化中心一键智能推荐模型，横向比较量化分、趋势、动量、流动性、实时强度和风险控制后生成候选股票池。",
-            },
-            "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
-            "universe_size": quant_pool.get("universe_size") or len(items),
-            "analyzed": quant_pool.get("analyzed") or len(items),
-            "items": items,
-            "source_note": "同源于量化中心智能推荐，仅展示综合评分 80 分以上候选；研究与模拟使用，不构成投资建议。",
-        }
+        if ai_factor_pool.get("status") != "ready":
+            return {
+                "strategy": "quant_center_smart_pool",
+                "preset": {
+                    "name": "全市场综合优选",
+                    "description": "复用量化中心一键智能推荐模型，横向比较量化分、趋势、动量、流动性、实时强度和风险控制后生成候选股票池。",
+                },
+                "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+                "universe_size": quant_pool.get("universe_size") or len(items),
+                "analyzed": quant_pool.get("analyzed") or len(items),
+                "items": items,
+                "ai_factor": {
+                    "status": ai_factor_pool.get("status"),
+                    "pick_date": ai_factor_pool.get("pick_date"),
+                    "universe": ai_factor_pool.get("universe"),
+                },
+                "source_note": "同源于量化中心智能推荐，并把 AI 因子模型 Top-K 排名作为评分因子；研究与模拟使用，不构成投资建议。",
+            }
     except Exception as exc:
         print(f"Quant Center smart pool failed, falling back to lite smart pool: {exc}")
 
-    cache_key = f"smart-pool:attack-v15-multifactor-ranked80-industry:{safe_limit}"
+    cache_key = f"smart-pool:attack-v16-ai-factor:{safe_limit}"
     cached = _cache_get(cache_key, 900)
     if cached:
         return await _enrich_smart_pool_realtime(cached)
@@ -1920,6 +2005,8 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
             bucket["labels"].add(EVENT_TYPE_LABELS.get(event.get("event_type", ""), event.get("event_type", "事件")))
 
     candidates_by_symbol = {item["symbol"]: item for item in _smart_pool_candidates(events)}
+    for item in ai_factor_pool.get("picks") or []:
+        candidates_by_symbol.setdefault(item["symbol"], item)
     try:
         realtime_snapshot = await asyncio.to_thread(_load_realtime_quotes_snapshot, 10)
         by_gain = sorted(
@@ -2011,6 +2098,9 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
         risk_score = _risk_quality_score(risk)
         liquidity_score = float(factors.get("liquidity") or 50)
         quant_score = float(quant.get("score") or 0)
+        ai_factor = ai_factor_scores.get(symbol)
+        ml_features = (quant.get("integrations") or {}).get("ml_features") or {}
+        ai_factor_score = float(ai_factor.get("score") or 0) if ai_factor else _ai_factor_proxy_score(factors, ml_features)
         trend_score = float(factors.get("trend") or 0)
         momentum_score = float(factors.get("momentum") or 0)
         rsi_score = float(factors.get("rsi") or 0)
@@ -2043,6 +2133,7 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
         weights = preset["weights"]
         final_score = round(
             quant_score * weights["quant"]
+            + ai_factor_score * weights["ai_factor"]
             + trend_score * weights["trend"]
             + momentum_score * weights["momentum"]
             + rsi_score * weights["rsi"]
@@ -2057,6 +2148,10 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
         reasons.append(f"实时涨跌幅 {pct_chg:+.2f}%")
         if quant_score >= 72:
             reasons.append(f"量化分 {quant_score:.1f}")
+        if ai_factor:
+            reasons.append(f"AI因子TopK第{ai_factor.get('rank')}名 {ai_factor_score:.0f}")
+        elif ai_factor_score:
+            reasons.append(f"AI因子即时分 {ai_factor_score:.0f}")
         if trend_score >= 70:
             reasons.append(f"趋势因子 {trend_score:.0f}")
         if momentum_score >= 70:
@@ -2089,6 +2184,9 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
             "attack_tier": "primary" if passed_gate else "secondary",
             "signal": quant.get("signal") or "watch",
             "quant_score": round(quant_score, 1),
+            "ai_factor_score": round(ai_factor_score, 1),
+            "ai_factor_rank": ai_factor.get("rank") if ai_factor else None,
+            "ai_factor_source": "lightgbm_topk" if ai_factor else "ml_feature_proxy",
             "trigger_score": trigger_score,
             "catalyst_score": round(catalyst_score, 1),
             "risk_score": risk_score,
@@ -2137,8 +2235,13 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
         "preset": preset,
         "updated_at": datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S"),
         "universe_size": len(candidates),
+        "ai_factor": {
+            "status": ai_factor_pool.get("status"),
+            "pick_date": ai_factor_pool.get("pick_date"),
+            "universe": ai_factor_pool.get("universe"),
+        },
         "items": items,
-        "source_note": "智能股票池由真实新闻/公告/研报事件、A股基础股票池、量化因子和入场触发器综合生成；仅供研究，不承诺收益。",
+        "source_note": "智能股票池由真实新闻/公告/研报事件、A股基础股票池、量化因子、AI因子模型和入场触发器综合生成；仅供研究，不承诺收益。",
     }
     response = {"success": True, "data": data, "message": "ok"}
     _persistent_cache_set(cache_key, response)
@@ -2722,13 +2825,66 @@ async def _paper_account_summary(username: str) -> dict[str, Any]:
     positions = await _paper_positions(username)
     positions_value = round(sum(float(item.get("market_value") or 0.0) for item in positions), 2)
     cash = round(float(account["cash"]), 2)
+    equity = round(cash + positions_value, 2)
+    exposure_ratio = round(positions_value / equity, 4) if equity > 0 else 0.0
+    largest_position = max(
+        (
+            {
+                "code": item.get("code"),
+                "market_value": float(item.get("market_value") or 0.0),
+                "weight": round(float(item.get("market_value") or 0.0) / equity, 4) if equity > 0 else 0.0,
+            }
+            for item in positions
+        ),
+        key=lambda item: item["market_value"],
+        default={"code": "", "market_value": 0.0, "weight": 0.0},
+    )
+    risk_flags: list[str] = []
+    if exposure_ratio >= 0.85:
+        risk_flags.append("总仓位超过 85%，不再建议继续加仓。")
+    if largest_position["weight"] >= 0.25:
+        risk_flags.append(f"{largest_position['code']} 单票仓位超过 25%，注意集中度风险。")
+    if cash / equity < 0.05 if equity > 0 else False:
+        risk_flags.append("现金低于总资产 5%，缺少回撤缓冲。")
     return {
         "cash": {"CNY": cash},
         "positions_value": {"CNY": positions_value},
-        "equity": {"CNY": round(cash + positions_value, 2)},
+        "equity": {"CNY": equity},
         "realized_pnl": {"CNY": round(float(account["realized_pnl"]), 2)},
+        "risk": {
+            "mode": "paper_only",
+            "exposure_ratio": exposure_ratio,
+            "cash_ratio": round(cash / equity, 4) if equity > 0 else 0.0,
+            "largest_position": largest_position,
+            "max_single_position": 0.25,
+            "max_total_exposure": 0.85,
+            "flags": risk_flags,
+        },
         "updated_at": account["updated_at"],
     }
+
+
+async def _paper_pretrade_risk_check(username: str, code: str, side: str, amount: float) -> list[str]:
+    if side != "buy":
+        return []
+    summary = await _paper_account_summary(username)
+    equity = float((summary.get("equity") or {}).get("CNY") or 0.0)
+    cash = float((summary.get("cash") or {}).get("CNY") or 0.0)
+    positions = await _paper_positions(username)
+    current_value = sum(float(item.get("market_value") or 0.0) for item in positions if item.get("code") == code)
+    issues: list[str] = []
+    if equity <= 0:
+        issues.append("账户权益无效，无法下单。")
+        return issues
+    if amount > cash:
+        issues.append(f"可用资金不足：需要 {amount:.2f}，当前 {cash:.2f}。")
+    if (current_value + amount) / equity > 0.25:
+        issues.append("单票买入后仓位会超过 25%，已被 paper 风控拦截。")
+    if (float((summary.get("positions_value") or {}).get("CNY") or 0.0) + amount) / equity > 0.85:
+        issues.append("买入后总仓位会超过 85%，已被 paper 风控拦截。")
+    if (cash - amount) / equity < 0.05:
+        issues.append("买入后现金低于总资产 5%，缺少回撤缓冲。")
+    return issues
 
 
 @app.get("/api/paper/account")
@@ -2810,6 +2966,9 @@ async def paper_order(payload: LitePaperOrderRequest, user: dict[str, Any] = Dep
     order_id = "paper_" + secrets.token_hex(8)
     amount = round(price * qty, 2)
     account = _paper_account_row(username)
+    paper_risk_issues = await _paper_pretrade_risk_check(username, code, side, amount)
+    if paper_risk_issues:
+        return {"success": False, "data": {"issues": paper_risk_issues}, "message": "模拟交易风控未通过", "code": 400}
 
     with store.connect() as conn:
         pos = conn.execute(
@@ -2956,22 +3115,46 @@ async def analysis_tasks(limit: int = 10, offset: int = 0):
     }
 
 
-@app.post("/api/analysis/single")
-async def single_analysis(req: LiteSingleAnalysisRequest, user: dict[str, Any] = Depends(get_current_lite_user)):
-    raw_symbol = (req.symbol or req.stock_code or "").strip()
-    if not raw_symbol:
-        return {"success": False, "data": None, "message": "请输入股票代码", "code": 400}
-
-    task_id = "lite_" + secrets.token_hex(8)
-    now = datetime.now(timezone.utc).isoformat()
-    symbol = raw_symbol  # ensure always bound even if try block raises before assignment
-
+async def _run_lite_single_analysis_task(
+    task_id: str,
+    raw_symbol: str,
+    parameters: dict[str, Any],
+    username: str,
+    now: str,
+) -> None:
+    symbol = raw_symbol
+    stock_meta = None
+    result = None
+    status = "completed"
+    error_message = None
+    current_step = "SaaS Lite 量化与深度分析已完成"
     try:
-        stock_meta = await resolve_stock(raw_symbol, (req.parameters or {}).get("market_type", "A股"))
+        stock_meta = await resolve_stock(raw_symbol, parameters.get("market_type", "A股"))
         symbol = stock_meta["symbol"] if stock_meta else raw_symbol
+        lite_analysis_tasks[task_id].update(
+            {
+                "symbol": symbol,
+                "stock_symbol": symbol,
+                "stock_name": (stock_meta or {}).get("name") or symbol,
+                "progress": 25,
+                "progress_percentage": 25,
+                "current_step": "量化画像已生成，正在运行深度多智能体分析",
+                "message": "量化画像已生成，正在运行深度多智能体分析",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         quant_result = asdict(lite_quant_engine.analyze(symbol))
-        result = build_lite_analysis_result(task_id, symbol, quant_result, req.parameters or {}, now, stock_meta)
-        result = await enrich_lite_result_with_deep_analysis(task_id, symbol, result, req.parameters or {}, stock_meta)
+        result = build_lite_analysis_result(task_id, symbol, quant_result, parameters, now, stock_meta)
+        result = await enrich_lite_result_with_deep_analysis(task_id, symbol, result, parameters, stock_meta)
+        lite_analysis_tasks[task_id].update(
+            {
+                "progress": 75,
+                "progress_percentage": 75,
+                "current_step": "深度分析已完成，正在补充实时行情与专业研判",
+                "message": "深度分析已完成，正在补充实时行情与专业研判",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         quotes = await _realtime_quotes([symbol])
         quote = quotes.get(symbol)
         if quote and result:
@@ -2989,24 +3172,22 @@ async def single_analysis(req: LiteSingleAnalysisRequest, user: dict[str, Any] =
             result["quote_updated_at"] = quote.get("updated_at")
         if result:
             result = await enrich_lite_result_with_professional_analysis(symbol, result, quant_result, stock_meta, quote)
-        status = "completed"
-        error_message = None
-        progress = 100
-        current_step = "SaaS Lite 量化分析已完成"
         _save_analysis_history(
-            username=user["username"],
+            username=username,
             symbol=symbol,
             stock_name=stock_meta.get("name") if stock_meta else None,
-            market=(req.parameters or {}).get("market_type", "A股"),
+            market=parameters.get("market_type", "A股"),
             overall_rating=result.get("overall_rating") if result else None,
             score=result.get("quant_score") if result else None,
         )
         if result:
-            report_content = " ".join([
-                result.get("macro", ""),
-                result.get("moat", ""),
-                str(result.get("overall_rating", "")),
-            ])
+            report_content = " ".join(
+                [
+                    result.get("macro", ""),
+                    result.get("moat", ""),
+                    str(result.get("overall_rating", "")),
+                ]
+            )
             _index_report_fts(
                 report_id=task_id,
                 symbol=symbol,
@@ -3018,29 +3199,59 @@ async def single_analysis(req: LiteSingleAnalysisRequest, user: dict[str, Any] =
         result = None
         status = "failed"
         error_message = str(exc)
-        progress = 100
-        current_step = "SaaS Lite 量化分析失败"
+        current_step = "SaaS Lite 深度分析失败"
 
+    lite_analysis_tasks[task_id].update(
+        {
+            "symbol": symbol,
+            "stock_symbol": symbol,
+            "status": status,
+            "progress": 100,
+            "progress_percentage": 100,
+            "current_step": current_step,
+            "message": current_step,
+            "error_message": error_message,
+            "result_data": result,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+
+@app.post("/api/analysis/single")
+async def single_analysis(req: LiteSingleAnalysisRequest, user: dict[str, Any] = Depends(get_current_lite_user)):
+    raw_symbol = (req.symbol or req.stock_code or "").strip()
+    if not raw_symbol:
+        return {"success": False, "data": None, "message": "请输入股票代码", "code": 400}
+
+    task_id = "lite_" + secrets.token_hex(8)
+    now = datetime.now(timezone.utc).isoformat()
+    parameters = req.parameters or {}
     lite_analysis_tasks[task_id] = {
         "task_id": task_id,
         "analysis_id": task_id,
-        "symbol": symbol,
-        "stock_symbol": symbol,
-        "status": status,
-        "progress": progress,
-        "progress_percentage": progress,
-        "current_step": current_step,
-        "message": current_step,
-        "error_message": error_message,
-        "result_data": result,
+        "symbol": raw_symbol,
+        "stock_symbol": raw_symbol,
+        "status": "running",
+        "progress": 5,
+        "progress_percentage": 5,
+        "current_step": "已创建深度分析任务，正在后台运行",
+        "message": "已创建深度分析任务，正在后台运行",
+        "error_message": None,
+        "result_data": None,
         "created_at": now,
         "updated_at": now,
     }
+    import threading
+
+    threading.Thread(
+        target=lambda: asyncio.run(_run_lite_single_analysis_task(task_id, raw_symbol, parameters, user["username"], now)),
+        daemon=True,
+    ).start()
 
     return {
         "success": True,
-        "data": {"task_id": task_id, "analysis_id": task_id, "status": status},
-        "message": "SaaS Lite 分析任务已完成" if status == "completed" else "SaaS Lite 分析任务失败",
+        "data": {"task_id": task_id, "analysis_id": task_id, "status": "running"},
+        "message": "深度多智能体分析已启动，前端将自动轮询结果",
     }
 
 
@@ -4005,6 +4216,69 @@ def _deep_action_to_decision(rating: str, current_price: Any) -> dict[str, Any]:
     }
 
 
+def _build_analysis_audit(result: dict[str, Any], deep_result: dict[str, Any] | None = None) -> dict[str, Any]:
+    quant = (result.get("state") or {}).get("quant_result") or {}
+    latest = quant.get("latest") or {}
+    factors = quant.get("factors") or {}
+    risk = quant.get("risk") or {}
+    score = float(result.get("overall_score") or quant.get("score") or 0)
+    evidence = [
+        {"name": "量化评分", "value": round(score, 1), "source": "local-quant-engine"},
+        {"name": "趋势因子", "value": round(float(factors.get("trend") or 0), 1), "source": "local-kline"},
+        {"name": "动量因子", "value": round(float(factors.get("momentum") or 0), 1), "source": "local-kline"},
+        {"name": "RSI", "value": round(float(factors.get("rsi") or 0), 1), "source": "local-kline"},
+        {"name": "最大回撤", "value": round(float(risk.get("max_drawdown") or 0), 4), "source": "local-kline"},
+    ]
+    if latest.get("date"):
+        evidence.append({"name": "行情日期", "value": latest.get("date"), "source": "local-store"})
+    if deep_result:
+        evidence.append({"name": "深研评级", "value": deep_result.get("overall_rating") or result.get("deep_rating"), "source": "deep-analysis-framework"})
+        if deep_result.get("quality_score"):
+            evidence.append({"name": "质量评分", "value": deep_result.get("quality_score"), "source": "deep-analysis-framework"})
+
+    gaps: list[str] = []
+    if not result.get("news_analysis") or "未连接新闻" in str(result.get("news_analysis")):
+        gaps.append("新闻/公告/研报证据不足，舆情和催化结论需要降低权重。")
+    if not deep_result:
+        gaps.append("深度多智能体框架未返回结果，当前仅能使用量化画像。")
+    elif not deep_result.get("peers"):
+        gaps.append("可比公司样本不足，估值横向比较置信度偏低。")
+    if not latest.get("date"):
+        gaps.append("缺少最新行情日期，先检查本地数据同步。")
+
+    risk_checks = []
+    if float(factors.get("risk_control") or 0) < 45:
+        risk_checks.append("风控因子低于 45，仓位上限应明显降低。")
+    if abs(float(risk.get("max_drawdown") or 0)) > 0.25:
+        risk_checks.append("历史最大回撤超过 25%，不适合重仓追涨。")
+    if float(factors.get("rsi") or 0) > 75:
+        risk_checks.append("RSI 偏高，短线追高风险上升。")
+
+    confidence = 0.72
+    confidence -= min(0.25, len(gaps) * 0.08)
+    confidence -= min(0.18, len(risk_checks) * 0.06)
+    return {
+        "confidence": round(max(0.35, confidence), 2),
+        "evidence": evidence,
+        "gaps": gaps,
+        "risk_checks": risk_checks,
+        "verdict": "证据较完整，可进入跟踪" if confidence >= 0.65 else "证据存在缺口，先观察或补数据",
+    }
+
+
+def _format_analysis_audit(audit: dict[str, Any]) -> str:
+    evidence = "\n".join([f"- {item['name']}：{item['value']}（{item['source']}）" for item in audit.get("evidence", [])])
+    gaps = "\n".join([f"- {item}" for item in audit.get("gaps", [])]) or "- 暂无明显数据缺口"
+    risks = "\n".join([f"- {item}" for item in audit.get("risk_checks", [])]) or "- 暂无硬性风控拦截"
+    return (
+        f"置信度：{float(audit.get('confidence') or 0):.0%}\n"
+        f"结论：{audit.get('verdict')}\n\n"
+        f"证据链：\n{evidence}\n\n"
+        f"数据缺口：\n{gaps}\n\n"
+        f"风控自检：\n{risks}"
+    )
+
+
 async def enrich_lite_result_with_deep_analysis(
     task_id: str,
     symbol: str,
@@ -4050,6 +4324,7 @@ async def enrich_lite_result_with_deep_analysis(
     result["deep_rating"] = rating
     result["deep_analysis"] = deep_result
     result["decision"] = _deep_action_to_decision(rating, result.get("current_price"))
+    result["analysis_audit"] = _build_analysis_audit(result, deep_result)
 
     original_summary = result.get("summary") or ""
     result["summary"] = (
@@ -4073,6 +4348,7 @@ async def enrich_lite_result_with_deep_analysis(
             "deep_scenario_analysis": _format_deep_scenarios(deep_result.get("scenarios") or {}),
             "deep_risk_checklist": _format_deep_risks(risks),
             "deep_tracking_plan": _format_deep_tracking(tracking_plan),
+            "deep_self_check": _format_analysis_audit(result["analysis_audit"]),
             "deep_final_rating": f"Claude 深度评级：{rating}\n\n护城河判断：{deep_result.get('moat') or '暂无'}",
         }
     )
@@ -4400,6 +4676,25 @@ async def lite_datalake_health(auto_start: bool = True):
     health["last_full_sync"] = status.get("last_full_sync")
     health["last_incremental_sync"] = status.get("last_incremental_sync")
     health["auto_started"] = auto_started
+    return {"success": True, "data": health}
+
+
+@app.get("/api/lite/datalake/sources/health")
+async def lite_datalake_sources_health():
+    from quantcore.quant.data_sources import data_source_health
+
+    sync_status = get_sync_service().status()
+    health = await asyncio.to_thread(data_source_health, sync_status.get("health") or {})
+    health["sync"] = {
+        "running": bool(sync_status.get("running")),
+        "phase": sync_status.get("phase"),
+        "done": sync_status.get("done"),
+        "total": sync_status.get("total"),
+        "errors_count": sync_status.get("errors_count"),
+        "last_error": sync_status.get("last_error"),
+        "last_full_sync": sync_status.get("last_full_sync"),
+        "last_incremental_sync": sync_status.get("last_incremental_sync"),
+    }
     return {"success": True, "data": health}
 
 

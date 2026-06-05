@@ -61,6 +61,14 @@
               <span>自动候选 {{ smartPoolResult.universe_size }} 只</span>
               <b>推荐 {{ smartPoolResult.items.length }} 只</b>
               <span v-if="smartPoolResult.analyzed">已分析 {{ smartPoolResult.analyzed }} 只</span>
+              <el-tag
+                v-if="smartPoolResult.ai_factor"
+                size="small"
+                :type="smartPoolResult.ai_factor.status === 'ready' ? 'success' : 'warning'"
+                effect="plain"
+              >
+                AI因子 {{ smartPoolResult.ai_factor.status === 'ready' ? `已接入 ${smartPoolResult.ai_factor.pick_date || ''}` : '后台计算中' }}
+              </el-tag>
               <div class="table-actions">
                 <el-button size="small" @click="toggleSmartSelection">全选/取消</el-button>
                 <el-button size="small" type="success" :disabled="!selectedSmartRows.length" @click="addSelectedToFavorites">
@@ -85,6 +93,14 @@
               <el-table-column type="selection" width="44" fixed />
               <el-table-column label="量化分" width="90" fixed>
                 <template #default="{ row }"><b>{{ displayScore(row) }}</b></template>
+              </el-table-column>
+              <el-table-column label="AI因子" width="90">
+                <template #default="{ row }">
+                  <el-tag v-if="row.ai_factor_score" size="small" type="success" effect="plain">
+                    {{ Number(row.ai_factor_score).toFixed(0) }}
+                  </el-tag>
+                  <span v-else>-</span>
+                </template>
               </el-table-column>
               <el-table-column prop="symbol" label="代码" width="100" />
               <el-table-column prop="name" label="名称" width="120" />

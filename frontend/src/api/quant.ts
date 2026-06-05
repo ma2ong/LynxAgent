@@ -60,6 +60,9 @@ export interface QuantSmartPoolItem {
   board?: string
   score: number
   quant_score: number
+  ai_factor_score?: number
+  ai_factor_rank?: number | null
+  ai_factor_source?: string
   signal: string
   close?: number
   pct_chg?: number | null
@@ -76,6 +79,11 @@ export interface QuantSmartPoolResult {
   source: string
   universe_size: number
   analyzed?: number
+  ai_factor?: {
+    status?: string
+    pick_date?: string
+    universe?: number
+  }
   items: QuantSmartPoolItem[]
   errors?: Record<string, string>
 }
@@ -121,6 +129,27 @@ export interface QuantDataHealth {
   last_full_sync?: string
   last_incremental_sync?: string
   auto_started?: boolean
+}
+
+export interface QuantSourceHealth {
+  grade: string
+  message: string
+  active_count: number
+  primary: string
+  active_order: string[]
+  fallback_enabled: boolean
+  sources: Array<{
+    key: string
+    name: string
+    installed: boolean
+    enabled: boolean
+    priority: number
+    capabilities: string[]
+    notes: string
+  }>
+  local: QuantDataHealth
+  policy: Array<{ step: number; name: string; role: string }>
+  sync: Record<string, any>
 }
 
 export interface BacktestResult {
@@ -333,6 +362,9 @@ export const quantApi = {
 
   dataHealth: async (autoStart = true) =>
     unwrap<QuantDataHealth>(await ApiClient.get('/api/lite/datalake/health', { auto_start: autoStart, _ts: nonce() }, { timeout: 20000 })),
+
+  sourceHealth: async () =>
+    unwrap<QuantSourceHealth>(await ApiClient.get('/api/lite/datalake/sources/health', { _ts: nonce() }, { timeout: 20000 })),
 
   klineDetail: async (symbol: string, name = '', days = 250) =>
     unwrap<any>(await ApiClient.get('/api/quant/kline', { symbol, name, days }, { timeout: 60000 })),

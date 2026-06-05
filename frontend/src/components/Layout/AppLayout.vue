@@ -7,19 +7,10 @@
       </div>
       <el-menu :default-active="route.path" router class="menu">
         <el-menu-item index="/market/sentiment">
-          <el-icon><Odometer /></el-icon><span>大盘情绪</span>
+          <el-icon><Odometer /></el-icon><span>市场雷达</span>
         </el-menu-item>
         <el-menu-item index="/limit-up">
           <el-icon><Histogram /></el-icon><span>涨停热点</span>
-        </el-menu-item>
-        <el-menu-item index="/quant">
-          <el-icon><TrendCharts /></el-icon><span>智能选股</span>
-        </el-menu-item>
-        <el-menu-item index="/factor-model">
-          <el-icon><MagicStick /></el-icon><span>AI因子模型</span>
-        </el-menu-item>
-        <el-menu-item index="/stock-analysis">
-          <el-icon><DocumentChecked /></el-icon><span>个股分析</span>
         </el-menu-item>
         <el-menu-item index="/insights/hot-news">
           <el-icon><Histogram /></el-icon><span>A股热点</span>
@@ -27,11 +18,20 @@
         <el-menu-item index="/insights/catalyst">
           <el-icon><DataLine /></el-icon><span>利好监控</span>
         </el-menu-item>
+        <el-menu-item index="/quant">
+          <el-icon><TrendCharts /></el-icon><span>智能选股</span>
+        </el-menu-item>
+        <el-menu-item index="/stock-analysis">
+          <el-icon><DocumentChecked /></el-icon><span>个股深研</span>
+        </el-menu-item>
         <el-menu-item index="/favorites">
           <el-icon><Star /></el-icon><span>我的自选股</span>
         </el-menu-item>
         <el-menu-item index="/paper">
           <el-icon><Wallet /></el-icon><span>模拟交易</span>
+        </el-menu-item>
+        <el-menu-item index="/data-center">
+          <el-icon><Coin /></el-icon><span>数据中心</span>
         </el-menu-item>
       </el-menu>
       <div class="sidebar-foot">
@@ -50,7 +50,7 @@
 import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, TrendCharts, Histogram, DataLine, Star, Wallet, SwitchButton,
-  DocumentChecked, MagicStick,
+  DocumentChecked, Coin,
 } from '@element-plus/icons-vue'
 
 const route = useRoute()

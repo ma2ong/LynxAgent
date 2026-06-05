@@ -14,7 +14,7 @@ from threading import Lock, Thread
 from typing import Dict, Optional
 
 from ..local_store import get_local_store
-from .dataset import build_panel
+from .dataset import DATE_COL, SYMBOL_COL, build_panel
 from .pipeline import run_once, run_rolling
 
 _CACHE: Dict[str, tuple] = {}
@@ -41,6 +41,9 @@ def _compute(universe_limit, horizon, k, mode, neutralize, retrain_every, min_ro
     if panel.empty:
         return {"error": "no data"}
 
+    # 过滤后的真实可投资域大小（最新交易日纳入的标的数）
+    inv_universe = int(panel[panel[DATE_COL] == panel[DATE_COL].max()][SYMBOL_COL].nunique())
+
     if mode == "once":
         r = run_once(panel=panel, horizon=horizon, k=k, neutralize=neutralize)
     else:
@@ -50,7 +53,7 @@ def _compute(universe_limit, horizon, k, mode, neutralize, retrain_every, min_ro
     bt = r.pop("_bt", None)
     return {
         "mode": r.get("mode"),
-        "universe": len(symbols),
+        "universe": inv_universe,
         "horizon": horizon,
         "k": k,
         "neutralized": r.get("neutralized"),

@@ -107,6 +107,10 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     # 市值代理（成交额 20 日均值取对数）——仅供中性化使用
     out[SIZE_COL] = np.log1p(d["amount_ma20"])
 
+    # 可投资域过滤用的原始量（不进模型）
+    out["_close"] = d["close"]          # 当日收盘价（剔除仙股）
+    out["_amt20"] = d["amount_ma20"]    # 20 日均成交额（剔除低流动性）
+
     return out
 
 
@@ -118,24 +122,54 @@ def _add_label(feat: pd.DataFrame, df: pd.DataFrame, horizon: int) -> pd.DataFra
     return feat
 
 
+def _excluded_symbols(store, exclude_st: bool, exclude_delisting: bool) -> set:
+    """按名称剔除不可投资的代码：ST/*ST（风险警示）、退（退市/退市整理期）。"""
+    if not (exclude_st or exclude_delisting):
+        return set()
+    excluded = set()
+    try:
+        for r in store.load_meta():
+            name = (r.get("name") or "")
+            sym = r.get("symbol")
+            if exclude_st and "ST" in name.upper():
+                excluded.add(sym)
+            if exclude_delisting and "退" in name:
+                excluded.add(sym)
+    except Exception:
+        pass
+    return excluded
+
+
 def build_panel(
     symbols: Optional[Sequence[str]] = None,
     horizon: int = 5,
     min_rows: int = 180,
     start_date: Optional[str] = None,
     cs_rank_norm: bool = True,
+    exclude_st: bool = True,
+    exclude_delisting: bool = True,
+    price_floor: float = 2.0,
+    min_amount: float = 2e7,
 ) -> pd.DataFrame:
-    """组装全市场截面面板。
+    """组装全市场截面面板（仅可投资域）。
 
     返回 DataFrame，列 = [date, symbol] + FEATURE_COLS + [label_fwd]，已按 date 排序。
-    cs_rank_norm=True 时对每个特征按交易日做截面 rank 归一到 [0,1]。
+    可投资域过滤（A 股量化标配，避免选到退市/ST/仙股/极低流动性的不可交易标的）：
+      - exclude_st / exclude_delisting：按名称剔除 ST/*ST、退市股（整只剔除）
+      - price_floor：剔除当日收盘价 < price_floor 元的仙股（按交易日逐行，点位正确）
+      - min_amount：剔除 20 日均成交额 < min_amount 元的低流动性标的
+    过滤在截面 rank 归一【之前】完成，保证排序/选股/回测都只在可投资域内。
     """
     store = get_local_store()
     if symbols is None:
         symbols = store.list_kline_symbols(min_rows=min_rows)
 
+    skip = _excluded_symbols(store, exclude_st, exclude_delisting)
+
     frames: List[pd.DataFrame] = []
     for sym in symbols:
+        if sym in skip:
+            continue
         raw = store.load_kline(sym)
         if raw is None or len(raw) < min_rows:
             continue
@@ -155,6 +189,13 @@ def build_panel(
     panel = panel.replace([np.inf, -np.inf], np.nan)
     # 丢掉特征/标签/市值缺失的行（含每只票末尾 horizon 行）
     panel = panel.dropna(subset=FEATURE_COLS + [SIZE_COL, LABEL_COL])
+
+    # 逐行可投资域过滤（点位正确：用当日价格/流动性，不引入未来信息）
+    if price_floor and price_floor > 0:
+        panel = panel[panel["_close"] >= price_floor]
+    if min_amount and min_amount > 0:
+        panel = panel[panel["_amt20"] >= min_amount]
+
     panel = panel.sort_values([DATE_COL, SYMBOL_COL]).reset_index(drop=True)
 
     if cs_rank_norm:

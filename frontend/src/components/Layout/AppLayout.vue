@@ -15,6 +15,9 @@
         <el-menu-item index="/quant">
           <el-icon><TrendCharts /></el-icon><span>智能选股</span>
         </el-menu-item>
+        <el-menu-item index="/factor-model">
+          <el-icon><MagicStick /></el-icon><span>AI因子模型</span>
+        </el-menu-item>
         <el-menu-item index="/stock-analysis">
           <el-icon><DocumentChecked /></el-icon><span>个股分析</span>
         </el-menu-item>
@@ -47,7 +50,7 @@
 import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, TrendCharts, Histogram, DataLine, Star, Wallet, SwitchButton,
-  DocumentChecked,
+  DocumentChecked, MagicStick,
 } from '@element-plus/icons-vue'
 
 const route = useRoute()

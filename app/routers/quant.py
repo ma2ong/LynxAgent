@@ -139,6 +139,30 @@ async def screen_stocks(req: QuantScreenRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/ml/factor-model")
+async def ml_factor_model(
+    universe_limit: int = 500,
+    horizon: int = 5,
+    k: int = 50,
+    mode: str = "rolling",
+    neutralize: bool = True,
+    retrain_every: int = 20,
+    force: bool = False,
+):
+    """LightGBM 因子模型：滚动再训练 + Top-K 选股 + 回测净值。
+
+    非阻塞：命中缓存返回 status=ready，否则后台计算返回 status=computing（前端轮询）。
+    universe_limit<=0 表示全市场。结果缓存 6 小时。
+    """
+    try:
+        from quantcore.quant.ml.service import request_ml_factor
+        return await asyncio.to_thread(
+            request_ml_factor, universe_limit, horizon, k, mode, neutralize, retrain_every, 250, force
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/backtest")
 async def backtest_strategy(req: QuantBacktestRequest):
     try:

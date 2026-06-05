@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import secrets
 from dataclasses import asdict
@@ -9,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -41,6 +44,41 @@ app.add_middleware(
 
 app.include_router(lite_auth_router)
 app.include_router(quant_router, dependencies=[Depends(get_current_lite_user)])
+
+# ---- 每日全市场 AI 因子模型刷新（收盘 + 数据同步后入缓存）----
+_ml_factor_scheduler: "AsyncIOScheduler | None" = None
+
+
+async def _refresh_full_market_factor() -> None:
+    """后台重算全市场因子模型并写入缓存；offload 到线程，避免阻塞事件循环。"""
+    from quantcore.quant.ml.service import run_ml_factor
+    try:
+        # (universe_limit=0 全市场, horizon=5, k=50, mode, neutralize, retrain_every, min_rows, force)
+        await asyncio.to_thread(run_ml_factor, 0, 5, 50, "rolling", True, 20, 250, True)
+    except Exception as exc:  # noqa: BLE001
+        import warnings
+        warnings.warn(f"ML factor daily refresh failed: {exc}", RuntimeWarning, stacklevel=1)
+
+
+@app.on_event("startup")
+async def _start_ml_factor_scheduler() -> None:
+    """启动时注册每日全市场因子模型刷新任务（可用环境变量关闭/改时间）。"""
+    global _ml_factor_scheduler
+    if os.getenv("ML_FACTOR_REFRESH_ENABLED", "true").lower() in ("0", "false", "no"):
+        return
+    cron = os.getenv("ML_FACTOR_REFRESH_CRON", "0 18 * * 1-5")  # 工作日 18:00，收盘+K线同步之后
+    tz = os.getenv("ML_FACTOR_REFRESH_TZ", "Asia/Shanghai")
+    _ml_factor_scheduler = AsyncIOScheduler(timezone=tz)
+    _ml_factor_scheduler.add_job(
+        _refresh_full_market_factor,
+        CronTrigger.from_crontab(cron, timezone=tz),
+        id="ml_factor_full_market_daily",
+        name="全市场AI因子模型每日刷新",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    _ml_factor_scheduler.start()
+
 
 lite_quant_engine = QuantEngine()
 lite_trader_bridge = EasyTraderBridge()

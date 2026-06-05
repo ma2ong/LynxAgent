@@ -117,6 +117,17 @@ class LocalQuantStore:
     def kline_symbol_count(self) -> int:
         return self._conn().execute("SELECT COUNT(DISTINCT symbol) FROM daily_kline").fetchone()[0]
 
+    def list_kline_symbols(self, min_rows: int = 0) -> List[str]:
+        """列出本地 K 线库里所有代码；min_rows>0 时只返回历史长度足够的代码。"""
+        if min_rows and min_rows > 0:
+            sql = "SELECT symbol FROM daily_kline GROUP BY symbol HAVING COUNT(*) >= ? ORDER BY symbol"
+            rows = self._conn().execute(sql, (min_rows,)).fetchall()
+        else:
+            rows = self._conn().execute(
+                "SELECT DISTINCT symbol FROM daily_kline ORDER BY symbol"
+            ).fetchall()
+        return [r[0] for r in rows]
+
     def kline_health(self) -> Dict[str, object]:
         from datetime import date, datetime
 

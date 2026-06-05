@@ -336,4 +336,51 @@ export const quantApi = {
 
   klineDetail: async (symbol: string, name = '', days = 250) =>
     unwrap<any>(await ApiClient.get('/api/quant/kline', { symbol, name, days }, { timeout: 60000 })),
+
+  factorModel: async (params: {
+    universe_limit?: number
+    horizon?: number
+    k?: number
+    mode?: 'rolling' | 'once'
+    neutralize?: boolean
+    retrain_every?: number
+    force?: boolean
+  } = {}) =>
+    unwrap<MLFactorResult>(await ApiClient.get('/api/quant/ml/factor-model', params, { timeout: 300000 })),
+}
+
+export interface MLFactorPick {
+  symbol: string
+  name: string
+  score: number
+}
+
+export interface MLFactorMetrics {
+  total_return: number
+  annual_return: number
+  sharpe: number
+  max_drawdown: number
+  win_rate: number
+  n_periods: number
+}
+
+export interface MLFactorResult {
+  status?: 'ready' | 'computing' | 'error'
+  elapsed_sec?: number
+  mode: string
+  universe: number
+  horizon: number
+  k: number
+  neutralized: boolean
+  n_models?: number
+  ic: { rank_ic_mean: number; rank_icir: number; ic_mean: number; n_days: number }
+  metrics: { topk: MLFactorMetrics; benchmark: MLFactorMetrics; long_short: MLFactorMetrics }
+  pick_date: string
+  picks: MLFactorPick[]
+  top_features: Record<string, number>
+  curves: { dates: string[]; topk: number[]; benchmark: number[]; long_short: number[] }
+  cached: boolean
+  age_sec?: number
+  generated_at: number
+  error?: string
 }

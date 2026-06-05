@@ -281,6 +281,7 @@ export const quantApi = {
       source: raw.source || 'lite-smart-pool',
       universe_size: raw.universe_size || items.length,
       analyzed: raw.analyzed || raw.universe_size || items.length,
+      ai_factor: raw.ai_factor,
       items,
       errors: raw.errors || {}
     } as QuantSmartPoolResult

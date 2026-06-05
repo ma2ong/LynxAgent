@@ -31,11 +31,51 @@ export interface AddFavoriteReq {
   alert_price_low?: number | null
 }
 
+export interface PortfolioDiagnosticItem {
+  symbol: string
+  name: string
+  industry: string
+  current_price?: number | null
+  change_percent?: number | null
+  quant_score: number
+  trend: number
+  momentum: number
+  risk_control: number
+  volatility: number
+  max_drawdown: number
+  suggested_weight: number
+  risk_tags: string[]
+}
+
+export interface PortfolioDiagnostics {
+  score: number
+  grade: string
+  summary: string
+  assumption?: string
+  updated_at?: string
+  portfolio?: {
+    count: number
+    equal_weight: number
+    volatility: number
+    max_drawdown: number
+    avg_correlation: number
+    top_industry_weight: number
+    return_coverage?: number
+  }
+  items: PortfolioDiagnosticItem[]
+  industry_exposure: Array<{ industry: string; count: number; weight: number }>
+  correlation_pairs: Array<{ left: string; left_name: string; right: string; right_name: string; correlation: number }>
+  risk_flags: string[]
+  suggested_actions: string[]
+}
+
 export const favoritesApi = {
   /**
    * 获取收藏列表
    */
   list: () => ApiClient.get<FavoriteItem[]>('/api/favorites/'),
+
+  diagnostics: () => ApiClient.get<PortfolioDiagnostics>('/api/favorites/portfolio/diagnostics', undefined, { timeout: 60000 }),
 
   /**
    * 添加收藏

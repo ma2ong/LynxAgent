@@ -271,6 +271,50 @@ def data_source_status() -> Dict[str, Any]:
     }
 
 
+def data_source_health(local_health: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Return a product-facing health snapshot for the data center page.
+
+    This is intentionally lightweight: it checks installed/enabled source state
+    and combines it with the local SQLite K-line coverage instead of probing
+    every remote endpoint on page load.
+    """
+    status = data_source_status()
+    sources = status.get("sources", [])
+    active = [item for item in sources if item.get("enabled")]
+    local_health = local_health or {}
+
+    ready = bool(local_health.get("ready"))
+    today_complete = bool(local_health.get("today_complete"))
+    if ready and today_complete:
+        grade = "fresh"
+        message = "本地行情已覆盖最近交易日，选股和热点可以优先使用本地高速数据。"
+    elif ready:
+        grade = "usable"
+        message = "本地数据可用，但最新交易日覆盖不完整；建议执行增量同步。"
+    elif active:
+        grade = "source_ready"
+        message = "远程数据源可用，但本地数据池不足；建议执行全量同步。"
+    else:
+        grade = "blocked"
+        message = "没有可用数据源；请安装或修复 AKShare、efinance、BaoStock。"
+
+    policy = [
+        {"step": 1, "name": "本地 SQLite K线", "role": "页面查询、智能选股、形态扫描优先走本地缓存，避免每次刷新打远程源。"},
+        {"step": 2, "name": "腾讯日线同步", "role": "批量同步优先使用稳定轻量的行情接口，按全市场遍历补齐。"},
+        {"step": 3, "name": "AKShare", "role": "股票池、专题数据、公告研报等宽覆盖数据。"},
+        {"step": 4, "name": "efinance / BaoStock", "role": "当主源不可用时兜底；BaoStock 作为独立线路验证。"},
+    ]
+
+    return {
+        **status,
+        "grade": grade,
+        "message": message,
+        "local": local_health,
+        "active_count": len(active),
+        "policy": policy,
+    }
+
+
 def fetch_stock_pool(limit: int = 5000, preferred: Optional[Sequence[str]] = None) -> Tuple[List[Dict[str, Any]], str, Dict[str, str]]:
     errors: Dict[str, str] = {}
     for key in _source_sequence(preferred):

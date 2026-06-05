@@ -15,6 +15,103 @@
       </div>
     </div>
 
+    <section class="portfolio-panel" v-if="diagnostics">
+      <div class="portfolio-head">
+        <div>
+          <span class="eyebrow">组合体检</span>
+          <h2>{{ diagnostics.grade }} <strong>{{ Math.round(diagnostics.score || 0) }}</strong></h2>
+          <p>{{ diagnostics.summary }}</p>
+          <small>{{ diagnostics.assumption }}</small>
+        </div>
+        <el-button :loading="diagnosticsLoading" @click="loadDiagnostics">刷新体检</el-button>
+      </div>
+
+      <div class="metric-grid" v-if="diagnostics.portfolio">
+        <div>
+          <span>自选数量</span>
+          <b>{{ diagnostics.portfolio.count }}</b>
+        </div>
+        <div>
+          <span>等权波动</span>
+          <b>{{ pct(diagnostics.portfolio.volatility) }}</b>
+        </div>
+        <div>
+          <span>最大回撤</span>
+          <b :class="diagnostics.portfolio.max_drawdown <= -0.22 ? 'down' : ''">{{ pct(diagnostics.portfolio.max_drawdown) }}</b>
+        </div>
+        <div>
+          <span>平均相关性</span>
+          <b>{{ diagnostics.portfolio.avg_correlation.toFixed(2) }}</b>
+        </div>
+        <div>
+          <span>最高行业权重</span>
+          <b>{{ pct(diagnostics.portfolio.top_industry_weight) }}</b>
+        </div>
+        <div>
+          <span>历史覆盖率</span>
+          <b>{{ pct(diagnostics.portfolio.return_coverage) }}</b>
+        </div>
+      </div>
+
+      <div class="risk-strip" v-if="diagnostics.risk_flags?.length">
+        <el-alert
+          v-for="flag in diagnostics.risk_flags"
+          :key="flag"
+          :title="flag"
+          type="warning"
+          :closable="false"
+          show-icon
+        />
+      </div>
+
+      <div class="portfolio-cols">
+        <div class="portfolio-box">
+          <div class="box-title">建议动作</div>
+          <ul>
+            <li v-for="item in diagnostics.suggested_actions" :key="item">{{ item }}</li>
+          </ul>
+        </div>
+        <div class="portfolio-box">
+          <div class="box-title">行业暴露</div>
+          <div v-for="item in diagnostics.industry_exposure.slice(0, 6)" :key="item.industry" class="exposure-row">
+            <span>{{ item.industry }}</span>
+            <el-progress :percentage="Math.round(item.weight * 100)" :stroke-width="8" />
+          </div>
+        </div>
+        <div class="portfolio-box">
+          <div class="box-title">高相关组合</div>
+          <template v-if="diagnostics.correlation_pairs.length">
+            <div v-for="pair in diagnostics.correlation_pairs.slice(0, 5)" :key="pair.left + pair.right" class="pair-row">
+              <span>{{ pair.left_name }} / {{ pair.right_name }}</span>
+              <b>{{ pair.correlation.toFixed(2) }}</b>
+            </div>
+          </template>
+          <el-empty v-else description="暂无高相关组合" :image-size="48" />
+        </div>
+      </div>
+
+      <el-table v-if="diagnostics.items?.length" :data="diagnostics.items" size="small" class="diagnostic-table">
+        <el-table-column prop="symbol" label="代码" width="90" />
+        <el-table-column prop="name" label="名称" width="110" />
+        <el-table-column prop="industry" label="行业" min-width="120" show-overflow-tooltip />
+        <el-table-column label="建议仓位" width="100">
+          <template #default="{ row }"><b>{{ pct(row.suggested_weight) }}</b></template>
+        </el-table-column>
+        <el-table-column label="量化分" width="90">
+          <template #default="{ row }">{{ row.quant_score.toFixed(1) }}</template>
+        </el-table-column>
+        <el-table-column label="风控" width="90">
+          <template #default="{ row }">{{ row.risk_control.toFixed(1) }}</template>
+        </el-table-column>
+        <el-table-column label="风险标签" min-width="180">
+          <template #default="{ row }">
+            <el-tag v-for="tag in row.risk_tags" :key="tag" size="small" type="warning" effect="plain" class="tag">{{ tag }}</el-tag>
+            <span v-if="!row.risk_tags?.length">-</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </section>
+
     <section class="panel">
       <el-table :data="items" v-loading="loading" empty-text="还没有自选股，点右上角添加" size="small">
         <el-table-column label="代码" width="100">
@@ -91,7 +188,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Plus } from '@element-plus/icons-vue'
-import { favoritesApi, type FavoriteItem, type AddFavoriteReq } from '@/api/favorites'
+import { favoritesApi, type FavoriteItem, type AddFavoriteReq, type PortfolioDiagnostics } from '@/api/favorites'
 
 const router = useRouter()
 const loading = ref(false)
@@ -99,6 +196,8 @@ const syncing = ref(false)
 const adding = ref(false)
 const addVisible = ref(false)
 const items = ref<FavoriteItem[]>([])
+const diagnostics = ref<PortfolioDiagnostics | null>(null)
+const diagnosticsLoading = ref(false)
 const tagsText = ref('')
 
 const addForm = reactive<AddFavoriteReq>({
@@ -111,10 +210,28 @@ const addForm = reactive<AddFavoriteReq>({
 const unwrap = (res: any): FavoriteItem[] =>
   Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
 
+const unwrapDiagnostics = (res: any): PortfolioDiagnostics | null =>
+  res?.data && !Array.isArray(res.data) ? res.data : res || null
+
+const pct = (value?: number | null) =>
+  value == null || Number.isNaN(Number(value)) ? '-' : `${(Number(value) * 100).toFixed(1)}%`
+
+const loadDiagnostics = async () => {
+  diagnosticsLoading.value = true
+  try {
+    diagnostics.value = unwrapDiagnostics(await favoritesApi.diagnostics())
+  } catch (error: any) {
+    ElMessage.error(error?.message || '组合体检失败')
+  } finally {
+    diagnosticsLoading.value = false
+  }
+}
+
 const load = async () => {
   loading.value = true
   try {
     items.value = unwrap(await favoritesApi.list())
+    await loadDiagnostics()
   } catch (error: any) {
     ElMessage.error(error?.message || '加载自选股失败')
   } finally {
@@ -200,6 +317,137 @@ onMounted(load)
 
 .head-actions { display: flex; gap: 10px; }
 
+.portfolio-panel {
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.portfolio-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+
+  h2 {
+    margin: 4px 0;
+    font-size: 20px;
+  }
+
+  h2 strong {
+    margin-left: 8px;
+    color: var(--el-color-primary);
+  }
+
+  p {
+    margin: 0 0 4px;
+    color: var(--el-text-color-primary);
+  }
+
+  small {
+    color: var(--el-text-color-secondary);
+  }
+}
+
+.eyebrow {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+
+  div {
+    background: var(--el-fill-color-lighter);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+
+  span {
+    display: block;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    margin-bottom: 4px;
+  }
+
+  b {
+    font-size: 18px;
+  }
+}
+
+.risk-strip {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.portfolio-cols {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.portfolio-box {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 12px;
+  min-height: 126px;
+
+  ul {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--el-text-color-regular);
+    line-height: 1.7;
+  }
+}
+
+.box-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.exposure-row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+
+  span {
+    font-size: 12px;
+    color: var(--el-text-color-regular);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.pair-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+
+  &:last-child {
+    border-bottom: 0;
+  }
+}
+
+.diagnostic-table {
+  margin-top: 8px;
+}
+
 .panel {
   background: var(--el-bg-color);
   border: 1px solid var(--el-border-color-light);
@@ -214,4 +462,11 @@ onMounted(load)
 
 .up { color: #ef4444; }
 .down { color: #16a34a; }
+
+@media (max-width: 1100px) {
+  .metric-grid,
+  .portfolio-cols {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

@@ -5,6 +5,15 @@ export interface PaperAccount {
   positions_value: { CNY: number }
   equity: { CNY: number }
   realized_pnl: { CNY: number }
+  risk?: {
+    mode: string
+    exposure_ratio: number
+    cash_ratio: number
+    max_single_position: number
+    max_total_exposure: number
+    flags: string[]
+    largest_position?: { code: string; market_value: number; weight: number }
+  }
   updated_at: string
 }
 

@@ -161,6 +161,50 @@
           <el-icon class="spin"><Loading /></el-icon> 多智能体分析中，请稍候…
         </div>
         <div v-else-if="deepResult" class="deep-result">
+          <div v-if="deepAgentReview" class="agent-review">
+            <div class="agent-review-head">
+              <div>
+                <span>多智能体审查</span>
+                <b>{{ deepAgentReview.final_action }}</b>
+              </div>
+              <el-tag type="success" effect="plain">共识 {{ deepAgentReview.consensus_score }}</el-tag>
+            </div>
+            <div class="agent-grid">
+              <div v-for="agent in deepAgentReview.agents" :key="agent.role" class="agent-card">
+                <div class="agent-title">
+                  <span>{{ agent.role }}</span>
+                  <el-tag size="small" effect="plain">{{ agent.stance }}</el-tag>
+                </div>
+                <div class="agent-confidence">置信度 {{ Math.round((agent.confidence || 0) * 100) }}%</div>
+                <ul>
+                  <li v-for="point in agent.points" :key="point">{{ point }}</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <div v-if="deepAudit" class="audit-box">
+            <div class="audit-head">
+              <span>研究自检</span>
+              <el-tag size="small" :type="deepAudit.confidence >= 0.65 ? 'success' : 'warning'">
+                置信度 {{ Math.round(deepAudit.confidence * 100) }}%
+              </el-tag>
+            </div>
+            <p>{{ deepAudit.verdict }}</p>
+            <div class="audit-cols">
+              <div>
+                <b>证据链</b>
+                <ul><li v-for="item in deepAudit.evidence" :key="item.name">{{ item.name }}：{{ item.value }}</li></ul>
+              </div>
+              <div>
+                <b>数据缺口</b>
+                <ul><li v-for="item in (deepAudit.gaps?.length ? deepAudit.gaps : ['暂无明显数据缺口'])" :key="item">{{ item }}</li></ul>
+              </div>
+              <div>
+                <b>风控自检</b>
+                <ul><li v-for="item in (deepAudit.risk_checks?.length ? deepAudit.risk_checks : ['暂无硬性风控拦截'])" :key="item">{{ item }}</li></ul>
+              </div>
+            </div>
+          </div>
           <div v-for="s in deepSections" :key="s.title" class="deep-section">
             <div class="ds-title">{{ s.title }}</div>
             <div class="ds-body">{{ s.body }}</div>
@@ -253,6 +297,9 @@ const deepSections = computed(() => {
     .map(([k, title]) => ({ title, body: deepResult.value[k] }))
 })
 
+const deepAudit = computed(() => deepResult.value?.analysis_audit || null)
+const deepAgentReview = computed(() => deepResult.value?.agent_review || null)
+
 const fmt = (v?: number | null, dp = 2) =>
   v == null ? '-' : v >= 1e8 ? `${(v / 1e8).toFixed(dp)}亿` : v.toFixed(dp)
 
@@ -336,7 +383,7 @@ const pollDeep = (taskId: string) => {
       const status = res?.data?.status
       if (status === 'completed') {
         const r: any = await ApiClient.get(`/api/analysis/tasks/${taskId}/result`)
-        deepResult.value = r?.data?.deep_analysis || r?.data || null
+        deepResult.value = r?.data || null
         deepLoading.value = false
       } else if (status === 'failed') {
         deepError.value = res?.data?.error || '深度分析失败'
@@ -490,6 +537,69 @@ onUnmounted(() => {
 .deep-section { margin-bottom: 16px; &:last-child { margin-bottom: 0; } }
 .ds-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
 .ds-body { font-size: 13px; line-height: 1.8; white-space: pre-wrap; color: var(--el-text-color-regular); }
+.agent-review {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 14px;
+  background: var(--el-fill-color-extra-light);
+}
+.agent-review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.agent-review-head span {
+  display: block;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+.agent-review-head b { font-size: 18px; }
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+.agent-card {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--el-bg-color);
+}
+.agent-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 13px;
+}
+.agent-confidence {
+  margin-top: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.agent-card ul {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  line-height: 1.65;
+  font-size: 12px;
+}
+.audit-box {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 14px;
+  background: var(--el-fill-color-extra-light);
+}
+.audit-head { display: flex; align-items: center; justify-content: space-between; font-weight: 700; margin-bottom: 6px; }
+.audit-box p { margin: 0 0 10px; color: var(--el-text-color-secondary); font-size: 13px; }
+.audit-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.audit-cols b { font-size: 13px; }
+.audit-cols ul { margin: 6px 0 0; padding-left: 16px; font-size: 12px; line-height: 1.7; }
 
 /* Colors */
 .up { color: #ef232a; }

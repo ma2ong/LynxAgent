@@ -439,6 +439,28 @@
                 <div><span>胜率</span><b>{{ percent(backtestResult.win_rate) }}</b></div>
                 <div><span>交易次数</span><b>{{ backtestResult.trades }}</b></div>
               </div>
+              <div v-if="backtestDiagnosis" class="strategy-diagnosis">
+                <div class="diagnosis-head">
+                  <div>
+                    <span>策略体检</span>
+                    <b>{{ backtestDiagnosis.verdict }}</b>
+                  </div>
+                  <el-progress
+                    type="dashboard"
+                    :percentage="Math.round(backtestDiagnosis.score)"
+                    :width="78"
+                    :stroke-width="8"
+                  />
+                </div>
+                <div class="diagnosis-meta">
+                  <span>收益回撤比 {{ formatNumber(backtestDiagnosis.rewardRisk) }}</span>
+                  <span>引擎 {{ backtestResult.engine }}</span>
+                  <span>组合 {{ backtestForm.combine.toUpperCase() }}</span>
+                </div>
+                <ul>
+                  <li v-for="item in backtestDiagnosis.suggestions" :key="item">{{ item }}</li>
+                </ul>
+              </div>
               <div class="equity-chart">
                 <div v-for="point in normalizedEquity" :key="point.date" class="equity-bar" :style="{ height: `${point.height}%` }" :title="`${point.date}: ${formatMoney(point.equity)}`"></div>
               </div>
@@ -462,6 +484,74 @@
           </el-form>
 
           <section class="result-panel">
+            <section class="lab-card factor-lab-card">
+              <div class="lab-head">
+                <div>
+                  <h3>AI Factor Lab</h3>
+                  <p>把机器学习因子排序、RankIC、TopK 收益和多空组合统一到因子研究页，用来校验一键推荐池里的 AI 因子是否真的有效。</p>
+                </div>
+                <div class="lab-actions">
+                  <el-input-number v-model="mlFactorForm.universe_limit" :min="100" :max="5000" :step="100" controls-position="right" />
+                  <el-input-number v-model="mlFactorForm.horizon" :min="1" :max="20" controls-position="right" />
+                  <el-input-number v-model="mlFactorForm.k" :min="10" :max="200" :step="10" controls-position="right" />
+                  <el-switch v-model="mlFactorForm.neutralize" active-text="中性化" />
+                  <el-switch v-model="mlFactorForm.force" active-text="重算" />
+                  <el-button type="success" :loading="mlFactorLoading" @click="runMLFactorLab">运行AI因子实验</el-button>
+                </div>
+              </div>
+
+              <el-alert
+                v-if="mlFactorResult?.status === 'computing'"
+                title="AI 因子模型正在后台计算，稍后重新运行会读取最新缓存。"
+                type="warning"
+                :closable="false"
+                show-icon
+              />
+              <el-alert
+                v-else-if="mlFactorResult?.status === 'error'"
+                :title="mlFactorResult.error || 'AI 因子实验失败'"
+                type="error"
+                :closable="false"
+                show-icon
+              />
+
+              <template v-if="mlFactorResult?.status === 'ready'">
+                <div class="mini-summary">
+                  <span>样本 {{ mlFactorResult.universe }} 只</span>
+                  <span>周期 {{ mlFactorResult.horizon }} 日</span>
+                  <span>TopK {{ mlFactorResult.k }}</span>
+                  <b>{{ mlFactorResult.pick_date }}</b>
+                  <el-tag size="small" :type="mlFactorResult.cached ? 'info' : 'success'" effect="plain">
+                    {{ mlFactorResult.cached ? '缓存结果' : '新计算' }}
+                  </el-tag>
+                </div>
+                <div class="metric-grid">
+                  <div><span>RankIC</span><b>{{ formatNumber(mlFactorResult.ic?.rank_ic_mean || 0) }}</b></div>
+                  <div><span>ICIR</span><b>{{ formatNumber(mlFactorResult.ic?.rank_icir || 0) }}</b></div>
+                  <div><span>TopK年化</span><b>{{ percent(mlFactorResult.metrics?.topk?.annual_return || 0) }}</b></div>
+                  <div><span>TopK回撤</span><b>{{ percent(mlFactorResult.metrics?.topk?.max_drawdown || 0) }}</b></div>
+                  <div><span>TopK胜率</span><b>{{ percent(mlFactorResult.metrics?.topk?.win_rate || 0) }}</b></div>
+                  <div><span>多空年化</span><b>{{ percent(mlFactorResult.metrics?.long_short?.annual_return || 0) }}</b></div>
+                </div>
+                <div class="factor-lab-grid">
+                  <div>
+                    <h4>Top Features</h4>
+                    <div v-for="item in topMLFeatures" :key="item.name" class="feature-row">
+                      <span>{{ item.name }}</span>
+                      <b>{{ formatNumber(item.value) }}</b>
+                    </div>
+                  </div>
+                  <div>
+                    <h4>Latest Picks</h4>
+                    <div v-for="pick in mlFactorResult.picks.slice(0, 10)" :key="pick.symbol" class="feature-row">
+                      <span>{{ pick.symbol }} {{ pick.name }}</span>
+                      <b>{{ formatNumber(pick.score) }}</b>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </section>
+
             <el-table v-if="researchResult?.candidates.length" :data="researchResult.candidates" height="520">
               <el-table-column prop="name" label="因子" min-width="160" fixed />
               <el-table-column prop="score" label="研究分" min-width="100" />
@@ -498,6 +588,7 @@ import {
   type BacktestResult,
   type FactorResearchResult,
   type ForecastResult,
+  type MLFactorResult,
   type PatternRecognitionResult,
   type QuantDataHealth,
   type QuantAnalysisResult,
@@ -555,6 +646,17 @@ const researchSymbolsText = ref('600519\n000001\n300750')
 const researchCash = ref(100000)
 const researchLoading = ref(false)
 const researchResult = ref<FactorResearchResult | null>(null)
+const mlFactorForm = ref({
+  universe_limit: 1000,
+  horizon: 5,
+  k: 50,
+  mode: 'rolling' as 'rolling' | 'once',
+  neutralize: true,
+  retrain_every: 20,
+  force: false
+})
+const mlFactorLoading = ref(false)
+const mlFactorResult = ref<MLFactorResult | null>(null)
 
 const analysisForecast = computed<ForecastResult | null>(() => (
   (analysisResult.value?.integrations?.kronos_forecast as ForecastResult | undefined) || null
@@ -571,6 +673,41 @@ const normalizedEquity = computed(() => {
   const max = Math.max(...values)
   const range = Math.max(max - min, 1)
   return curve.map((item) => ({ ...item, height: 16 + ((item.equity - min) / range) * 84 }))
+})
+
+const topMLFeatures = computed(() =>
+  Object.entries(mlFactorResult.value?.top_features || {})
+    .map(([name, value]) => ({ name, value: Number(value || 0) }))
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+    .slice(0, 10)
+)
+
+const backtestDiagnosis = computed(() => {
+  const r = backtestResult.value
+  if (!r) return null
+  const totalReturn = Number(r.total_return || 0)
+  const annualReturn = Number(r.annualized_return || 0)
+  const maxDrawdown = Math.abs(Number(r.max_drawdown || 0))
+  const winRate = Number(r.win_rate || 0)
+  const trades = Number(r.trades || 0)
+  const rewardRisk = maxDrawdown > 0 ? totalReturn / maxDrawdown : (totalReturn > 0 ? 99 : 0)
+  let score = 50
+  score += Math.min(25, annualReturn * 100)
+  score += Math.min(15, winRate * 20)
+  score -= Math.min(25, maxDrawdown * 100)
+  if (trades < 5) score -= 10
+  if (rewardRisk > 1.5) score += 10
+  if (rewardRisk < 0.5) score -= 10
+  score = Math.max(0, Math.min(100, score))
+  const verdict = score >= 70 ? '可继续研究' : score >= 50 ? '参数需优化' : '暂停使用'
+  const suggestions: string[] = []
+  if (trades < 5) suggestions.push('交易次数偏少，样本不足，先拉长回测区间或换更活跃标的。')
+  if (maxDrawdown > 0.25) suggestions.push('最大回撤超过 25%，需要收紧止损、降低仓位或增加趋势过滤。')
+  if (annualReturn <= 0) suggestions.push('年化收益为负，当前参数不具备继续实盘模拟价值。')
+  if (winRate < 0.45) suggestions.push('胜率偏低，检查入场条件是否太宽，优先减少假突破。')
+  if (rewardRisk < 1) suggestions.push('收益回撤比不足 1，策略承担的波动没有换来足够回报。')
+  if (!suggestions.length) suggestions.push('收益、回撤和胜率暂时匹配，可进入更多股票和更长周期的横向验证。')
+  return { score, verdict, rewardRisk, suggestions }
 })
 
 const parseRange = (range: [string, string] | null) => ({ start_date: range?.[0], end_date: range?.[1] })
@@ -852,6 +989,24 @@ const runResearch = async () => {
     researchResult.value = await quantApi.research({ symbols: symbols.slice(0, 50), initial_cash: researchCash.value })
   } finally {
     researchLoading.value = false
+  }
+}
+
+const runMLFactorLab = async () => {
+  mlFactorLoading.value = true
+  try {
+    mlFactorResult.value = await quantApi.factorModel({ ...mlFactorForm.value })
+    if (mlFactorResult.value?.status === 'ready') {
+      ElMessage.success('AI 因子实验完成')
+    } else if (mlFactorResult.value?.status === 'computing') {
+      ElMessage.warning('AI 因子模型正在后台计算，稍后再刷新结果')
+    } else if (mlFactorResult.value?.error) {
+      ElMessage.error(mlFactorResult.value.error)
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.message || 'AI 因子实验失败')
+  } finally {
+    mlFactorLoading.value = false
   }
 }
 
@@ -1237,6 +1392,117 @@ const openChart = async (row: any) => {
   background: var(--el-color-primary);
 }
 
+.lab-card {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: var(--el-fill-color-extra-light);
+}
+
+.lab-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+
+  h3 {
+    margin: 0 0 4px;
+    font-size: 16px;
+  }
+
+  p {
+    margin: 0;
+    color: var(--el-text-color-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+}
+
+.lab-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 480px;
+
+  :deep(.el-input-number) {
+    width: 112px;
+  }
+}
+
+.factor-lab-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+
+  h4 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: var(--el-text-color-secondary);
+  }
+}
+
+.feature-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  font-size: 13px;
+
+  span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.strategy-diagnosis {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-extra-light);
+
+  ul {
+    margin: 10px 0 0;
+    padding-left: 18px;
+    color: var(--el-text-color-regular);
+    line-height: 1.8;
+    font-size: 13px;
+  }
+}
+
+.diagnosis-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
+  span {
+    display: block;
+    color: var(--el-text-color-secondary);
+    font-size: 13px;
+    margin-bottom: 4px;
+  }
+
+  b {
+    font-size: 22px;
+  }
+}
+
+.diagnosis-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
 @media (max-width: 900px) {
   .tool-layout {
     grid-template-columns: 1fr;
@@ -1263,6 +1529,19 @@ const openChart = async (row: any) => {
 
   .smart-inline-settings {
     flex-wrap: wrap;
+  }
+
+  .lab-head {
+    flex-direction: column;
+  }
+
+  .lab-actions {
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .factor-lab-grid {
+    grid-template-columns: 1fr;
   }
 }
 

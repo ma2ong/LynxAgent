@@ -20,6 +20,25 @@
       </div>
     </section>
 
+    <section class="risk-panel" v-if="account.risk">
+      <div class="risk-item">
+        <span>总仓位</span>
+        <el-progress :percentage="ratioPct(account.risk.exposure_ratio)" :status="account.risk.exposure_ratio >= 0.85 ? 'exception' : undefined" />
+      </div>
+      <div class="risk-item">
+        <span>现金缓冲</span>
+        <el-progress :percentage="ratioPct(account.risk.cash_ratio)" :status="account.risk.cash_ratio < 0.05 ? 'exception' : 'success'" />
+      </div>
+      <el-alert
+        v-if="account.risk.flags?.length"
+        :title="account.risk.flags.join('；')"
+        type="warning"
+        show-icon
+        :closable="false"
+      />
+      <div v-else class="risk-ok">Paper 风控正常：单票上限 25%，总仓位上限 85%，现金缓冲下限 5%。</div>
+    </section>
+
     <div class="grid">
       <section class="panel order-panel">
         <div class="panel-title">下单</div>
@@ -118,6 +137,8 @@ const fmtTime = (v: string) => (v ? new Date(v).toLocaleString('zh-CN') : '-')
 
 const pnlClass = (v?: number | null) => (v == null ? '' : v >= 0 ? 'up' : 'down')
 
+const ratioPct = (v?: number | null) => Math.round(Number(v || 0) * 100)
+
 const floatPnl = (row: PaperPosition) =>
   row.last_price == null ? null : Number(((row.last_price - row.avg_cost) * row.quantity).toFixed(2))
 
@@ -210,6 +231,30 @@ onMounted(loadAll)
   grid-template-columns: 300px minmax(0, 1fr);
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.risk-panel {
+  display: grid;
+  grid-template-columns: 1fr 1fr minmax(320px, 1.4fr);
+  gap: 10px;
+  margin-bottom: 12px;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.risk-item span {
+  display: block;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 6px;
+}
+
+.risk-ok {
+  color: var(--el-color-success);
+  font-size: 13px;
+  align-self: center;
 }
 
 .panel {

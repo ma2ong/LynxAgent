@@ -133,8 +133,15 @@ class LiteBatchAnalysisRequest(BaseModel):
     parameters: dict[str, Any] | None = None
 
 
+_DEEP_ANALYSIS_SYSTEM = (
+    "你是严谨的 A 股卖方分析师，基于公开信息与常识做研究分析，不夸大、不编造数据。"
+    "严格按用户要求的格式输出：要求 JSON 时只输出合法 JSON（不要 markdown 代码块标记）；"
+    "要求只输出评级词时只输出那个词，不加任何解释。"
+)
+
+
 class LiteDeepAnalysisLLM:
-    """Deterministic chat adapter for Claude's deep-analysis framework in SaaS Lite."""
+    """深度分析框架的 chat 适配器：优先真 LLM（DeepSeek 等），无 key/出错时回退确定性模板。"""
 
     def __init__(self, code: str, name: str):
         self.code = code
@@ -142,10 +149,20 @@ class LiteDeepAnalysisLLM:
         self.call_count = 0
 
     def chat(self, prompt: str) -> str:
-        # The deep-analysis framework fires these prompts CONCURRENTLY (ThreadPoolExecutor),
-        # so responses must be keyed by prompt content — never by call order.
         self.call_count += 1
+        # 优先真 LLM；失败/无 key 回退模板，保证框架不崩。
+        try:
+            from quantcore.quant import llm as _qllm
+            if _qllm.available():
+                text = _qllm.chat(prompt, system=_DEEP_ANALYSIS_SYSTEM, deep=True, max_tokens=1500)
+                if text and text.strip():
+                    return text.strip()
+        except Exception:
+            pass
+        return self._canned(prompt)
 
+    def _canned(self, prompt: str) -> str:
+        # 确定性模板兜底：框架并发解析特定 JSON，按 prompt 内容分发（不靠调用顺序）。
         if "产业链" in prompt:
             return json.dumps(
                 {
@@ -4444,9 +4461,14 @@ async def enrich_lite_result_with_deep_analysis(
     industry_chain = deep_result.get("industry") or {}
 
     result["analysis_type"] = "saas-lite-quant+claude-deep-analysis"
-    result["analysis_engine"] = "Claude DeepAnalysisFramework + SaaS Lite QuantEngine"
-    result["llm_provider"] = "claude-deep-framework"
-    result["llm_model"] = parameters.get("deep_analysis_model") or "lite-deterministic-adapter"
+    result["analysis_engine"] = "DeepAnalysisFramework + SaaS Lite QuantEngine"
+    try:
+        from quantcore.quant import llm as _qllm
+        _llm_on = _qllm.available()
+    except Exception:
+        _llm_on = False
+    result["llm_provider"] = "deepseek" if _llm_on else "deterministic-fallback"
+    result["llm_model"] = parameters.get("deep_analysis_model") or ("deepseek-chat" if _llm_on else "lite-deterministic-adapter")
     result["model_info"] = "Claude 8步深度分析 + SaaS Lite量化画像"
     result["deep_rating"] = rating
     result["deep_analysis"] = deep_result

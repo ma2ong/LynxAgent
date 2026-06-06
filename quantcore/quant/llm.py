@@ -42,9 +42,15 @@ def _resolve_api_key(provider: str) -> str:
 def _client_and_model(deep: bool = False):
     """构造 OpenAI 兼容客户端与模型名；缺密钥返回 (None, None)。"""
     cfg = _load_config()
-    provider = str(cfg.get("llm_provider") or "openai")
-    base_url = str(cfg.get("backend_url") or "https://api.openai.com/v1")
-    model = str(cfg.get("deep_think_llm" if deep else "quick_think_llm") or "gpt-4o-mini")
+    # 优先级：仓库配置 > 环境变量 > 默认（OpenAI）。让 LLM provider 可由 .env 直接配置。
+    provider = str(cfg.get("llm_provider") or os.getenv("LLM_PROVIDER") or "openai")
+    base_url = str(cfg.get("backend_url") or os.getenv("LLM_BASE_URL") or "https://api.openai.com/v1")
+    model = str(
+        cfg.get("deep_think_llm" if deep else "quick_think_llm")
+        or os.getenv("LLM_DEEP_MODEL" if deep else "LLM_QUICK_MODEL")
+        or os.getenv("LLM_MODEL")
+        or "gpt-4o-mini"
+    )
     api_key = _resolve_api_key(provider)
     if not api_key:
         return None, None

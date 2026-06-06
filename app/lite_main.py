@@ -77,6 +77,24 @@ async def _start_ml_factor_scheduler() -> None:
         replace_existing=True,
         misfire_grace_time=3600,
     )
+
+    # serenity 事件扫描：每工作日 9:30 / 13:30 刷新一次入缓存
+    async def _refresh_serenity_events() -> None:
+        from quantcore.quant.serenity_service import run_events_sync
+        try:
+            await asyncio.to_thread(run_events_sync, True, 30)
+        except Exception as exc:  # noqa: BLE001
+            import warnings
+            warnings.warn(f"serenity daily refresh failed: {exc}", RuntimeWarning, stacklevel=1)
+
+    _ml_factor_scheduler.add_job(
+        _refresh_serenity_events,
+        CronTrigger.from_crontab(os.getenv("SERENITY_REFRESH_CRON", "30 9,13 * * 1-5"), timezone=tz),
+        id="serenity_events_daily",
+        name="serenity事件扫描刷新",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     _ml_factor_scheduler.start()
 
 

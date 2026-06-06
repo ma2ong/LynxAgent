@@ -380,6 +380,12 @@ export const quantApi = {
     force?: boolean
   } = {}) =>
     unwrap<MLFactorResult>(await ApiClient.get('/api/quant/ml/factor-model', params, { timeout: 300000 })),
+
+  serenityEvents: async (force = false, maxNews = 30) =>
+    unwrap<SerenityEventsResult>(await ApiClient.get('/api/quant/serenity/events', { force, max_news: maxNews }, { timeout: 300000 })),
+
+  serenityDeep: async (payload: { theme: string; event?: string; beneficiaries?: any[] }) =>
+    unwrap<any>(await ApiClient.post('/api/quant/serenity/deep', payload, { timeout: 180000 })),
 }
 
 export interface MLFactorPick {
@@ -416,4 +422,24 @@ export interface MLFactorResult {
   age_sec?: number
   generated_at: number
   error?: string
+}
+
+export interface SerenityBeneficiary { symbol: string; name: string; why?: string }
+export interface SerenityEvent {
+  event: string
+  theme: string
+  thesis: string
+  beneficiaries: SerenityBeneficiary[]
+  validation: string
+  falsification: string
+  source_url: string
+  ts: number
+}
+export interface SerenityEventsResult {
+  status: 'ready' | 'computing'
+  events?: SerenityEvent[]
+  count?: number
+  cached?: boolean
+  age_sec?: number
+  elapsed_sec?: number
 }

@@ -163,6 +163,32 @@ async def ml_factor_model(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class SerenityDeepRequest(BaseModel):
+    theme: str
+    event: str = ""
+    beneficiaries: List[dict] = Field(default_factory=list)
+
+
+@router.get("/serenity/events")
+async def serenity_events(force: bool = False, max_news: int = 30):
+    """serenity 事件驱动选股：每日扫新闻→受益股卡片。非阻塞缓存。"""
+    try:
+        from quantcore.quant.serenity_service import request_events
+        return await asyncio.to_thread(request_events, force, max_news)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/serenity/deep")
+async def serenity_deep(req: SerenityDeepRequest):
+    """对某题材跑完整 serenity 5 步深度报告。"""
+    try:
+        from quantcore.quant.serenity_service import deep_for_theme
+        return await asyncio.to_thread(deep_for_theme, req.theme, req.event, req.beneficiaries)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/backtest")
 async def backtest_strategy(req: QuantBacktestRequest):
     try:

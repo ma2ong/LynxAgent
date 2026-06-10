@@ -55,3 +55,40 @@ def test_migration_idempotent_on_existing_db(tmp_path):
     db = tmp_path / "auth.sqlite"
     LiteAuthStore(db_path=db)
     LiteAuthStore(db_path=db)  # 第二次初始化不应报错
+
+
+def test_require_quota_blocks_over_limit(tmp_path, monkeypatch):
+    import asyncio
+    from fastapi import HTTPException
+    import app.lite_billing as lb
+
+    billing = lb.BillingStore(db_path=tmp_path / "q.sqlite")
+    monkeypatch.setattr(lb, "billing", billing)
+    user = {"id": "u1", "plan": "free", "plan_expires_at": None}
+
+    dep = lb.require_quota("deep_analysis")
+    for _ in range(3):  # free 每日 3 次
+        asyncio.run(dep.dependency(user=user))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(dep.dependency(user=user))
+    assert exc.value.status_code == 402
+    assert exc.value.detail["code"] == "quota_exceeded"
+
+
+def test_require_quota_member_feature_gate(tmp_path, monkeypatch):
+    import asyncio
+    from fastapi import HTTPException
+    import app.lite_billing as lb
+
+    billing = lb.BillingStore(db_path=tmp_path / "q2.sqlite")
+    monkeypatch.setattr(lb, "billing", billing)
+
+    dep = lb.require_quota("serenity_deep", feature="serenity_deep")
+    free_user = {"id": "u1", "plan": "free", "plan_expires_at": None}
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(dep.dependency(user=free_user))
+    assert exc.value.detail["code"] == "member_required"
+
+    member = {"id": "u2", "plan": "member", "plan_expires_at": None}
+    result = asyncio.run(dep.dependency(user=member))
+    assert result["id"] == "u2"

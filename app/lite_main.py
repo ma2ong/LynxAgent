@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.lite_auth import get_current_lite_user, router as lite_auth_router, store
+from app.lite_billing import router as billing_router
 from app.routers.quant import router as quant_router
 from quantcore.quant import QuantEngine
 from quantcore.quant.sync_service import get_sync_service
@@ -44,6 +45,7 @@ app.add_middleware(
 
 app.include_router(lite_auth_router)
 app.include_router(quant_router, dependencies=[Depends(get_current_lite_user)])
+app.include_router(billing_router)
 
 # ---- 每日全市场 AI 因子模型刷新（收盘 + 数据同步后入缓存）----
 _ml_factor_scheduler: "AsyncIOScheduler | None" = None

@@ -5,6 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.lite_billing import require_quota
 from quantcore.quant import QuantEngine
 from quantcore.quant.chart_service import build_chart_payload
 from quantcore.quant.data_sources import data_source_status
@@ -148,6 +149,7 @@ async def ml_factor_model(
     neutralize: bool = True,
     retrain_every: int = 20,
     force: bool = False,
+    user: dict = require_quota("factor_model", feature="lab", cost=0),
 ):
     """LightGBM 因子模型：滚动再训练 + Top-K 选股 + 回测净值。
 
@@ -180,7 +182,8 @@ async def serenity_events(force: bool = False, max_news: int = 30):
 
 
 @router.post("/serenity/deep")
-async def serenity_deep(req: SerenityDeepRequest):
+async def serenity_deep(req: SerenityDeepRequest,
+                        user: dict = require_quota("serenity_deep", feature="serenity_deep")):
     """对某题材跑完整 serenity 5 步深度报告。"""
     try:
         from quantcore.quant.serenity_service import deep_for_theme
@@ -190,7 +193,8 @@ async def serenity_deep(req: SerenityDeepRequest):
 
 
 @router.post("/backtest")
-async def backtest_strategy(req: QuantBacktestRequest):
+async def backtest_strategy(req: QuantBacktestRequest,
+                            user: dict = require_quota("backtest", feature="lab", cost=0)):
     try:
         result = await asyncio.to_thread(
             engine.backtest,
@@ -226,7 +230,8 @@ async def sync_datalake(req: QuantPoolRequest):
 
 
 @router.post("/research")
-async def research_factors(req: QuantResearchRequest):
+async def research_factors(req: QuantResearchRequest,
+                           user: dict = require_quota("research", feature="lab", cost=0)):
     try:
         return await asyncio.to_thread(engine.research_factors, req.symbols, req.start_date, req.end_date, req.initial_cash)
     except Exception as exc:
@@ -235,7 +240,7 @@ async def research_factors(req: QuantResearchRequest):
 
 # ---- 个股 AI 研报 (feature A) ----
 @router.get("/report")
-async def quant_report(symbol: str):
+async def quant_report(symbol: str, user: dict = require_quota("stock_report")):
     try:
         return await asyncio.to_thread(build_stock_report, symbol)
     except Exception as exc:
@@ -249,7 +254,8 @@ class PipelineRunRequest(BaseModel):
 
 
 @router.post("/pipeline/run")
-async def quant_pipeline_run(req: PipelineRunRequest):
+async def quant_pipeline_run(req: PipelineRunRequest,
+                             user: dict = require_quota("pipeline", feature="lab")):
     try:
         return await asyncio.to_thread(run_pipeline, req.universe, req.max_candidates, True)
     except Exception as exc:
@@ -270,7 +276,8 @@ async def quant_pipeline_run_detail(run_id: str):
 
 
 @router.post("/pipeline/t5-review")
-async def quant_pipeline_t5(run_id: Optional[str] = None):
+async def quant_pipeline_t5(run_id: Optional[str] = None,
+                            user: dict = require_quota("pipeline", feature="lab")):
     from quantcore.quant.pipeline.orchestrator import RUNS_DIR
     import os
     run_dir = os.path.join(RUNS_DIR, run_id) if run_id else None
@@ -283,7 +290,8 @@ class QuickCriticRequest(BaseModel):
 
 
 @router.post("/pipeline/quick-critic")
-async def pipeline_quick_critic(req: QuickCriticRequest):
+async def pipeline_quick_critic(req: QuickCriticRequest,
+                                user: dict = require_quota("pipeline", feature="lab")):
     """对给定股票列表做快速规则 critic 打分，供一键推荐/形态智选结果富集 AI 评审分。"""
     try:
         return await asyncio.to_thread(quick_critic_batch, req.symbols, req.names)

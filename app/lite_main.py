@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.lite_auth import get_current_lite_user, router as lite_auth_router, store
-from app.lite_billing import router as billing_router
+from app.lite_billing import PLANS, billing, effective_plan, require_quota, router as billing_router
 from app.routers.quant import router as quant_router
 from quantcore.quant import QuantEngine
 from quantcore.quant.sync_service import get_sync_service
@@ -3255,7 +3255,7 @@ async def _run_lite_single_analysis_task(
 
 
 @app.post("/api/analysis/single")
-async def single_analysis(req: LiteSingleAnalysisRequest, user: dict[str, Any] = Depends(get_current_lite_user)):
+async def single_analysis(req: LiteSingleAnalysisRequest, user: dict[str, Any] = require_quota("deep_analysis")):
     raw_symbol = (req.symbol or req.stock_code or "").strip()
     if not raw_symbol:
         return {"success": False, "data": None, "message": "请输入股票代码", "code": 400}
@@ -3293,7 +3293,7 @@ async def single_analysis(req: LiteSingleAnalysisRequest, user: dict[str, Any] =
 
 
 @app.post("/api/analysis/batch")
-async def batch_analysis(req: LiteBatchAnalysisRequest):
+async def batch_analysis(req: LiteBatchAnalysisRequest, user: dict[str, Any] = Depends(get_current_lite_user)):
     raw_symbols = req.symbols or req.stock_codes or []
     symbols = []
     for item in raw_symbols:
@@ -3304,6 +3304,15 @@ async def batch_analysis(req: LiteBatchAnalysisRequest):
         return {"success": False, "data": None, "message": "请输入股票代码", "code": 400}
     if len(symbols) > 20:
         return {"success": False, "data": None, "message": "SaaS Lite 单次批量分析最多支持 20 只", "code": 400}
+
+    plan = PLANS[effective_plan(user)]
+    used = billing.used_today(user["id"])
+    if used + len(symbols) > plan["daily_llm"]:
+        return {
+            "success": False, "data": None, "code": 402,
+            "message": f"批量需 {len(symbols)} 次额度，今日剩余 {max(0, plan['daily_llm'] - used)} 次",
+        }
+    billing.record(user["id"], "deep_analysis", n=len(symbols))
 
     batch_id = "batch_" + secrets.token_hex(8)
     now = datetime.now(timezone.utc).isoformat()

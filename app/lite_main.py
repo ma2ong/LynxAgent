@@ -3308,10 +3308,13 @@ async def batch_analysis(req: LiteBatchAnalysisRequest, user: dict[str, Any] = D
     plan = PLANS[effective_plan(user)]
     used = billing.used_today(user["id"])
     if used + len(symbols) > plan["daily_llm"]:
-        return {
-            "success": False, "data": None, "code": 402,
+        # 与 require_quota 一致抛标准 402，前端拦截器统一处理
+        raise HTTPException(status_code=402, detail={
+            "code": "quota_exceeded",
             "message": f"批量需 {len(symbols)} 次额度，今日剩余 {max(0, plan['daily_llm'] - used)} 次",
-        }
+            "used": used,
+            "limit": plan["daily_llm"],
+        })
     billing.record(user["id"], "deep_analysis", n=len(symbols))
 
     batch_id = "batch_" + secrets.token_hex(8)

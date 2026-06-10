@@ -2,9 +2,10 @@ import asyncio
 from dataclasses import asdict
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.lite_auth import get_current_lite_user
 from app.lite_billing import require_quota
 from quantcore.quant import QuantEngine
 from quantcore.quant.chart_service import build_chart_payload
@@ -172,10 +173,15 @@ class SerenityDeepRequest(BaseModel):
 
 
 @router.get("/serenity/events")
-async def serenity_events(force: bool = False, max_news: int = 30):
+async def serenity_events(force: bool = False, max_news: int = 30,
+                          user: dict = Depends(get_current_lite_user)):
     """serenity 事件驱动选股：每日扫新闻→受益股卡片。非阻塞缓存。"""
     try:
         from quantcore.quant.serenity_service import request_events
+        # 强刷触发全量 LLM 扫描（最多 30 次调用），仅 admin 可用；普通用户走共享缓存
+        if not user.get("is_admin"):
+            force = False
+        max_news = max(1, min(int(max_news), 30))
         return await asyncio.to_thread(request_events, force, max_news)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

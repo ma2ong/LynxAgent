@@ -21,8 +21,20 @@
         <el-menu-item index="/quant">
           <el-icon><TrendCharts /></el-icon><span>智能选股</span>
         </el-menu-item>
+        <el-menu-item index="/portfolio-check">
+          <el-icon><PieChart /></el-icon><span>组合体检</span>
+        </el-menu-item>
+        <el-menu-item index="/factor-lab">
+          <el-icon><Operation /></el-icon><span>AI因子实验室</span>
+        </el-menu-item>
+        <el-menu-item index="/backtest-lab">
+          <el-icon><DataAnalysis /></el-icon><span>策略回测实验台</span>
+        </el-menu-item>
         <el-menu-item index="/stock-analysis">
           <el-icon><DocumentChecked /></el-icon><span>个股深研</span>
+        </el-menu-item>
+        <el-menu-item index="/deep-research">
+          <el-icon><ChatLineRound /></el-icon><span>深研辩论</span>
         </el-menu-item>
         <el-menu-item index="/favorites">
           <el-icon><Star /></el-icon><span>我的自选股</span>
@@ -50,7 +62,7 @@
 import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, TrendCharts, Histogram, DataLine, Star, Wallet, SwitchButton,
-  DocumentChecked, Coin,
+  DocumentChecked, Coin, PieChart, Operation, DataAnalysis, ChatLineRound,
 } from '@element-plus/icons-vue'
 
 const route = useRoute()

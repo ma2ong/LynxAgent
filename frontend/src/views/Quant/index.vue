@@ -577,10 +577,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { DataLine, Search, TrendCharts } from '@element-plus/icons-vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { favoritesApi } from '@/api/favorites'
 import KLineProChart from '@/components/KLineProChart.vue'
 import {
@@ -600,9 +600,18 @@ import {
   type QuantStockPoolResult
 } from '@/api/quant'
 
-const activeTab = ref('screen')
+const route = useRoute()
+const routeInitialTab = () => String(route.meta.initialTab || route.query.tab || 'screen')
+const activeTab = ref(routeInitialTab())
 
 const router = useRouter()
+
+watch(
+  () => route.fullPath,
+  () => {
+    activeTab.value = routeInitialTab()
+  },
+)
 
 const poolLimit = ref(200)
 const poolLoading = ref(false)

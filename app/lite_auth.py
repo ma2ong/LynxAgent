@@ -107,6 +107,15 @@ class LiteAuthStore:
                 )
                 """
             )
+            # 迁移：老库补 plan 字段（幂等，列已存在则跳过）
+            for ddl in (
+                "ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'",
+                "ALTER TABLE users ADD COLUMN plan_expires_at TEXT",
+            ):
+                try:
+                    conn.execute(ddl)
+                except sqlite3.OperationalError:
+                    pass
             conn.commit()
 
     def ensure_admin(self) -> dict[str, Any]:
@@ -258,6 +267,8 @@ class LiteAuthStore:
             "updated_at": row["updated_at"],
             "last_login": row["last_login"],
             "preferences": self.preferences(row),
+            "plan": row["plan"] if "plan" in row.keys() else "free",
+            "plan_expires_at": row["plan_expires_at"] if "plan_expires_at" in row.keys() else None,
             "daily_quota": 1000,
             "concurrent_limit": 3,
             "total_analyses": 0,

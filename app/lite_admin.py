@@ -1,6 +1,7 @@
 """极简管理后台 API：用户列表（含用量）、改套餐、停启用。仅 admin。"""
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -38,6 +39,8 @@ class AdminStore:
     def set_plan(self, username: str, plan: str, expires_at: Optional[str]) -> None:
         if plan not in PLANS:
             raise HTTPException(status_code=400, detail=f"未知套餐: {plan}")
+        if expires_at is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", expires_at):
+            raise HTTPException(status_code=400, detail="到期日格式须为 YYYY-MM-DD")
         if not self.auth.get_by_username(username):
             raise HTTPException(status_code=404, detail="用户不存在")
         with self.auth.connect() as conn:
@@ -48,8 +51,12 @@ class AdminStore:
             conn.commit()
 
     def set_active(self, username: str, active: bool) -> None:
-        if not self.auth.get_by_username(username):
+        row = self.auth.get_by_username(username)
+        if not row:
             raise HTTPException(status_code=404, detail="用户不存在")
+        if not active and int(row["is_admin"]) == 1:
+            # 防自锁：管理员账号不可被停用（含自己），恢复只能动数据库
+            raise HTTPException(status_code=400, detail="不能停用管理员账号")
         with self.auth.connect() as conn:
             conn.execute(
                 "UPDATE users SET is_active = ?, updated_at = ? WHERE username = ?",

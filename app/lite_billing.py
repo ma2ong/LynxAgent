@@ -109,6 +109,8 @@ def require_quota(action: str, feature: str | None = None, cost: int = 1):
                 "message": "该功能为会员专属，升级会员后可用",
             })
         if cost > 0:
+            # 已知限制（TOCTOU）：check 与 record 非同一事务，同用户并发请求可能
+            # 超额 1-2 次。M1 单机 SQLite 可接受；并发上量后改 BEGIN IMMEDIATE 单事务。
             used = billing.used_today(user["id"])
             if used + cost > plan["daily_llm"]:
                 raise HTTPException(status_code=402, detail={

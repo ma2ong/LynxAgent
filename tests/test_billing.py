@@ -92,3 +92,10 @@ def test_require_quota_member_feature_gate(tmp_path, monkeypatch):
     member = {"id": "u2", "plan": "member", "plan_expires_at": None}
     result = asyncio.run(dep.dependency(user=member))
     assert result["id"] == "u2"
+
+
+def test_total_used_across_days(billing):
+    billing.record("u1", "deep_analysis")
+    billing.record("u1", "stock_report", n=4)
+    assert billing.total_used("u1") == 5
+    assert billing.total_used("u2") == 0

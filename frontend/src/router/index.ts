@@ -20,6 +20,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'favorites', name: 'favorites', component: () => import('@/views/Favorites/index.vue') },
       { path: 'portfolio-check', name: 'portfolio-check', component: () => import('@/views/Favorites/index.vue') },
       { path: 'data-center', name: 'data-center', component: () => import('@/views/DataCenter/Index.vue') },
+      { path: 'account/membership', name: 'membership', component: () => import('@/views/Account/Membership.vue') },
     ],
   },
 ]

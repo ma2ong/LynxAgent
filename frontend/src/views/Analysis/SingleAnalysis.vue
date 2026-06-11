@@ -48,7 +48,6 @@
             </strong>
           </div>
         </div>
-        <el-button class="to-paper" @click="goPaper">去模拟交易</el-button>
       </section>
 
       <el-alert v-if="degraded" type="info" :closable="false" show-icon class="degraded">
@@ -71,13 +70,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Search, Loading } from '@element-plus/icons-vue'
 import { analysisApi } from '@/api/analysis'
 
 const route = useRoute()
-const router = useRouter()
 const symbol = ref('')
 const loading = ref(false)
 const result = ref<Record<string, any> | null>(null)
@@ -157,8 +155,6 @@ const run = async () => {
   }
 }
 
-const goPaper = () => router.push('/paper')
-
 onMounted(() => {
   const s = route.query.stock
   if (typeof s === 'string' && s) {
@@ -205,7 +201,6 @@ onMounted(() => {
   .metrics span { display: block; font-size: 12px; color: var(--el-text-color-secondary); }
   .metrics strong { font-size: 18px; }
 
-  .to-paper { margin-left: auto; }
 }
 
 .panel {

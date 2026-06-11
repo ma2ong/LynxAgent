@@ -16,7 +16,7 @@
           <el-icon><Histogram /></el-icon><span>A股热点</span>
         </el-menu-item>
         <el-menu-item index="/insights/catalyst">
-          <el-icon><DataLine /></el-icon><span>利好监控</span>
+          <el-icon><DataLine /></el-icon><span>催化剂监控</span>
         </el-menu-item>
         <el-menu-item index="/quant">
           <el-icon><TrendCharts /></el-icon><span>智能选股</span>

@@ -63,5 +63,6 @@ def run_events_sync(force: bool = False, max_news: int = 30) -> dict:
 
 
 def deep_for_theme(theme: str, event: str, beneficiaries: List[dict]) -> dict:
+    from quantcore.shared.disclaimer import attach_disclaimer
     rep = deep_report(theme, event, beneficiaries)
-    return rep or {"error": "深度分析失败，请重试"}
+    return attach_disclaimer(rep) if rep else {"error": "深度分析失败，请重试"}

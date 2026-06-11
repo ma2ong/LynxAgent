@@ -1,7 +1,7 @@
 <template>
   <div class="serenity">
     <div class="head">
-      <h2>利好监控 <el-tag size="small" type="warning">事件驱动 · serenity</el-tag></h2>
+      <h2>催化剂监控 <el-tag size="small" type="warning">事件驱动 · serenity</el-tag></h2>
       <p class="sub">从真实新闻中筛出"可观察需求变化"，映射到可投资 A 股受益标的。研究假设，非投资建议。</p>
       <el-button size="small" :loading="busy" @click="load(true)">刷新</el-button>
     </div>

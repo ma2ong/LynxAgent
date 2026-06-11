@@ -28,6 +28,7 @@ from app.routers.quant import router as quant_router
 from quantcore.quant import QuantEngine
 from quantcore.quant.sync_service import get_sync_service
 from quantcore.trading import EasyTraderBridge, EasyTraderOrder
+from quantcore.shared.disclaimer import attach_disclaimer
 
 
 app = FastAPI(
@@ -3240,6 +3241,8 @@ async def _run_lite_single_analysis_task(
         error_message = str(exc)
         current_step = "SaaS Lite 深度分析失败"
 
+    if result is not None:
+        attach_disclaimer(result)
     lite_analysis_tasks[task_id].update(
         {
             "symbol": symbol,

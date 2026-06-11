@@ -80,17 +80,25 @@ function openPlanDialog(row: AdminUser) {
 
 async function savePlan() {
   if (!editingUser) return
-  await adminSetPlan(editingUser.username, editPlan.value,
-    editPlan.value === 'member' ? editExpires.value : null)
-  ElMessage.success('已更新')
-  dialogVisible.value = false
-  await load()
+  try {
+    await adminSetPlan(editingUser.username, editPlan.value,
+      editPlan.value === 'member' ? editExpires.value || null : null)
+    ElMessage.success('已更新')
+    dialogVisible.value = false
+    await load()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '操作失败')
+  }
 }
 
 async function toggleActive(row: AdminUser) {
-  await adminSetActive(row.username, !row.is_active)
-  ElMessage.success(row.is_active ? '已停用' : '已启用')
-  await load()
+  try {
+    await adminSetActive(row.username, !row.is_active)
+    ElMessage.success(row.is_active ? '已停用' : '已启用')
+    await load()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '操作失败')
+  }
 }
 
 onMounted(load)

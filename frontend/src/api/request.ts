@@ -24,6 +24,8 @@ http.interceptors.request.use((config) => {
 })
 
 // Incoming: hand back the JSON body; bounce to login on an expired session.
+let quotaDialogOpen = false
+
 http.interceptors.response.use(
   (response) => response.data,
   (error) => {
@@ -34,15 +36,20 @@ http.interceptors.response.use(
     if (error?.response?.status === 402) {
       const detail = error.response.data?.detail
       const msg = detail?.message || '已达套餐限制'
-      import('element-plus').then(({ ElMessageBox }) => {
-        ElMessageBox.confirm(msg, detail?.code === 'member_required' ? '会员专属功能' : '今日额度已用完', {
-          confirmButtonText: '了解会员',
-          cancelButtonText: '我知道了',
-          type: 'warning',
-        }).then(() => {
-          location.href = '/account/membership'
-        }).catch(() => {})
-      })
+      if (!quotaDialogOpen) {
+        quotaDialogOpen = true
+        import('element-plus').then(({ ElMessageBox }) => {
+          ElMessageBox.confirm(msg, detail?.code === 'member_required' ? '会员专属功能' : '今日额度已用完', {
+            confirmButtonText: '了解会员',
+            cancelButtonText: '我知道了',
+            type: 'warning',
+          }).then(() => {
+            location.href = '/account/membership'
+          }).catch(() => {}).finally(() => {
+            quotaDialogOpen = false
+          })
+        })
+      }
       return Promise.reject(new Error(msg))
     }
     const reason = error?.response?.data?.detail?.message

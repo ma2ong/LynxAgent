@@ -42,14 +42,19 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'
 
 const info = ref<BillingMe | null>(null)
 const usageLabel = computed(() => info.value ? `${info.value.used_today}/${info.value.daily_limit}` : '')
 
 onMounted(async () => {
-  const res = await fetchBillingMe()
-  info.value = (res?.data as BillingMe) ?? null
+  try {
+    const res = await fetchBillingMe()
+    info.value = (res?.data as BillingMe) ?? null
+  } catch (e: any) {
+    ElMessage.error(e?.message || '用量信息加载失败')
+  }
 })
 </script>
 

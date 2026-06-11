@@ -2,6 +2,8 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 const routes: RouteRecordRaw[] = [
   { path: '/login', name: 'login', component: () => import('@/views/Auth/Login.vue') },
+  { path: '/legal/terms', name: 'terms', component: () => import('@/views/Legal/Terms.vue') },
+  { path: '/legal/privacy', name: 'privacy', component: () => import('@/views/Legal/Privacy.vue') },
   {
     path: '/',
     component: () => import('@/components/Layout/AppLayout.vue'),

@@ -19,7 +19,6 @@ const routes: RouteRecordRaw[] = [
       { path: 'insights/catalyst', name: 'catalyst', component: () => import('@/views/Insights/CatalystMonitor.vue') },
       { path: 'favorites', name: 'favorites', component: () => import('@/views/Favorites/index.vue') },
       { path: 'portfolio-check', name: 'portfolio-check', component: () => import('@/views/Favorites/index.vue') },
-      { path: 'paper', name: 'paper', component: () => import('@/views/PaperTrading/index.vue') },
       { path: 'data-center', name: 'data-center', component: () => import('@/views/DataCenter/Index.vue') },
     ],
   },

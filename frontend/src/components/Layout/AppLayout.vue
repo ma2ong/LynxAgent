@@ -39,14 +39,20 @@
         <el-menu-item index="/favorites">
           <el-icon><Star /></el-icon><span>我的自选股</span>
         </el-menu-item>
-        <el-menu-item index="/paper">
-          <el-icon><Wallet /></el-icon><span>模拟交易</span>
-        </el-menu-item>
         <el-menu-item index="/data-center">
           <el-icon><Coin /></el-icon><span>数据中心</span>
         </el-menu-item>
+        <el-menu-item index="/account/membership">
+          <el-icon><Medal /></el-icon><span>会员与用量</span>
+        </el-menu-item>
+        <el-menu-item v-if="currentUser?.is_admin" index="/admin/users">
+          <el-icon><Setting /></el-icon><span>用户管理</span>
+        </el-menu-item>
       </el-menu>
       <div class="sidebar-foot">
+        <div v-if="billingInfo" class="quota-chip" @click="$router.push('/account/membership')">
+          {{ billingInfo.plan_label }} · 今日 AI {{ billingInfo.remaining_today }}/{{ billingInfo.daily_limit }}
+        </div>
         <el-button text size="small" @click="logout">
           <el-icon><SwitchButton /></el-icon>退出登录
         </el-button>
@@ -59,16 +65,31 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Odometer, TrendCharts, Histogram, DataLine, Star, Wallet, SwitchButton,
+  Odometer, TrendCharts, Histogram, DataLine, Star, SwitchButton,
   DocumentChecked, Coin, PieChart, Operation, DataAnalysis, ChatLineRound,
+  Medal, Setting,
 } from '@element-plus/icons-vue'
+import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'
+import { fetchBillingMe, type BillingMe } from '@/api/billing'
 
 const route = useRoute()
 const router = useRouter()
 
+const billingInfo = ref<BillingMe | null>(null)
+
+onMounted(async () => {
+  await loadCurrentUser()
+  try {
+    const res = await fetchBillingMe()
+    billingInfo.value = (res?.data as BillingMe) ?? null
+  } catch { /* 配额信息拉不到不阻塞页面 */ }
+})
+
 const logout = () => {
+  clearCurrentUser()
   localStorage.removeItem('auth-token')
   router.push('/login')
 }
@@ -113,5 +134,17 @@ const logout = () => {
   padding: 18px 20px;
   background: var(--el-fill-color-lighter);
   overflow-y: auto;
+}
+
+.quota-chip {
+  font-size: 12px;
+  color: #909399;
+  padding: 4px 8px;
+  border: 1px solid #e4e7ed;
+  border-radius: 10px;
+  cursor: pointer;
+  margin-bottom: 6px;
+  text-align: center;
+  &:hover { color: #409eff; border-color: #409eff; }
 }
 </style>

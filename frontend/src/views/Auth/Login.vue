@@ -97,6 +97,18 @@ async function doRegister() {
     ElMessage.warning('请先阅读并勾选用户协议与免责声明')
     return
   }
+  if (regForm.value.username.trim().length < 3) {
+    ElMessage.warning('用户名至少 3 个字符')
+    return
+  }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(regForm.value.email)) {
+    ElMessage.warning('请输入有效邮箱')
+    return
+  }
+  if (regForm.value.password.length < 6) {
+    ElMessage.warning('密码至少 6 位')
+    return
+  }
   if (regForm.value.password !== regForm.value.confirm_password) {
     ElMessage.warning('两次输入的密码不一致')
     return

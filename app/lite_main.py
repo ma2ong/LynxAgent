@@ -2536,7 +2536,7 @@ async def lite_catalysts(window: str = "24h", threshold: float = 1.5, limit: int
                 "tags": event["tags"],
                 "url": event["url"],
             } for event in top_events],
-            "source_note": "利好监控优先使用量化中心同源智能推荐股票池，再叠加真实公告、研报和新闻事件权重。",
+            "source_note": "催化剂监控优先使用量化中心同源智能推荐股票池，再叠加真实公告、研报和新闻事件权重。",
         }
         response = {"success": True, "data": data, "message": "ok"}
         _cache_set(cache_key, response)

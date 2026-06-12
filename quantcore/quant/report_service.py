@@ -389,17 +389,17 @@ def build_stock_report(symbol: str) -> Dict[str, object]:
     except Exception:
         news = []
 
-    # K线图数据（近120日，供前端 ECharts candlestick）
+    # K线图数据（返回近180日，前端默认展示近40日并支持 dataZoom 缩放）
     kline: Dict[str, object] = {}
     if has_data:
-        df120 = data.tail(120).copy()
-        idx = df120.index
+        df180 = data.tail(180).copy()
+        idx = df180.index
         kline = {
-            "dates": (idx.strftime("%Y-%m-%d").tolist() if hasattr(idx, "strftime") else df120.get("date", pd.Series()).astype(str).tolist()),
-            "open": df120["open"].round(2).tolist(),
-            "high": df120["high"].round(2).tolist(),
-            "low": df120["low"].round(2).tolist(),
-            "close": df120["close"].round(2).tolist(),
+            "dates": (idx.strftime("%Y-%m-%d").tolist() if hasattr(idx, "strftime") else df180.get("date", pd.Series()).astype(str).tolist()),
+            "open": df180["open"].round(2).tolist(),
+            "high": df180["high"].round(2).tolist(),
+            "low": df180["low"].round(2).tolist(),
+            "close": df180["close"].round(2).tolist(),
         }
 
     # 操作建议价位（基于历史波动率估算）

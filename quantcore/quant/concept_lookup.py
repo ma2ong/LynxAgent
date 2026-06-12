@@ -25,27 +25,38 @@ CONCEPT_TARGETS: list[tuple[str, str]] = [
     ("半导体", "国产芯片"),
     ("芯片", "国产芯片"),
     ("集成电路", "国产芯片"),
+    ("PCB", "国产芯片"),
     ("煤炭", "煤炭"),
     ("焦煤", "煤炭"),
     ("电力", "电力"),
     ("储能", "电力"),
     ("核电", "电力"),
+    ("特高压", "电力"),
     ("新能源车", "新能源车"),
     ("充电桩", "新能源车"),
     ("动力电池", "新能源车"),
     ("白酒", "大消费"),
     ("消费电子", "大消费"),
     ("食品饮料", "大消费"),
+    ("家电", "大消费"),
     ("航天", "航天军工"),
     ("军工", "航天军工"),
     ("低空经济", "航天军工"),
     ("无人机", "航天军工"),
+    ("航空发动机", "航天军工"),
+    ("航空装备", "航天军工"),
     ("创新药", "医药"),
     ("医疗器械", "医药"),
     ("CXO", "医药"),
+    ("体外诊断", "医药"),
     ("黄金", "有色金属"),
     ("铜", "有色金属"),
     ("锂", "有色金属"),
+    ("钨", "有色金属"),
+    ("稀土", "有色金属"),
+    ("铝", "有色金属"),
+    ("钛", "有色金属"),
+    ("锡", "有色金属"),
     ("重组", "公告重组"),
     ("并购", "公告重组"),
 ]
@@ -67,6 +78,7 @@ _SEED: Dict[str, str] = {
     "三孚股份": "国产芯片", "三祥新材": "国产芯片", "康强电子": "国产芯片",
     "中旗新材": "国产芯片", "华源控股": "国产芯片", "肯特催化": "国产芯片",
     "中微公司": "国产芯片", "北方华创": "国产芯片", "韦尔股份": "国产芯片",
+    "江丰电子": "国产芯片", "奥士康": "国产芯片", "雅克科技": "国产芯片",
     # 机器人
     "模塑科技": "机器人", "北投科技": "机器人", "美湖股份": "机器人",
     "移远通信": "机器人", "长华集团": "机器人", "祥鑫科技": "机器人",
@@ -84,8 +96,30 @@ _SEED: Dict[str, str] = {
     # 大消费
     "元祖股份": "大消费", "利仁科技": "大消费", "安奈儿": "大消费",
     "上海凤凰": "大消费", "中国神华": "大消费",
+    "火星人": "大消费", "海信家电": "大消费", "海尔智家": "大消费", "美的集团": "大消费",
+    # 有色金属
+    "章源钨业": "有色金属", "翔鹭钨业": "有色金属", "海亮股份": "有色金属",
+    "云南锗业": "有色金属", "国城矿业": "有色金属", "西部矿业": "有色金属",
+    "中国铝业": "有色金属", "紫金矿业": "有色金属", "赤峰黄金": "有色金属",
+    # 医药
+    "利德曼": "医药", "迈瑞医疗": "医药", "药明康德": "医药",
+    "康龙化成": "医药", "泰格医药": "医药",
+    # 新能源车
+    "多氟多": "新能源车", "宁德时代": "新能源车", "比亚迪": "新能源车",
     # 航天军工
     "久之洋": "航天军工", "海特高新": "航天军工", "中无人机": "航天军工",
+    "中信海直": "航天军工", "中航西飞": "航天军工", "万丰奥威": "航天军工",
+    "航天发展": "航天军工", "中直股份": "航天军工", "洪都航空": "航天军工",
+    "中航机电": "航天军工", "中航沈飞": "航天军工", "航发控制": "航天军工",
+    "航发动力": "航天军工", "中航光电": "航天军工", "成飞集成": "航天军工",
+    "中航电子": "航天军工", "中航重机": "航天军工", "中国航发": "航天军工",
+    "中国航空": "航天军工", "航天电器": "航天军工", "航天彩虹": "航天军工",
+    "中天火箭": "航天军工", "天奥电子": "航天军工", "鸿远电子": "国产芯片",
+    "北方导航": "航天军工", "四创电子": "航天军工", "雷电微力": "航天军工",
+    # 有色金属 additions
+    "安泰科技": "有色金属",  # 钛合金/钼制品
+    "钛白粉": "有色金属", "宝钛股份": "有色金属", "西部材料": "有色金属",
+    "中国钼业": "有色金属", "洛阳钼业": "有色金属",
     # 公告重组
     "节能铁汉": "公告重组", "金海高科": "公告重组", "联检科技": "公告重组", "蓝科高新": "公告重组",
 }
@@ -101,38 +135,38 @@ def _build_cache() -> Dict[str, str]:
         import pandas as pd
         pd.options.future.infer_string = False
         import akshare as ak
+        import socket as _socket
     except ImportError:
         return dict(_SEED)
 
-    # 获取全部概念板块列表（列名乱码，用位置取）
+    _old_timeout = _socket.getdefaulttimeout()
+    _socket.setdefaulttimeout(4)
     try:
         board_df = ak.stock_board_concept_name_em()
-        # 第1列（index=1）是板块名称
         board_names: list[str] = board_df.iloc[:, 1].astype(str).tolist()
     except Exception:
+        _socket.setdefaulttimeout(_old_timeout)
         return dict(_SEED)
 
     mapping: Dict[str, str] = dict(_SEED)  # 以种子为基础
-    used_labels: set[str] = set()
+    fetched_boards: set[str] = set()  # 每个板块只抓一次，但同一 label 可匹配多个板块
 
     for keyword, label in CONCEPT_TARGETS:
-        if label in used_labels:
-            continue  # 同一 label 只抓一次（先写入的优先级高）
         matched = next((n for n in board_names if keyword in n), None)
-        if not matched:
+        if not matched or matched in fetched_boards:
             continue
+        fetched_boards.add(matched)
         try:
             cons_df = ak.stock_board_concept_cons_em(symbol=matched)
-            # 名称列通常是第2列（index=1）
             name_field = cons_df.columns[1] if len(cons_df.columns) > 1 else cons_df.columns[0]
             for sname in cons_df[name_field].dropna().astype(str):
                 sname = sname.strip()
                 if sname and sname not in mapping:  # 种子优先级更高，不覆盖
                     mapping[sname] = label
-            used_labels.add(label)
         except Exception as exc:
             logger.debug("concept_lookup: skip %s — %s", matched, exc)
 
+    _socket.setdefaulttimeout(_old_timeout)
     logger.info("concept_lookup: cache built with %d entries (seed=%d)", len(mapping), len(_SEED))
     return mapping
 

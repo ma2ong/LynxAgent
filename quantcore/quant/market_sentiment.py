@@ -60,10 +60,13 @@ def _limit_cause(name: str, industry: str, segment: str) -> str:
         ("国产芯片", ("半导体", "芯片", "集成电路", "电子元件", "存储", "封测", "光刻胶")),
         ("机器人", ("机器人", "自动化", "电气设备", "专用设备")),
         ("煤炭", ("煤炭", "煤电", "焦煤", "焦炭")),
-        ("电力", ("电力", "能源", "火电", "水电", "核电", "光伏", "风电")),
-        ("航天军工", ("航天", "航空", "军工", "无人机", "卫星", "红外")),
+        ("电力", ("电力", "能源", "火电", "水电", "核电", "光伏", "风电", "特高压", "变压器", "电网", "输变电")),
+        ("航天军工", ("航天", "航空", "军工", "无人机", "卫星", "红外", "飞机", "直升机", "航发", "战斗机")),
+        ("有色金属", ("黄金", "铜业", "铜箔", "锂业", "钨业", "稀土", "铝业", "钛合金", "钼", "锗", "锡业", "有色")),
+        ("新能源车", ("新能源车", "动力电池", "充电桩", "锂电", "电动车")),
+        ("医药", ("创新药", "医疗器械", "CXO", "体外诊断", "生物制药", "医药")),
         ("大消费", ("消费", "食品", "服装", "家电", "日化", "零售")),
-        ("公告", ("重组", "并购", "资产注入", "中标", "订单", "增持")),
+        ("公告重组", ("重组", "并购", "资产注入", "中标", "订单", "增持")),
     ]
     for label, keys in rules:
         if any(key in text for key in keys):
@@ -147,7 +150,7 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24, realti
     # 剔除不完整交易日（个股数明显少于中位数，多为未收盘的当日）
     counts = win.groupby("date")["symbol"].size()
     if len(counts):
-        threshold_n = counts.median() * 0.6
+        threshold_n = counts.median() * 0.4
         complete = set(counts[counts >= threshold_n].index)
         win = win[win["date"].isin(complete)].copy()
     dates = sorted(win["date"].unique().tolist())
@@ -157,7 +160,20 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24, realti
 
     # 逐日聚合
     daily = win.groupby("date")
-    amount_yi = [round(float(v) / 1e8, 1) for v in daily["amount"].sum().reindex(dates).fillna(0)]
+
+    # 成交额归一化：Tencent API 仅返回约 2740 只股票（vs 历史 5000+ 只），
+    # 导致图表出现人为断崖。用 80 百分位覆盖度作参考，对低覆盖日期按比例放大，
+    # 今日盘中数据（覆盖度可能极低）不参与缩放，避免异常放大。
+    today_str = date.today().strftime("%Y-%m-%d")
+    ref_count = float(counts.quantile(0.8)) if len(counts) else 1.0
+    amount_raw = daily["amount"].sum().reindex(dates).fillna(0)
+    amount_scaled = amount_raw.copy().astype(float)
+    for d in dates:
+        cnt = int(counts.get(d, ref_count))
+        # 仅对覆盖度在 30%~80% 区间的完整交易日做放大（不含今日盘中）
+        if d != today_str and 0 < cnt < ref_count * 0.8:
+            amount_scaled[d] = float(amount_raw[d]) * (ref_count / cnt)
+    amount_yi = [round(float(v) / 1e8, 1) for v in amount_scaled]
     limit_up_cnt = [int(v) for v in daily["limit_up"].sum().reindex(dates).fillna(0)]
     limit_down_cnt = [int(v) for v in daily["limit_down"].sum().reindex(dates).fillna(0)]
     adv = daily.apply(lambda x: int((x["pct"] > 0).sum())).reindex(dates).fillna(0)

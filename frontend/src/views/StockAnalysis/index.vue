@@ -43,7 +43,7 @@
 
       <!-- K线图 -->
       <div class="card" v-if="data.kline?.dates?.length">
-        <div class="card-title">价格走势（近120日）</div>
+        <div class="card-title">价格走势（近40日，可缩放）</div>
         <div ref="klineEl" class="kline-chart"></div>
       </div>
 
@@ -317,15 +317,21 @@ const pctClass = (v?: number | null) => (v == null ? '' : v >= 0 ? 'up' : 'down'
 
 const renderKline = () => {
   if (!klineEl.value || !data.value?.kline?.dates?.length) return
-  // 每次重新分析都销毁旧实例再重建，避免二次渲染白屏
   if (klineChart) { klineChart.dispose(); klineChart = null }
   klineChart = echarts.init(klineEl.value)
   const k = data.value.kline
+  const total = k.dates.length
+  // 默认显示最近 40 个交易日，全量数据供 dataZoom 拖拽
+  const startPct = total > 40 ? Math.round((1 - 40 / total) * 100) : 0
   klineChart.setOption({
     tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-    grid: { left: 60, right: 16, top: 16, bottom: 28 },
+    grid: { left: 60, right: 16, top: 16, bottom: 60 },
     xAxis: { type: 'category', data: k.dates, axisLabel: { fontSize: 10 } },
     yAxis: { type: 'value', scale: true },
+    dataZoom: [
+      { type: 'inside', start: startPct, end: 100 },
+      { type: 'slider', start: startPct, end: 100, height: 20, bottom: 8 },
+    ],
     series: [{
       type: 'candlestick',
       data: k.dates.map((_: string, i: number) => [k.open[i], k.close[i], k.low[i], k.high[i]]),

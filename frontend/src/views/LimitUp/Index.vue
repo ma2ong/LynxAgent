@@ -129,7 +129,6 @@
             </template>
           </el-table-column>
           <el-table-column prop="cause" label="概念" width="110" />
-          <el-table-column prop="segment" label="市场" width="80" />
           <el-table-column label="特征" width="130">
             <template #default="{ row }">
               <el-tag v-if="row.is_one_price" size="small" type="danger" effect="dark" style="margin-right:4px">一字</el-tag>

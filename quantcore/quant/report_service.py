@@ -393,13 +393,28 @@ def build_stock_report(symbol: str) -> Dict[str, object]:
     kline: Dict[str, object] = {}
     if has_data:
         df180 = data.tail(180).copy()
+        c = df180["close"]
+        ma5 = c.rolling(5).mean().round(2)
+        ma10 = c.rolling(10).mean().round(2)
+        ma20 = c.rolling(20).mean().round(2)
         idx = df180.index
+        dates_list = (idx.strftime("%Y-%m-%d").tolist() if hasattr(idx, "strftime")
+                      else df180.get("date", pd.Series()).astype(str).tolist())
+        vol_list = (df180["volume"].fillna(0).round(0).astype(int).tolist()
+                    if "volume" in df180.columns else [])
+        amt_list = (df180["amount"].fillna(0).round(0).astype(int).tolist()
+                    if "amount" in df180.columns else [])
         kline = {
-            "dates": (idx.strftime("%Y-%m-%d").tolist() if hasattr(idx, "strftime") else df180.get("date", pd.Series()).astype(str).tolist()),
+            "dates": dates_list,
             "open": df180["open"].round(2).tolist(),
             "high": df180["high"].round(2).tolist(),
             "low": df180["low"].round(2).tolist(),
-            "close": df180["close"].round(2).tolist(),
+            "close": c.round(2).tolist(),
+            "volume": vol_list,
+            "amount": amt_list,
+            "ma5":  [None if pd.isna(v) else float(v) for v in ma5],
+            "ma10": [None if pd.isna(v) else float(v) for v in ma10],
+            "ma20": [None if pd.isna(v) else float(v) for v in ma20],
         }
 
     # 操作建议价位（基于历史波动率估算）

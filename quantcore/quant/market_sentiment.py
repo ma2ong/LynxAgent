@@ -239,7 +239,7 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24, realti
     turnover_today = amount_yi[-1]
     turnover_prev = amount_yi[-2] if len(amount_yi) >= 2 else turnover_today
     adv_dec_ratio = round(adv_list[-1] / dec_list[-1], 2) if dec_list[-1] else float(adv_list[-1])
-    sentiment_temp = _sentiment_temperature(above_all[-1], adv_dec_ratio, limit_up_cnt[-1], limit_down_cnt[-1])
+    sentiment_temp = _sentiment_temperature(above_all[-1], adv_dec_ratio, limit_up_cnt[-1], limit_down_cnt[-1], max_height[-1])
 
     return {
         "empty": False,
@@ -266,10 +266,12 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24, realti
     }
 
 
-def _sentiment_temperature(above_ma5_pct: float, adv_dec_ratio: float, up: int, down: int) -> int:
-    # 三因子合成 0-100：5日线占比(权重0.45) + 涨跌比(0.30) + 涨跌停强弱(0.25)
+def _sentiment_temperature(above_ma5_pct: float, adv_dec_ratio: float, up: int, down: int, max_height: int = 0) -> int:
+    # 四因子合成 0-100：5日线占比(0.35) + 涨跌比(0.20) + 涨跌停比(0.25) + 热点活跃度(0.20)
+    # 热点活跃度基于连板高度：3板=60分、5板+=100分；结构性行情下热点强就不会低分
     ratio_score = min(100.0, adv_dec_ratio / 3.0 * 100) if adv_dec_ratio else 0.0
     limit_total = up + down
     limit_score = (up / limit_total * 100) if limit_total else 50.0
-    temp = above_ma5_pct * 0.45 + ratio_score * 0.30 + limit_score * 0.25
+    hot_score = min(100.0, max_height * 20.0)
+    temp = above_ma5_pct * 0.35 + ratio_score * 0.20 + limit_score * 0.25 + hot_score * 0.20
     return int(max(0, min(100, round(temp))))

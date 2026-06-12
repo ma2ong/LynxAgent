@@ -8,14 +8,27 @@
         clearable
         size="large"
         style="max-width:320px"
-        @keyup.enter="analyze"
+        @keyup.enter="() => analyze()"
       />
-      <el-button type="primary" size="large" :loading="loading" @click="analyze">
+      <el-button type="primary" size="large" :loading="loading" @click="() => analyze()">
         <el-icon><Search /></el-icon> 分析
       </el-button>
     </div>
 
-    <div v-if="loading" class="loading-hint">正在分析，请稍候（约5-10秒）…</div>
+    <!-- 搜索历史 -->
+    <div v-if="!loading && !data && history.length" class="history-bar">
+      <span class="history-label">最近搜索</span>
+      <el-tag
+        v-for="sym in history" :key="sym"
+        class="history-chip"
+        closable
+        size="small"
+        @click="analyze(sym)"
+        @close="(e: Event) => removeHistory(sym, e)"
+      >{{ sym }}</el-tag>
+    </div>
+
+    <div v-if="loading" class="loading-hint">正在分析，请稍候（约10-30秒）…</div>
 
     <template v-if="data && data.available">
       <!-- Hero 卡片 -->
@@ -233,11 +246,28 @@ import { ElMessage } from 'element-plus'
 import { Loading, Search } from '@element-plus/icons-vue'
 import { ApiClient } from '@/api/request'
 
-const symbolInput = ref('600519')
+const symbolInput = ref('')
 const loading = ref(false)
 const data = ref<any>(null)
 const klineEl = ref<HTMLDivElement>()
 let klineChart: echarts.ECharts | null = null
+
+const HISTORY_KEY = 'stock_analysis_history'
+const history = ref<string[]>(JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'))
+
+function saveHistory(sym: string) {
+  const h = history.value.filter((s) => s !== sym)
+  h.unshift(sym)
+  if (h.length > 12) h.splice(12)
+  history.value = h
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(h))
+}
+
+function removeHistory(sym: string, e: Event) {
+  e.stopPropagation()
+  history.value = history.value.filter((s) => s !== sym)
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value))
+}
 
 const deepStarted = ref(false)
 const deepLoading = ref(false)
@@ -321,37 +351,95 @@ const renderKline = () => {
   klineChart = echarts.init(klineEl.value)
   const k = data.value.kline
   const total = k.dates.length
-  // 默认显示最近 40 个交易日，全量数据供 dataZoom 拖拽
   const startPct = total > 40 ? Math.round((1 - 40 / total) * 100) : 0
+
+  // 成交量：优先 volume（手），fallback amount（元）
+  const volData: number[] = k.volume?.some((v: number) => v > 0)
+    ? k.volume
+    : (k.amount || [])
+  const hasVol = volData.length > 0 && volData.some((v: number) => v > 0)
+
+  const klineBottom = hasVol ? 120 : 60
+  const volFmt = (v: number) =>
+    v >= 1e8 ? `${(v / 1e8).toFixed(1)}亿` : v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : String(v)
+
   klineChart.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-    grid: { left: 60, right: 16, top: 16, bottom: 60 },
-    xAxis: { type: 'category', data: k.dates, axisLabel: { fontSize: 10 } },
-    yAxis: { type: 'value', scale: true },
-    dataZoom: [
-      { type: 'inside', start: startPct, end: 100 },
-      { type: 'slider', start: startPct, end: 100, height: 20, bottom: 8 },
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'cross' },
+      formatter: (params: any[]) => {
+        const p = params.find((x: any) => x.seriesName === 'K线')
+        if (!p) return ''
+        const [o, c, l, h] = p.value
+        let s = `${p.name}<br/>开 ${o}  收 ${c}  低 ${l}  高 ${h}`
+        const vp = params.find((x: any) => x.seriesName === '成交量')
+        if (vp) s += `<br/>成交量 ${volFmt(vp.value)}`
+        return s
+      },
+    },
+    legend: { data: ['K线', 'MA5', 'MA10', 'MA20'], top: 0, right: 12, textStyle: { fontSize: 11 } },
+    grid: [
+      { left: 60, right: 16, top: 24, bottom: klineBottom },
+      ...(hasVol ? [{ left: 60, right: 16, top: '72%', bottom: 48 }] : []),
     ],
-    series: [{
-      type: 'candlestick',
-      data: k.dates.map((_: string, i: number) => [k.open[i], k.close[i], k.low[i], k.high[i]]),
-      itemStyle: { color: '#ef232a', color0: '#14b143', borderColor: '#ef232a', borderColor0: '#14b143' },
-    }],
+    xAxis: [
+      { type: 'category', data: k.dates, scale: true, axisLabel: { fontSize: 10 }, axisLine: { onZero: false }, gridIndex: 0 },
+      ...(hasVol ? [{ type: 'category', data: k.dates, scale: true, axisLabel: { show: false }, gridIndex: 1 }] : []),
+    ],
+    yAxis: [
+      { type: 'value', scale: true, gridIndex: 0 },
+      ...(hasVol ? [{ type: 'value', scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { formatter: volFmt, fontSize: 10 } }] : []),
+    ],
+    dataZoom: [
+      { type: 'inside', start: startPct, end: 100, xAxisIndex: hasVol ? [0, 1] : [0] },
+      { type: 'slider', start: startPct, end: 100, height: 18, bottom: hasVol ? 26 : 8, xAxisIndex: hasVol ? [0, 1] : [0] },
+    ],
+    series: [
+      {
+        name: 'K线', type: 'candlestick', xAxisIndex: 0, yAxisIndex: 0,
+        data: k.dates.map((_: string, i: number) => [k.open[i], k.close[i], k.low[i], k.high[i]]),
+        itemStyle: { color: '#ef232a', color0: '#14b143', borderColor: '#ef232a', borderColor0: '#14b143' },
+      },
+      ...(k.ma5?.length ? [{
+        name: 'MA5', type: 'line', xAxisIndex: 0, yAxisIndex: 0,
+        data: k.ma5, symbol: 'none', lineStyle: { color: '#f5a623', width: 1.5 },
+        itemStyle: { color: '#f5a623' },
+      }] : []),
+      ...(k.ma10?.length ? [{
+        name: 'MA10', type: 'line', xAxisIndex: 0, yAxisIndex: 0,
+        data: k.ma10, symbol: 'none', lineStyle: { color: '#4f8ef7', width: 1.5 },
+        itemStyle: { color: '#4f8ef7' },
+      }] : []),
+      ...(k.ma20?.length ? [{
+        name: 'MA20', type: 'line', xAxisIndex: 0, yAxisIndex: 0,
+        data: k.ma20, symbol: 'none', lineStyle: { color: '#9b59b6', width: 1.5 },
+        itemStyle: { color: '#9b59b6' },
+      }] : []),
+      ...(hasVol ? [{
+        name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1,
+        data: volData,
+        itemStyle: {
+          color: (params: any) =>
+            k.close[params.dataIndex] >= k.open[params.dataIndex] ? '#ef232a88' : '#14b14388',
+        },
+      }] : []),
+    ],
   })
 }
 
-const analyze = async () => {
-  const sym = symbolInput.value.trim()
-  if (!sym) return
+const analyze = async (sym?: string) => {
+  const s = (sym || symbolInput.value).trim()
+  if (!s) return
+  symbolInput.value = s
   loading.value = true
   data.value = null
   deepStarted.value = false
   deepResult.value = null
   deepError.value = ''
   try {
-    const res: any = await ApiClient.get(`/api/quant/stock-analysis/${sym}`, { _ts: Date.now() })
+    const res: any = await ApiClient.get(`/api/quant/stock-analysis/${s}`, { _ts: Date.now() }, { timeout: 120000 })
     data.value = res?.data || null
     if (data.value?.available) {
+      saveHistory(s)
       await nextTick()
       renderKline()
     } else {
@@ -415,6 +503,12 @@ onUnmounted(() => {
 .search-bar { display: flex; gap: 10px; align-items: center; }
 .loading-hint { color: var(--el-text-color-secondary); font-size: 13px; }
 
+/* 搜索历史 */
+.history-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.history-label { font-size: 12px; color: var(--el-text-color-secondary); white-space: nowrap; }
+.history-chip { cursor: pointer; }
+.history-chip:hover { border-color: var(--el-color-primary); color: var(--el-color-primary); }
+
 /* Hero */
 .hero-card {
   background: var(--el-bg-color);
@@ -459,7 +553,7 @@ onUnmounted(() => {
 }
 
 /* K线图 */
-.kline-chart { height: 260px; }
+.kline-chart { height: 380px; }
 
 /* AI三栏 */
 .ai-card {

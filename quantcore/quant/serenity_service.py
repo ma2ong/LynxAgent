@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from threading import Lock, Thread
 from typing import Dict, List
 
@@ -15,16 +16,21 @@ _TTL = 6 * 3600
 _KEY = "events"
 
 
-def _compute_events(max_news: int = 30) -> List[dict]:
+def _compute_events(max_news: int = 10) -> List[dict]:
     news = market_news_flow(limit=max_news * 3)[:max_news]
-    cards: List[dict] = []
-    for item in news:
+
+    def _scan(item):
         try:
-            card = scan_event(item)
+            return scan_event(item)
         except Exception:
-            card = None
-        if card:
-            cards.append(card)
+            return None
+
+    # 每条新闻一次 LLM 调用、彼此独立 → 并发执行，把串行的数分钟压到十几秒，
+    # 避免催化剂监控页长时间卡在「扫描中」。
+    cards: List[dict] = []
+    if news:
+        with ThreadPoolExecutor(max_workers=min(8, len(news))) as executor:
+            cards = [card for card in executor.map(_scan, news) if card]
     return cards
 
 

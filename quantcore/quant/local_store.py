@@ -114,6 +114,33 @@ class LocalQuantStore:
         row = self._conn().execute("SELECT MAX(date) FROM daily_kline WHERE symbol=?", (symbol,)).fetchone()
         return row[0] if row and row[0] else None
 
+    def recent_bar_counts(self, since_date: str) -> Dict[str, int]:
+        """每只股票在 since_date 之后的日线 bar 数 {symbol: count}，用于按近窗连续性判断缺口。
+
+        不用 MAX(date)：批量快照会把 MAX 写成今天、掩盖中间缺口（如 6-16..6-22），
+        单看最新日期会漏判；按近窗 bar 数才能准确发现不连续。
+        """
+        rows = self._conn().execute(
+            "SELECT symbol, COUNT(*) FROM daily_kline WHERE date >= ? GROUP BY symbol",
+            (since_date,),
+        ).fetchall()
+        return {r[0]: int(r[1]) for r in rows}
+
+    def bulk_upsert_kline_snapshot(self, bars: List[tuple]) -> int:
+        """批量写入多只股票的单日 bar。bars: [(symbol,date,open,high,low,close,volume,amount), ...]。"""
+        if not bars:
+            return 0
+        conn = self._conn()
+        conn.executemany(
+            "INSERT INTO daily_kline(symbol,date,open,high,low,close,volume,amount) "
+            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(symbol,date) DO UPDATE SET "
+            "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,"
+            "volume=excluded.volume,amount=excluded.amount",
+            bars,
+        )
+        conn.commit()
+        return len(bars)
+
     def kline_symbol_count(self) -> int:
         return self._conn().execute("SELECT COUNT(DISTINCT symbol) FROM daily_kline").fetchone()[0]
 
@@ -129,7 +156,7 @@ class LocalQuantStore:
         return [r[0] for r in rows]
 
     def kline_health(self) -> Dict[str, object]:
-        from datetime import date, datetime
+        from datetime import date, datetime, time
 
         conn = self._conn()
         meta_count = int(conn.execute("SELECT COUNT(*) FROM stock_meta").fetchone()[0] or 0)
@@ -141,7 +168,7 @@ class LocalQuantStore:
         latest_count = int(rows[0][1]) if rows else 0
         today = date.today().strftime("%Y-%m-%d")
         today_count = next((int(count) for d, count in rows if str(d) == today), 0)
-        threshold = max(500, int(meta_count * 0.80)) if meta_count else 500
+        threshold = max(500, int(meta_count * 0.45)) if meta_count else 500
         latest_complete_date = ""
         latest_complete_count = 0
         for d, count in rows:
@@ -149,17 +176,22 @@ class LocalQuantStore:
                 latest_complete_date = str(d)
                 latest_complete_count = int(count)
                 break
+        now = datetime.now()
         weekday = datetime.strptime(today, "%Y-%m-%d").weekday()
         today_is_weekday = weekday < 5
+        daily_bar_due = now.time() >= time(15, 15)
         ready = kline_symbols >= 500 and bool(latest_complete_date)
         today_complete = today_count >= threshold
-        needs_incremental_sync = bool(ready and today_is_weekday and not today_complete)
+        needs_incremental_sync = bool(ready and today_is_weekday and daily_bar_due and not today_complete)
         if not ready:
             status = "empty" if kline_symbols == 0 else "insufficient"
             message = "本地K线不足，请先做一次全量同步。"
         elif today_complete:
             status = "fresh"
             message = f"数据已更新到今天，覆盖 {today_count}/{meta_count} 只。"
+        elif today_is_weekday and not daily_bar_due:
+            status = "intraday"
+            message = f"今日仍在交易或尚未收盘，盘中页面使用实时行情 + 最近完整交易日 {latest_complete_date}。"
         elif needs_incremental_sync:
             status = "partial_today" if today_count else "stale_today"
             message = f"今天数据正在补齐或尚未同步，当前覆盖 {today_count}/{meta_count} 只；筛选会先使用最近完整交易日 {latest_complete_date}。"

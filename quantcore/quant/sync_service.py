@@ -6,15 +6,17 @@ It avoids slow per-symbol third-party fallbacks during batch sync.
 """
 from __future__ import annotations
 
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
 
-from .data_sources import data_source_status, fetch_stock_pool
+from .data import normalize_ohlcv
+from .data_sources import data_source_status, fetch_history, fetch_stock_pool
 from .local_store import LocalQuantStore, get_local_store
 
 FULL_HISTORY_DAYS = 760
@@ -38,7 +40,7 @@ def _f(value) -> float:
 
 
 class MarketSyncService:
-    def __init__(self, store: Optional[LocalQuantStore] = None, max_workers: int = 8):
+    def __init__(self, store: Optional[LocalQuantStore] = None, max_workers: int = 4):
         self.store = store or get_local_store()
         self.max_workers = max_workers
         self._lock = threading.Lock()
@@ -88,13 +90,17 @@ class MarketSyncService:
         df = self._fetch_kline_tencent(symbol, start)
         if df is not None and not df.empty:
             return df
-        return pd.DataFrame()
+        return self._fetch_kline_external(symbol, start)
 
     def _fetch_kline_tencent(self, symbol: str, start: str) -> pd.DataFrame:
         code = _tencent_code(symbol)
         url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={code},day,,,800,qfq"
         try:
-            resp = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+            session = requests.Session()
+            session.trust_env = False
+            resp = session.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code != 200 or not resp.text.lstrip().startswith("{"):
+                return pd.DataFrame()
             payload = resp.json()["data"][code]
             bars = payload.get("qfqday") or payload.get("day") or []
         except Exception:
@@ -124,6 +130,76 @@ class MarketSyncService:
                 }
             )
         return pd.DataFrame(rows)
+
+    def _fetch_kline_external(self, symbol: str, start: str) -> pd.DataFrame:
+        try:
+            df, source, errors = fetch_history(symbol, start, date.today().strftime("%Y-%m-%d"))
+            if source:
+                self._progress["fallback_source"] = source
+            if errors:
+                self._progress["fallback_errors"] = errors
+            df = normalize_ohlcv(df)
+            if df is not None and not df.empty:
+                return df
+        except Exception as exc:
+            self._progress["last_error"] = ("fallback: " + str(exc))[:200]
+        return pd.DataFrame()
+
+    def _fetch_snapshot_bars(self, symbols: List[str]) -> Tuple[List[tuple], str]:
+        """用腾讯批量报价（80 代码/请求，并行）一次性取全市场当日 bar。
+
+        相比逐股抓 5500 次，这里只发 ~70 个请求、几秒完成且不易被限流，是日常增量
+        同步的快路径。返回 (bars, trade_date)，单位与逐股腾讯日线一致（amount=close*手*100）。
+        交易日期取报价时间戳，自动规避周末/非交易日误标。
+        """
+        clean = [str(s).strip().zfill(6) for s in symbols if str(s).strip().isdigit()]
+        if not clean:
+            return [], ""
+        headers = {"User-Agent": "Mozilla/5.0"}
+
+        def fetch_chunk(chunk: List[str]) -> List[tuple]:
+            query = ",".join(_tencent_code(s) for s in chunk)
+            try:
+                session = requests.Session()
+                session.trust_env = False
+                resp = session.get(f"https://qt.gtimg.cn/q={query}", headers=headers, timeout=8)
+                resp.encoding = "gbk"
+                if resp.status_code != 200:
+                    return []
+                text = resp.text
+            except Exception:
+                return []
+            out: List[tuple] = []
+            for match in re.finditer(r'v_(?:sh|sz|bj)(\d{6})="([^"]*)"', text):
+                fields = match.group(2).split("~")
+                if len(fields) < 38:
+                    continue
+                close = _f(fields[3])
+                if close <= 0:
+                    continue
+                ts = str(fields[30])
+                if len(ts) >= 8 and ts[:8].isdigit():
+                    trade_date = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]}"
+                else:
+                    trade_date = date.today().strftime("%Y-%m-%d")
+                open_price = _f(fields[5]) or close
+                high_price = _f(fields[33]) or close
+                low_price = _f(fields[34]) or close
+                volume = _f(fields[36])  # 手，与逐股日线同口径
+                amount = close * volume * 100  # 元，与 _fetch_kline_tencent 一致
+                out.append((match.group(1), trade_date, open_price, high_price, low_price, close, volume, amount))
+            return out
+
+        chunks = [clean[i:i + 80] for i in range(0, len(clean), 80)]
+        bars: List[tuple] = []
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            for part in executor.map(fetch_chunk, chunks):
+                bars.extend(part)
+        trade_date = ""
+        if bars:
+            from collections import Counter
+            trade_date = Counter(bar[1] for bar in bars).most_common(1)[0][0]
+        return bars, trade_date
 
     def _fetch_fundamental_flags(self) -> List[Dict[str, object]]:
         import akshare as ak
@@ -212,33 +288,64 @@ class MarketSyncService:
             if universe:
                 self.store.upsert_meta(universe)
             self._progress["total"] = len(universe)
+            today = date.today()
+            full_start = (today - timedelta(days=FULL_HISTORY_DAYS)).strftime("%Y-%m-%d")
+            # 增量回补统一从近 45 天起取（腾讯一次返回 800 日，多取无额外成本），
+            # 确保被快照掩盖的中间缺口（如 6-16..6-22）能被补齐。
+            incr_start = (today - timedelta(days=45)).strftime("%Y-%m-%d")
+            # 近窗 bar 数（须在快照落库前取）：用于按连续性判断缺口，而非 MAX(date)。
+            recent_since = (today - timedelta(days=18)).strftime("%Y-%m-%d")
+            recent_counts = self.store.recent_bar_counts(recent_since)
 
+            # Phase snapshot：一次性批量拉全市场当日 bar，秒级且完整。
+            # 即便随后的逐股回补被中断/限流，当日数据也已落库，情绪/涨停立即可用。
+            self._progress["phase"] = "snapshot"
+            symbols = [str(meta.get("symbol")) for meta in universe]
+            try:
+                snap_bars, snap_date = self._fetch_snapshot_bars(symbols)
+                if snap_bars:
+                    self.store.bulk_upsert_kline_snapshot(snap_bars)
+                self._progress["snapshot_count"] = len(snap_bars)
+                self._progress["snapshot_date"] = snap_date
+            except Exception as exc:
+                self._progress["last_error"] = ("snapshot: " + str(exc))[:200]
+
+            # Phase kline：逐股回补历史/缺口。
+            # 全量：所有股票拉满历史。增量：补「近 18 自然日 bar 数不足」的缺口股（含中间缺口）；
+            # 稳态下快照已保证连续 → 回补目标≈0 → 秒级完成。
             self._progress["phase"] = "kline"
-            full_start = (date.today() - timedelta(days=FULL_HISTORY_DAYS)).strftime("%Y-%m-%d")
+            MIN_RECENT_BARS = 8  # ~12 交易日窗口里连续股票应有的最少 bar 数
+            if full:
+                targets = list(universe)
+            else:
+                def has_gap(meta) -> bool:
+                    sym = str(meta.get("symbol"))
+                    cnt = recent_counts.get(sym) or recent_counts.get(sym.zfill(6)) or 0
+                    return cnt < MIN_RECENT_BARS
+                targets = [meta for meta in universe if has_gap(meta)]
+            self._progress["total"] = len(targets)
+            self._progress["done"] = 0
 
             def work(meta):
                 symbol = str(meta.get("symbol"))
-                if full:
-                    start = full_start
-                else:
-                    last = self.store.last_kline_date(symbol)
-                    start = last or full_start
+                start = full_start if full else incr_start
                 df = self._fetch_kline(symbol, start)
                 return self.store.upsert_kline(symbol, df)
 
             done = 0
             written_rows = 0
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = {executor.submit(work, meta): meta for meta in universe}
-                for future in as_completed(futures):
-                    try:
-                        written_rows += int(future.result() or 0)
-                    except Exception as exc:
-                        self._progress["errors_count"] = int(self._progress["errors_count"]) + 1
-                        self._progress["last_error"] = str(exc)[:200]
-                    done += 1
-                    self._progress["done"] = done
-                    self._progress["written_rows"] = written_rows
+            if targets:
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    futures = {executor.submit(work, meta): meta for meta in targets}
+                    for future in as_completed(futures):
+                        try:
+                            written_rows += int(future.result() or 0)
+                        except Exception as exc:
+                            self._progress["errors_count"] = int(self._progress["errors_count"]) + 1
+                            self._progress["last_error"] = str(exc)[:200]
+                        done += 1
+                        self._progress["done"] = done
+                        self._progress["written_rows"] = written_rows
 
             self._progress["phase"] = "fundamental"
             try:

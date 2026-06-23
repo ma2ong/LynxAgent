@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -12,7 +13,7 @@ from typing import Any
 import requests
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -24,6 +25,7 @@ load_dotenv()
 from app.lite_auth import get_current_lite_user, router as lite_auth_router, store
 from app.lite_billing import PLANS, billing, effective_plan, require_quota, router as billing_router
 from app.lite_admin import router as admin_router
+from app.lite_notifications import notification_store
 from app.routers.quant import router as quant_router
 from quantcore.quant import QuantEngine
 from quantcore.quant.sync_service import get_sync_service
@@ -39,7 +41,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=[
+        "http://localhost:3000", "http://127.0.0.1:3000",
+        "http://localhost:5173", "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -106,11 +111,15 @@ async def _start_ml_factor_scheduler() -> None:
 lite_quant_engine = QuantEngine()
 lite_trader_bridge = EasyTraderBridge()
 lite_analysis_tasks: dict[str, dict[str, Any]] = {}
+lite_smart_pool_tasks: dict[str, dict[str, Any]] = {}
 lite_insights_cache: dict[str, tuple[datetime, Any]] = {}
 lite_realtime_quotes_cache: tuple[datetime, dict[str, dict[str, Any]]] | None = None
 _quotes_loading: bool = False
+_akshare_last_failure: datetime | None = None  # backoff: skip akshare for 5 min after failure
+lite_data_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="lite-data")
 lite_industry_cache: dict[str, tuple[datetime, str]] = {}
 lite_price_alerts: dict[str, dict] = {}  # key: "symbol:direction", value: alert record
+PAPER_TRADING_ENABLED = os.getenv("LYNX_ENABLE_PAPER_TRADING", "0").lower() in {"1", "true", "yes"}
 EVENT_TYPE_LABELS = {
     "regulatory_risk": "风险",
     "earnings": "业绩",
@@ -201,9 +210,9 @@ class LiteDeepAnalysisLLM:
         if "投资风险" in prompt:
             return json.dumps(
                 [
-                    {"risk": "趋势失效风险", "mitigation": "若跌破关键均线或量能明显萎缩，应降低仓位或等待重新放量确认。"},
-                    {"risk": "事件兑现不及预期", "mitigation": "跟踪公告、业绩、订单和行业政策，避免只凭题材热度追高。"},
-                    {"risk": "波动放大风险", "mitigation": "控制单票仓位，使用分批入场和明确止损线。"},
+                    {"risk": "趋势失效风险", "mitigation": "若跌破关键均线或量能明显萎缩，应降低关注权重或等待重新放量确认。"},
+                    {"risk": "事件兑现不及预期", "mitigation": "跟踪公告、业绩、订单和行业政策，避免只凭题材热度提高权重。"},
+                    {"risk": "波动放大风险", "mitigation": "控制单票风险暴露，使用明确失效线。"},
                 ],
                 ensure_ascii=False,
             )
@@ -250,6 +259,12 @@ class LitePaperOrderRequest(BaseModel):
     quantity: int
     analysis_id: str | None = None
     execution_mode: str = "paper"
+
+
+class LiteWechatBindRequest(BaseModel):
+    serverchan_key: str | None = None
+    pushplus_token: str | None = None
+    enabled: bool = True
 
 
 def ensure_lite_favorites_table() -> None:
@@ -478,26 +493,54 @@ def _search_reports_fts(query: str, limit: int = 20) -> list[dict]:
 
 
 def _check_and_record_price_alert(
+    username: str,
     symbol: str,
+    stock_name: str,
     price: float,
     alert_high: float | None,
     alert_low: float | None,
 ) -> None:
+    today = datetime.now().strftime("%Y-%m-%d")
     now_str = datetime.now(timezone.utc).isoformat()
     if alert_high and price >= alert_high:
-        key = f"{symbol}:high"
+        key = f"{username}:{symbol}:high:{today}"
         if key not in lite_price_alerts:
             lite_price_alerts[key] = {
-                "symbol": symbol, "direction": "high", "threshold": alert_high,
+                "username": username, "symbol": symbol, "stock_name": stock_name,
+                "direction": "high", "threshold": alert_high,
                 "price": price, "triggered_at": now_str,
             }
+            notification_store.notify_user(
+                username,
+                f"价格突破上限：{stock_name or symbol}",
+                f"{stock_name or symbol} 当前价 {price:.2f}，已触发上限 {alert_high:.2f}。\n\n仅供研究跟踪，不构成投资建议。",
+                type_="price_alert",
+                payload={"symbol": symbol, "direction": "high", "price": price, "threshold": alert_high},
+                dedupe_key=key,
+                send_wechat=True,
+            )
     if alert_low and price <= alert_low:
-        key = f"{symbol}:low"
+        key = f"{username}:{symbol}:low:{today}"
         if key not in lite_price_alerts:
             lite_price_alerts[key] = {
-                "symbol": symbol, "direction": "low", "threshold": alert_low,
+                "username": username, "symbol": symbol, "stock_name": stock_name,
+                "direction": "low", "threshold": alert_low,
                 "price": price, "triggered_at": now_str,
             }
+            notification_store.notify_user(
+                username,
+                f"价格跌破下限：{stock_name or symbol}",
+                f"{stock_name or symbol} 当前价 {price:.2f}，已触发下限 {alert_low:.2f}。\n\n仅供研究跟踪，不构成投资建议。",
+                type_="price_alert",
+                payload={"symbol": symbol, "direction": "low", "price": price, "threshold": alert_low},
+                dedupe_key=key,
+                send_wechat=True,
+            )
+
+
+async def require_paper_trading_enabled() -> None:
+    if not PAPER_TRADING_ENABLED:
+        raise HTTPException(status_code=404, detail="模拟交易已在商用版下线")
 
 
 try:
@@ -540,6 +583,20 @@ def _cache_get(key: str, ttl_seconds: int) -> Any | None:
 def _cache_set(key: str, value: Any) -> Any:
     lite_insights_cache[key] = (datetime.now(timezone.utc), value)
     return value
+
+
+async def _run_data_task(func, *args, timeout: float = 20.0):
+    """Run market-data work in a small isolated executor.
+
+    The default asyncio thread pool can be occupied by slow third-party data
+    calls.  Keeping these page-facing computations on a bounded executor lets
+    the API return a controlled timeout instead of leaving the UI loading.
+    """
+    loop = asyncio.get_running_loop()
+    return await asyncio.wait_for(
+        loop.run_in_executor(lite_data_executor, lambda: func(*args)),
+        timeout=timeout,
+    )
 
 
 def _persistent_cache_get(key: str, ttl_seconds: int) -> Any | None:
@@ -632,10 +689,12 @@ def _fetch_tencent_realtime_quotes(symbols: list[str]) -> dict[str, dict[str, An
 
     snapshot: dict[str, dict[str, Any]] = {}
     headers = {"User-Agent": "Mozilla/5.0"}
-    for start in range(0, len(clean_symbols), 80):
-        chunk = clean_symbols[start:start + 80]
+    for start in range(0, len(clean_symbols), 200):
+        chunk = clean_symbols[start:start + 200]
         query = ",".join(_market_quote_code(symbol) for symbol in chunk)
-        response = requests.get(f"https://qt.gtimg.cn/q={query}", headers=headers, timeout=10)
+        session = requests.Session()
+        session.trust_env = False
+        response = session.get(f"https://qt.gtimg.cn/q={query}", headers=headers, timeout=8)
         response.encoding = "gbk"
         response.raise_for_status()
         for match in re.finditer(r'v_(?:sh|sz|bj)(\d{6})="([^"]*)"', response.text):
@@ -675,18 +734,151 @@ def _fetch_tencent_realtime_quotes(symbols: list[str]) -> dict[str, dict[str, An
     return snapshot
 
 
+def _fetch_tencent_realtime_snapshot_from_local() -> dict[str, dict[str, Any]]:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from quantcore.quant.local_store import get_local_store
+
+    symbols = [
+        str(item.get("symbol") or "").strip().zfill(6)
+        for item in get_local_store().load_meta()
+        if re.fullmatch(r"\d{6}", str(item.get("symbol") or "").strip().zfill(6))
+    ]
+    if not symbols:
+        return {}
+    snapshot: dict[str, dict[str, Any]] = {}
+    chunks = [symbols[start:start + 200] for start in range(0, len(symbols), 200)]
+    with ThreadPoolExecutor(max_workers=min(28, len(chunks))) as executor:
+        futures = [executor.submit(_fetch_tencent_realtime_quotes, chunk) for chunk in chunks]
+        for future in as_completed(futures):
+            try:
+                snapshot.update(future.result())
+            except Exception:
+                continue
+    if len(snapshot) < 500:
+        raise RuntimeError(f"tencent realtime snapshot too small: {len(snapshot)}")
+    return snapshot
+
+
+def _fetch_eastmoney_realtime_snapshot() -> dict[str, dict[str, Any]]:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from math import ceil
+
+    page_size = 100
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"}
+    request_routes = (
+        ("82.push2.eastmoney.com", False),
+        ("88.push2.eastmoney.com", False),
+        ("push2.eastmoney.com", True),
+        ("70.push2.eastmoney.com", True),
+    )
+    base_params = {
+        "po": 1,
+        "np": 1,
+        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+        "fltt": 2,
+        "invt": 2,
+        "fid": "f3",
+        "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23",
+        "fields": "f12,f14,f2,f3,f4,f5,f6,f15,f16,f17,f18,f20,f21,f8,f10",
+    }
+
+    def fetch_page(page: int) -> tuple[int, int, list[dict[str, Any]]]:
+        params = {**base_params, "pn": page, "pz": page_size}
+        last_error: Exception | None = None
+        for host, trust_env in request_routes:
+            try:
+                session = requests.Session()
+                session.trust_env = trust_env
+                response = session.get(
+                    f"https://{host}/api/qt/clist/get",
+                    params=params,
+                    headers=headers,
+                    timeout=3,
+                )
+                response.encoding = "utf-8"
+                response.raise_for_status()
+                payload = response.json().get("data") or {}
+                return int(payload.get("total") or 0), page, list(payload.get("diff") or [])
+            except Exception as exc:
+                last_error = exc
+        if last_error:
+            raise last_error
+        return 0, page, []
+
+    total, _, first_rows = fetch_page(1)
+    pages = max(1, min(80, ceil(total / page_size))) if total else 1
+    all_rows = list(first_rows)
+    if pages > 1:
+        with ThreadPoolExecutor(max_workers=28) as executor:
+            futures = [executor.submit(fetch_page, page) for page in range(2, pages + 1)]
+            for future in as_completed(futures):
+                try:
+                    _, _, rows = future.result()
+                    all_rows.extend(rows)
+                except Exception:
+                    continue
+
+    updated_at = datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S")
+    snapshot: dict[str, dict[str, Any]] = {}
+    for row in all_rows:
+        symbol = str(row.get("f12") or "").strip().zfill(6)
+        if not re.fullmatch(r"\d{6}", symbol):
+            continue
+        price = _safe_number(row.get("f2"))
+        pct = _safe_number(row.get("f3"))
+        prev_close = _safe_number(row.get("f18"))
+        if price is None or price <= 0:
+            continue
+        volume_hands = _safe_number(row.get("f5"))
+        amount = _safe_number(row.get("f6"))
+        snapshot[symbol] = {
+            "symbol": symbol,
+            "code": symbol,
+            "name": str(row.get("f14") or "").strip() or symbol,
+            "price": price,
+            "close": price,
+            "current_price": price,
+            "change_percent": pct,
+            "pct_chg": pct,
+            "change": _safe_number(row.get("f4")),
+            "open": _safe_number(row.get("f17")),
+            "high": _safe_number(row.get("f15")),
+            "low": _safe_number(row.get("f16")),
+            "prev_close": prev_close,
+            "volume": volume_hands * 100 if volume_hands is not None else None,
+            "amount": amount,
+            "turnover_rate": _safe_number(row.get("f8")),
+            "volume_ratio": _safe_number(row.get("f10")),
+            "total_mv": _safe_number(row.get("f20")),
+            "circ_mv": _safe_number(row.get("f21")),
+            "updated_at": updated_at,
+            "quote_source": "eastmoney.realtime",
+        }
+    if len(snapshot) < 500:
+        raise RuntimeError(f"eastmoney realtime snapshot too small: {len(snapshot)}")
+    return snapshot
+
+
 def _load_realtime_quotes_snapshot(ttl_seconds: int = 3) -> dict[str, dict[str, Any]]:
-    global lite_realtime_quotes_cache, _quotes_loading
+    global lite_realtime_quotes_cache, _quotes_loading, _akshare_last_failure
     now = datetime.now(timezone.utc)
     if lite_realtime_quotes_cache:
         created_at, snapshot = lite_realtime_quotes_cache
         if now - created_at <= timedelta(seconds=ttl_seconds):
             return snapshot
+    # Skip akshare for 5 min after a timeout/failure to avoid blocking thread pool
+    if _akshare_last_failure and (now - _akshare_last_failure) < timedelta(minutes=5):
+        return lite_realtime_quotes_cache[1] if lite_realtime_quotes_cache else {}
     if _quotes_loading:
         return lite_realtime_quotes_cache[1] if lite_realtime_quotes_cache else {}
     _quotes_loading = True
     try:
-        return _do_load_realtime_quotes_snapshot()
+        result = _do_load_realtime_quotes_snapshot()
+        _akshare_last_failure = None  # reset on success
+        return result
+    except Exception:
+        _akshare_last_failure = now
+        return lite_realtime_quotes_cache[1] if lite_realtime_quotes_cache else {}
     finally:
         _quotes_loading = False
 
@@ -695,14 +887,34 @@ def _do_load_realtime_quotes_snapshot() -> dict[str, dict[str, Any]]:
     global lite_realtime_quotes_cache
     now = datetime.now(timezone.utc)
 
+    try:
+        snapshot = _fetch_tencent_realtime_snapshot_from_local()
+        lite_realtime_quotes_cache = (now, snapshot)
+        return snapshot
+    except Exception:
+        pass
+
+    try:
+        snapshot = _fetch_eastmoney_realtime_snapshot()
+        lite_realtime_quotes_cache = (now, snapshot)
+        return snapshot
+    except Exception:
+        pass
+
+    import socket as _socket
     import akshare as ak
 
-    source_name = "akshare.stock_zh_a_spot"
+    _old_timeout = _socket.getdefaulttimeout()
+    _socket.setdefaulttimeout(4)
     try:
-        df = ak.stock_zh_a_spot()
-    except Exception:
-        source_name = "akshare.stock_zh_a_spot_em"
-        df = ak.stock_zh_a_spot_em()
+        source_name = "akshare.stock_zh_a_spot"
+        try:
+            df = ak.stock_zh_a_spot()
+        except Exception:
+            source_name = "akshare.stock_zh_a_spot_em"
+            df = ak.stock_zh_a_spot_em()
+    finally:
+        _socket.setdefaulttimeout(_old_timeout)
 
     snapshot: dict[str, dict[str, Any]] = {}
     updated_at = datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S")
@@ -747,19 +959,23 @@ def _do_load_realtime_quotes_snapshot() -> dict[str, dict[str, Any]]:
     return snapshot
 
 
-async def _realtime_quotes(symbols: list[str] | set[str] | tuple[str, ...]) -> dict[str, dict[str, Any]]:
+async def _realtime_quotes(
+    symbols: list[str] | set[str] | tuple[str, ...],
+    allow_snapshot_fallback: bool = True,
+) -> dict[str, dict[str, Any]]:
     clean_symbols = [str(symbol).strip().zfill(6) for symbol in symbols if re.fullmatch(r"\d{6}", str(symbol).strip().zfill(6))]
     if not clean_symbols:
         return {}
     quotes: dict[str, dict[str, Any]] = {}
     try:
-        quotes = await asyncio.to_thread(_fetch_tencent_realtime_quotes, clean_symbols)
+        timeout = 5.0 if len(clean_symbols) <= 80 else 12.0
+        quotes = await _run_data_task(_fetch_tencent_realtime_quotes, clean_symbols, timeout=timeout)
     except Exception:
         quotes = {}
     missing_symbols = [symbol for symbol in clean_symbols if symbol not in quotes]
-    if missing_symbols:
+    if missing_symbols and allow_snapshot_fallback:
         try:
-            snapshot = await asyncio.to_thread(_load_realtime_quotes_snapshot)
+            snapshot = await _run_data_task(_load_realtime_quotes_snapshot, timeout=8.0)
             quotes.update({symbol: snapshot[symbol] for symbol in missing_symbols if symbol in snapshot})
         except Exception:
             pass
@@ -1681,13 +1897,20 @@ async def _resolve_real_industry(symbol: str, name: str, event_labels: set[str])
 
 
 async def _enrich_smart_pool_industries(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    industries = await asyncio.gather(
-        *[
-            _resolve_real_industry(item["symbol"], item.get("name") or item["symbol"], set(item.get("event_labels") or []))
-            for item in items
-        ],
-        return_exceptions=True,
-    )
+    # 行业归类是装饰性补充，整体 6s 封顶：逐股查询慢/限流时直接用原值，绝不拖垮端点。
+    try:
+        industries = await asyncio.wait_for(
+            asyncio.gather(
+                *[
+                    _resolve_real_industry(item["symbol"], item.get("name") or item["symbol"], set(item.get("event_labels") or []))
+                    for item in items
+                ],
+                return_exceptions=True,
+            ),
+            timeout=6.0,
+        )
+    except (asyncio.TimeoutError, Exception):
+        return items
     for item, industry in zip(items, industries):
         if isinstance(industry, str) and industry:
             item["industry"] = industry
@@ -1899,7 +2122,10 @@ async def _smart_pool_quant(symbol: str) -> dict[str, Any]:
 async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any]:
     data = dict(response.get("data") or {})
     items = [dict(item) for item in data.get("items") or []]
-    quotes = await _realtime_quotes([item.get("symbol") or item.get("code") for item in items])
+    quotes = await _realtime_quotes(
+        [item.get("symbol") or item.get("code") for item in items],
+        allow_snapshot_fallback=False,
+    )
     quote_updated_at = None
     for item in items:
         symbol = str(item.get("symbol") or item.get("code") or "").zfill(6)
@@ -1922,11 +2148,51 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
     return enriched
 
 
-@app.get("/api/lite/smart-pool")
-async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_limit: int = 500):
+def _smart_pool_task_update(task_id: str | None, **patch: Any) -> None:
+    if not task_id:
+        return
+    task = lite_smart_pool_tasks.get(task_id)
+    if not task:
+        return
+    task.update(patch)
+    task["updated_at"] = datetime.now().astimezone().isoformat()
+
+
+def _smart_pool_task_cleanup(max_items: int = 20) -> None:
+    if len(lite_smart_pool_tasks) <= max_items:
+        return
+    removable = sorted(
+        lite_smart_pool_tasks.items(),
+        key=lambda kv: str(kv[1].get("updated_at") or kv[1].get("created_at") or ""),
+    )
+    for task_id, task in removable[: max(0, len(lite_smart_pool_tasks) - max_items)]:
+        if task.get("status") != "running":
+            lite_smart_pool_tasks.pop(task_id, None)
+
+
+async def _compute_lite_smart_pool(
+    strategy: str = "balanced",
+    limit: int = 30,
+    universe_limit: int = 500,
+    task_id: str | None = None,
+) -> dict[str, Any]:
     preset = SMART_POOL_RECOMMENDER
     safe_limit = max(5, min(limit, 50))
-    safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
+    # Keep the interactive scan responsive; full-universe data sync is handled separately.
+    safe_universe = max(safe_limit * 2, min(universe_limit, 1200))
+    cache_key = f"smart-pool:attack-v17-ai-factor:{strategy}:{safe_limit}:{safe_universe}"
+    _smart_pool_task_update(task_id, progress=5, phase="cache", message="检查最近智能推荐缓存")
+    cached = _cache_get(cache_key, 900)
+    if cached:
+        _smart_pool_task_update(task_id, progress=95, phase="realtime", message="缓存命中，刷新实时价格")
+        return await _enrich_smart_pool_realtime(cached)
+    persistent_cached = _persistent_cache_get(cache_key, 3600)
+    if persistent_cached:
+        _cache_set(cache_key, persistent_cached)
+        _smart_pool_task_update(task_id, progress=95, phase="realtime", message="历史缓存命中，刷新实时价格")
+        return await _enrich_smart_pool_realtime(persistent_cached)
+
+    _smart_pool_task_update(task_id, progress=14, phase="ai_factor", message="读取 AI 因子候选池")
     ai_factor_pool = await asyncio.to_thread(_load_ai_factor_pool, safe_limit, safe_universe)
     ai_factor_scores: dict[str, dict[str, Any]] = ai_factor_pool.get("scores") or {}
 
@@ -1940,6 +2206,7 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
             except (TypeError, ValueError):
                 return default
 
+        _smart_pool_task_update(task_id, progress=28, phase="quant_center", message="调用量化中心一键推荐模型")
         quant_pool = await asyncio.to_thread(
             lite_quant_engine.smart_pool,
             limit=safe_limit,
@@ -2003,7 +2270,7 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
         items.sort(key=lambda item: float(item.get("smart_score") or 0), reverse=True)
         items = await _enrich_smart_pool_industries(items[:safe_limit])
         if ai_factor_pool.get("status") != "ready":
-            return {
+            response = {
                 "strategy": "quant_center_smart_pool",
                 "preset": {
                     "name": "全市场综合优选",
@@ -2020,18 +2287,15 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
                 },
                 "source_note": "同源于量化中心智能推荐，并把 AI 因子模型 Top-K 排名作为评分因子；研究与模拟使用，不构成投资建议。",
             }
+            wrapped_response = {"success": True, "data": response, "message": "ok"}
+            _persistent_cache_set(cache_key, wrapped_response)
+            _cache_set(cache_key, wrapped_response)
+            _smart_pool_task_update(task_id, progress=95, phase="realtime", message="模型完成，刷新实时价格")
+            return await _enrich_smart_pool_realtime(wrapped_response)
     except Exception as exc:
         print(f"Quant Center smart pool failed, falling back to lite smart pool: {exc}")
 
-    cache_key = f"smart-pool:attack-v16-ai-factor:{safe_limit}"
-    cached = _cache_get(cache_key, 900)
-    if cached:
-        return await _enrich_smart_pool_realtime(cached)
-    persistent_cached = _persistent_cache_get(cache_key, 3600)
-    if persistent_cached:
-        _cache_set(cache_key, persistent_cached)
-        return await _enrich_smart_pool_realtime(persistent_cached)
-
+    _smart_pool_task_update(task_id, progress=34, phase="events", message="读取新闻事件和实时活跃股票")
     await ensure_recent_lite_news()
     events = _query_news_events(limit=220)
     event_map: dict[str, dict[str, Any]] = {}
@@ -2048,7 +2312,9 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
     for item in ai_factor_pool.get("picks") or []:
         candidates_by_symbol.setdefault(item["symbol"], item)
     try:
-        realtime_snapshot = await asyncio.to_thread(_load_realtime_quotes_snapshot, 10)
+        realtime_snapshot = await asyncio.wait_for(
+            asyncio.to_thread(_load_realtime_quotes_snapshot, 10), timeout=10.0
+        )
         by_gain = sorted(
             realtime_snapshot.values(),
             key=lambda quote: float(quote.get("change_percent") or quote.get("pct_chg") or -99),
@@ -2118,7 +2384,13 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
                     candidates_by_symbol.setdefault(symbol, {"symbol": symbol, "name": item.get("name") or symbol})
     except Exception:
         pass
-    candidates = list(candidates_by_symbol.values())[:620]
+    candidates = list(candidates_by_symbol.values())[:min(safe_universe, 620)]
+    _smart_pool_task_update(
+        task_id,
+        progress=52,
+        phase="quotes",
+        message=f"抽取 {len(candidates)} 只候选并叠加实时行情",
+    )
     candidate_quotes = await _realtime_quotes([item["symbol"] for item in candidates])
     analyze_semaphore = asyncio.Semaphore(40)
 
@@ -2238,7 +2510,9 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
             "latest_events": list(dict.fromkeys([title for title in catalyst["titles"] if title]))[:3],
         }
 
+    _smart_pool_task_update(task_id, progress=66, phase="scoring", message="并行计算量化分、动量、风险和触发器")
     analyzed = await asyncio.gather(*(analyze_candidate(candidate) for candidate in candidates))
+    _smart_pool_task_update(task_id, progress=86, phase="ranking", message="排序候选池并补齐行业板块")
     primary_items = [item for item in analyzed if item and item.get("attack_tier") == "primary"]
     secondary_items = [item for item in analyzed if item and item.get("attack_tier") == "secondary"]
     items = primary_items
@@ -2286,7 +2560,73 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
     response = {"success": True, "data": data, "message": "ok"}
     _persistent_cache_set(cache_key, response)
     _cache_set(cache_key, response)
+    _smart_pool_task_update(task_id, progress=95, phase="realtime", message="推荐池完成，刷新实时价格")
     return await _enrich_smart_pool_realtime(response)
+
+
+@app.get("/api/lite/smart-pool")
+async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_limit: int = 500):
+    return await _compute_lite_smart_pool(strategy, limit, universe_limit)
+
+
+async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int, universe_limit: int) -> None:
+    try:
+        _smart_pool_task_update(task_id, status="running", progress=2, phase="queued", message="任务已进入后台")
+        result = await _compute_lite_smart_pool(strategy, limit, universe_limit, task_id=task_id)
+        lite_smart_pool_tasks[task_id].update(
+            {
+                "status": "completed",
+                "progress": 100,
+                "phase": "completed",
+                "message": "智能推荐池已生成",
+                "result": result,
+                "finished_at": datetime.now().astimezone().isoformat(),
+                "updated_at": datetime.now().astimezone().isoformat(),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        lite_smart_pool_tasks[task_id].update(
+            {
+                "status": "failed",
+                "progress": 100,
+                "phase": "failed",
+                "message": f"智能推荐失败：{exc}",
+                "error": str(exc),
+                "finished_at": datetime.now().astimezone().isoformat(),
+                "updated_at": datetime.now().astimezone().isoformat(),
+            }
+        )
+
+
+@app.post("/api/lite/smart-pool/tasks")
+async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 30, universe_limit: int = 500):
+    safe_limit = max(5, min(limit, 50))
+    safe_universe = max(safe_limit * 2, min(universe_limit, 1200))
+    _smart_pool_task_cleanup()
+    task_id = "smart_" + secrets.token_hex(8)
+    now = datetime.now().astimezone().isoformat()
+    lite_smart_pool_tasks[task_id] = {
+        "task_id": task_id,
+        "status": "queued",
+        "progress": 1,
+        "phase": "queued",
+        "message": "后台智能推荐任务已创建",
+        "strategy": strategy,
+        "limit": safe_limit,
+        "universe_limit": safe_universe,
+        "created_at": now,
+        "updated_at": now,
+    }
+    asyncio.create_task(_run_lite_smart_pool_task(task_id, strategy, safe_limit, safe_universe))
+    return {"success": True, "data": lite_smart_pool_tasks[task_id], "message": "started"}
+
+
+@app.get("/api/lite/smart-pool/tasks/{task_id}")
+async def lite_smart_pool_task_status(task_id: str):
+    task = lite_smart_pool_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="智能推荐任务不存在或已过期")
+    return {"success": True, "data": task, "message": "ok"}
 
 
 @app.get("/api/lite/hot-news")
@@ -2424,7 +2764,11 @@ async def lite_catalysts(window: str = "24h", threshold: float = 1.5, limit: int
     cached = _cache_get(cache_key, 300)
     if cached:
         return await _enrich_catalysts_realtime(cached)
-    await ensure_recent_lite_news()
+    # 新闻预取 12s 封顶：股票池/新闻源首拉慢时不阻塞利好监控出数。
+    try:
+        await asyncio.wait_for(ensure_recent_lite_news(), timeout=12.0)
+    except (asyncio.TimeoutError, Exception):
+        pass
     events = _query_news_events(limit=200, sentiment="利好")
     grouped: dict[str, dict[str, Any]] = {}
     for event in events:
@@ -2447,11 +2791,10 @@ async def lite_catalysts(window: str = "24h", threshold: float = 1.5, limit: int
             current["events"].append(event)
 
     quant_items: list[dict[str, Any]] = []
-    try:
-        quant_pool = await asyncio.to_thread(lite_quant_engine.smart_pool, limit=max(20, safe_limit * 2), universe_limit=5000)
-        quant_candidates = quant_pool.get("items") or []
-    except Exception:
-        quant_candidates = []
+    # 利好监控是事件驱动：不在请求路径同步跑全市场 smart_pool（本身 30-40s，且 wait_for
+    # 无法终止后台线程、会持续抢占 GIL 拖死后端 —— 这正是端点 35s 挂死的根因）。
+    # 量化选股的职责在「智能选股」页；这里走利好事件聚合 + 实时报价的快路径。
+    quant_candidates: list[dict[str, Any]] = []
     for raw in quant_candidates:
         if not isinstance(raw, dict):
             continue
@@ -2542,35 +2885,39 @@ async def lite_catalysts(window: str = "24h", threshold: float = 1.5, limit: int
         _cache_set(cache_key, response)
         return await _enrich_catalysts_realtime(response)
 
+    # 事件驱动快路径：不调用逐股 analyze（本地数据稀疏时会退化到慢速联网取数、阻塞事件循环）。
+    # 价格/涨跌幅统一由下方 _enrich_catalysts_realtime 用腾讯批量报价补齐。
+    top_grouped = sorted(grouped.items(), key=lambda kv: kv[1].get("hot_score", 0), reverse=True)[: safe_limit * 2]
     items = []
-    for symbol, data in grouped.items():
-        try:
-            quant = asdict(lite_quant_engine.analyze(symbol))
-        except Exception:
-            quant = {}
-        latest = quant.get("latest") or {}
-        score = float(quant.get("score") or 0)
-        pct = float(latest.get("pct_change") or _stable_float(symbol + "pct", -4, 6))
+    for symbol, data in top_grouped:
         events_for_symbol = data["events"][:3]
+        mentions = int(data["mentions"])
         hot_score = round(data["hot_score"], 2)
         items.append({
             "symbol": symbol,
             "name": data["name"],
-            "score": round(score, 1),
-            "signal": quant.get("signal") or "watch",
-            "mentions": data["mentions"],
+            "score": round(min(95.0, 60 + hot_score * 4), 1),
+            "signal": "watch",
+            "mentions": mentions,
             "hot_score": hot_score,
-            "sentiment": round(data["sentiment"] / max(1, data["mentions"]), 2),
-            "change_percent": round(pct, 2),
-            "price": round(float(latest.get("close") or latest.get("price") or _stable_float(symbol + "price", 5, 450)), 2),
-            "risk_level": _risk_level(float((quant.get("risk") or {}).get("volatility") or 0), float((quant.get("risk") or {}).get("max_drawdown") or 0)),
-            "sparkline": _sparkline(symbol, pct),
+            "sentiment": round(data["sentiment"] / max(1, mentions), 2),
+            "change_percent": 0.0,
+            "price": 0.0,
+            "risk_level": "中",
+            "sparkline": _sparkline(symbol, 0.0),
             "reasons": [EVENT_TYPE_LABELS.get(event.get("event_type", ""), event.get("event_type", "事件")) for event in events_for_symbol] or ["真实事件进入观察池"],
             "latest_titles": [event["title"] for event in events_for_symbol],
             "updated_at": _now_cn(),
         })
     if not items:
-        items = await asyncio.to_thread(_build_catalyst_items, safe_limit)
+        # 无利好事件时退到自选观察池（零 analyze，价格由实时报价补齐）。
+        items = [{
+            "symbol": w["symbol"], "name": w["name"], "score": 60.0, "signal": "watch",
+            "mentions": 0, "hot_score": round(max(threshold, 1.5), 2), "sentiment": 0.0,
+            "change_percent": 0.0, "price": 0.0, "risk_level": "中",
+            "sparkline": _sparkline(w["symbol"], 0.0), "reasons": ["自选观察池"],
+            "latest_titles": [], "updated_at": _now_cn(),
+        } for w in _watch_symbols()][:safe_limit]
     items = sorted(items, key=lambda item: item["hot_score"], reverse=True)[:safe_limit]
     filtered = [item for item in items if item["hot_score"] >= threshold]
     type_counter: dict[str, int] = {}
@@ -2639,15 +2986,31 @@ async def lite_market_sentiment(start: str | None = None, end: str | None = None
     today = datetime.now().strftime("%Y-%m-%d")
     e = end or today
     s = start or (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    cache_key = f"sentiment:{s}:{e}"
+    cached = lite_insights_cache.get(cache_key)
+    if cached:
+        ts, payload = cached
+        if (datetime.now(timezone.utc) - ts).total_seconds() < 300:  # 5-min cache
+            return {"success": True, "data": payload}
     try:
         realtime_quotes = {}
         if e >= today:
             try:
-                realtime_quotes = await asyncio.to_thread(_load_realtime_quotes_snapshot, 60)
+                realtime_quotes = await _run_data_task(_load_realtime_quotes_snapshot, 60, timeout=8.0)
             except Exception:
                 realtime_quotes = {}
-        data = await asyncio.to_thread(compute_market_sentiment, s, e, 24, realtime_quotes)
+        data = await _run_data_task(compute_market_sentiment, s, e, 24, realtime_quotes, timeout=25.0)
+        lite_insights_cache[cache_key] = (datetime.now(timezone.utc), data)
         return {"success": True, "data": data}
+    except asyncio.TimeoutError:
+        if cached:
+            _, payload = cached
+            data = dict(payload) if isinstance(payload, dict) else payload
+            if isinstance(data, dict):
+                data["stale"] = True
+                data["message"] = "市场情绪计算超时，已返回最近缓存结果。"
+            return {"success": True, "data": data, "message": "市场情绪计算超时，已使用缓存"}
+        return {"success": False, "data": None, "message": "市场情绪计算超时，请稍后重试"}
     except Exception as exc:
         return {"success": False, "data": None, "message": str(exc)}
 
@@ -2656,25 +3019,100 @@ async def lite_market_sentiment(start: str | None = None, end: str | None = None
 async def lite_limit_up_distribution(date: str | None = None):
     """涨停热点分布：单日连板梯队 × 概念板块矩阵（基于本地日线）。"""
     from quantcore.quant.limit_up import compute_limit_up_distribution
+    from quantcore.quant.limit_up_taxonomy import limit_up_taxonomy_version
     target = date or datetime.now().strftime("%Y-%m-%d")
+    cache_key = f"limit_up:{limit_up_taxonomy_version()}:{target}"
+    cached = lite_insights_cache.get(cache_key)
+    if cached:
+        ts, payload = cached
+        if (datetime.now(timezone.utc) - ts).total_seconds() < 600:  # 10-min cache
+            return {"success": True, "data": payload}
     try:
-        data = await asyncio.to_thread(compute_limit_up_distribution, target)
+        realtime_quotes = {}
+        today = datetime.now().strftime("%Y-%m-%d")
+        if target >= today:
+            try:
+                realtime_quotes = await _run_data_task(_load_realtime_quotes_snapshot, 30, timeout=8.0)
+            except Exception:
+                realtime_quotes = {}
+        data = await _run_data_task(compute_limit_up_distribution, target, realtime_quotes, timeout=25.0)
+        lite_insights_cache[cache_key] = (datetime.now(timezone.utc), data)
         return {"success": True, "data": data}
+    except asyncio.TimeoutError:
+        if cached:
+            _, payload = cached
+            data = dict(payload) if isinstance(payload, dict) else payload
+            if isinstance(data, dict):
+                data["stale"] = True
+                data["message"] = "涨停热点计算超时，已返回最近缓存结果。"
+            return {"success": True, "data": data, "message": "涨停热点计算超时，已使用缓存"}
+        return {"success": False, "data": None, "message": "涨停热点计算超时，请稍后重试"}
     except Exception as exc:
         return {"success": False, "data": None, "message": str(exc)}
 
 
 @app.get("/api/system/config/validate")
 async def validate_config():
+    membership_ready = bool(os.getenv("LYNX_MEMBERSHIP_WECHAT", "").strip() or os.getenv("LYNX_MEMBERSHIP_QR_URL", "").strip())
+    icp_ready = bool(os.getenv("LYNX_ICP_BEIAN", "").strip())
+    payment_ready = bool(os.getenv("LYNX_PAYMENT_PROVIDER", "").strip())
+    wechat_push_ready = bool(
+        os.getenv("SERVERCHAN_SENDKEY", "").strip()
+        or os.getenv("SERVERCHAN_KEY", "").strip()
+        or os.getenv("PUSHPLUS_TOKEN", "").strip()
+    )
+    jwt_ready = bool(os.getenv("JWT_SECRET", "").strip())
+    checks = [
+        {
+            "key": "membership_upgrade",
+            "label": "会员收款码/运营微信",
+            "ok": membership_ready,
+            "required": True,
+            "message": "配置 LYNX_MEMBERSHIP_WECHAT 或 LYNX_MEMBERSHIP_QR_URL 后，会员页会展示真实开通信息。",
+        },
+        {
+            "key": "icp",
+            "label": "ICP备案",
+            "ok": icp_ready,
+            "required": True,
+            "message": "公开部署前配置 LYNX_ICP_BEIAN，并在页面页脚展示备案号。",
+        },
+        {
+            "key": "payment_provider",
+            "label": "正式支付",
+            "ok": payment_ready,
+            "required": False,
+            "message": "M1 可人工开通；正式收款前配置 LYNX_PAYMENT_PROVIDER 并接入支付回调。",
+        },
+        {
+            "key": "wechat_push",
+            "label": "微信推送全局 token",
+            "ok": wechat_push_ready,
+            "required": False,
+            "message": "可用用户自绑定；如需后台统一推送，配置 SERVERCHAN_SENDKEY 或 PUSHPLUS_TOKEN。",
+        },
+        {
+            "key": "jwt_secret",
+            "label": "登录签名密钥",
+            "ok": jwt_ready,
+            "required": True,
+            "message": "生产环境必须配置 JWT_SECRET，避免重启后登录失效或使用默认密钥。",
+        },
+    ]
+    valid = all(item["ok"] for item in checks if item["required"])
     return {
         "success": True,
         "data": {
-            "valid": True,
+            "valid": valid,
             "mode": "saas-lite",
             "storage": "sqlite",
-            "warnings": ["SaaS Lite 使用本地 SQLite，不启用 MongoDB/Redis 队列。"],
+            "checks": checks,
+            "warnings": [
+                item["message"] for item in checks
+                if not item["ok"] and (item["required"] or item["key"] in {"payment_provider", "wechat_push"})
+            ] + ["SaaS Lite 使用本地 SQLite，不启用 MongoDB/Redis 队列。"],
         },
-        "message": "saas-lite mode",
+        "message": "ready" if valid else "commercial config incomplete",
     }
 
 
@@ -2760,23 +3198,72 @@ async def recommend_models(payload: dict[str, Any]):
 
 
 @app.get("/api/notifications/unread_count")
-async def unread_count():
-    return {"success": True, "data": {"count": 0}, "message": "ok"}
+async def unread_count(user: dict[str, Any] = Depends(get_current_lite_user)):
+    return {"success": True, "data": {"count": notification_store.unread_count(user["username"])}, "message": "ok"}
 
 
 @app.get("/api/notifications")
-async def notifications():
-    return {"success": True, "data": {"items": [], "total": 0}, "message": "ok"}
+async def notifications(limit: int = 50, user: dict[str, Any] = Depends(get_current_lite_user)):
+    items = notification_store.list(user["username"], limit)
+    return {"success": True, "data": {"items": items, "total": len(items)}, "message": "ok"}
 
 
 @app.post("/api/notifications/{notification_id}/read")
-async def read_notification(notification_id: str):
+async def read_notification(notification_id: str, user: dict[str, Any] = Depends(get_current_lite_user)):
+    notification_store.mark_read(user["username"], notification_id)
     return {"success": True, "data": {"id": notification_id}, "message": "ok"}
 
 
 @app.post("/api/notifications/read_all")
-async def read_all_notifications():
+async def read_all_notifications(user: dict[str, Any] = Depends(get_current_lite_user)):
+    notification_store.mark_all_read(user["username"])
     return {"success": True, "data": None, "message": "ok"}
+
+
+@app.get("/api/notifications/wechat/status")
+async def wechat_push_status(user: dict[str, Any] = Depends(get_current_lite_user)):
+    return {"success": True, "data": notification_store.wechat_status(user["username"], user), "message": "ok"}
+
+
+@app.post("/api/notifications/wechat/bind")
+async def bind_wechat_push(req: LiteWechatBindRequest, user: dict[str, Any] = Depends(get_current_lite_user)):
+    try:
+        notification_store.bind_wechat(
+            user["username"],
+            serverchan_key=req.serverchan_key,
+            pushplus_token=req.pushplus_token,
+            enabled=req.enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"message": str(exc)}) from exc
+    return {"success": True, "data": notification_store.wechat_status(user["username"], user), "message": "已绑定微信推送"}
+
+
+@app.delete("/api/notifications/wechat/bind")
+async def unbind_wechat_push(user: dict[str, Any] = Depends(get_current_lite_user)):
+    notification_store.unbind_wechat(user["username"])
+    return {"success": True, "data": notification_store.wechat_status(user["username"], user), "message": "已解绑微信推送"}
+
+
+@app.post("/api/notifications/wechat/test")
+async def test_wechat_push(user: dict[str, Any] = Depends(get_current_lite_user)):
+    if effective_plan(user) != "member":
+        raise HTTPException(status_code=402, detail={
+            "code": "member_required",
+            "message": "微信推送为会员专属功能，升级会员后可用",
+        })
+    result = notification_store.notify_user(
+        user["username"],
+        "LynxAgent 微信推送测试",
+        "这是一条测试通知。收到后说明微信推送绑定已生效。\n\n仅供研究提醒，不构成投资建议。",
+        type_="wechat_test",
+        payload={"source": "membership"},
+        dedupe_key=None,
+        send_wechat=True,
+    )
+    if not result.get("wechat_sent"):
+        raise HTTPException(status_code=400, detail={"message": "测试通知未发送成功，请检查 SendKey/Token 是否正确"})
+    return {"success": True, "data": result, "message": "测试通知已发送"}
 
 
 @app.websocket("/api/ws/notifications")
@@ -2881,7 +3368,7 @@ async def _paper_account_summary(username: str) -> dict[str, Any]:
     )
     risk_flags: list[str] = []
     if exposure_ratio >= 0.85:
-        risk_flags.append("总仓位超过 85%，不再建议继续加仓。")
+        risk_flags.append("模拟持仓占用超过 85%，不再建议继续提高风险暴露。")
     if largest_position["weight"] >= 0.25:
         risk_flags.append(f"{largest_position['code']} 单票仓位超过 25%，注意集中度风险。")
     if cash / equity < 0.05 if equity > 0 else False:
@@ -2928,7 +3415,10 @@ async def _paper_pretrade_risk_check(username: str, code: str, side: str, amount
 
 
 @app.get("/api/paper/account")
-async def paper_account(user: dict[str, Any] = Depends(get_current_lite_user)):
+async def paper_account(
+    _: None = Depends(require_paper_trading_enabled),
+    user: dict[str, Any] = Depends(get_current_lite_user),
+):
     username = user["username"]
     return {
         "success": True,
@@ -2941,12 +3431,19 @@ async def paper_account(user: dict[str, Any] = Depends(get_current_lite_user)):
 
 
 @app.get("/api/paper/positions")
-async def paper_positions(user: dict[str, Any] = Depends(get_current_lite_user)):
+async def paper_positions(
+    _: None = Depends(require_paper_trading_enabled),
+    user: dict[str, Any] = Depends(get_current_lite_user),
+):
     return {"success": True, "data": {"items": await _paper_positions(user["username"])}, "message": "ok"}
 
 
 @app.get("/api/paper/orders")
-async def paper_orders(limit: int = 50, user: dict[str, Any] = Depends(get_current_lite_user)):
+async def paper_orders(
+    limit: int = 50,
+    _: None = Depends(require_paper_trading_enabled),
+    user: dict[str, Any] = Depends(get_current_lite_user),
+):
     with store.connect() as conn:
         rows = conn.execute(
             """
@@ -2975,12 +3472,19 @@ async def paper_orders(limit: int = 50, user: dict[str, Any] = Depends(get_curre
 
 
 @app.get("/api/paper/trader/status")
-async def paper_trader_status(user: dict[str, Any] = Depends(get_current_lite_user)):
+async def paper_trader_status(
+    _: None = Depends(require_paper_trading_enabled),
+    user: dict[str, Any] = Depends(get_current_lite_user),
+):
     return {"success": True, "data": asdict(lite_trader_bridge.status()), "message": "ok"}
 
 
 @app.post("/api/paper/order")
-async def paper_order(payload: LitePaperOrderRequest, user: dict[str, Any] = Depends(get_current_lite_user)):
+async def paper_order(
+    payload: LitePaperOrderRequest,
+    _: None = Depends(require_paper_trading_enabled),
+    user: dict[str, Any] = Depends(get_current_lite_user),
+):
     username = user["username"]
     code = payload.code.strip().upper()
     if not re.fullmatch(r"\d{6}", code):
@@ -3101,7 +3605,11 @@ async def paper_order(payload: LitePaperOrderRequest, user: dict[str, Any] = Dep
 
 
 @app.post("/api/paper/reset")
-async def paper_reset(confirm: bool = False, user: dict[str, Any] = Depends(get_current_lite_user)):
+async def paper_reset(
+    confirm: bool = False,
+    _: None = Depends(require_paper_trading_enabled),
+    user: dict[str, Any] = Depends(get_current_lite_user),
+):
     if not confirm:
         return {"success": False, "data": None, "message": "请设置 confirm=true 以确认重置", "code": 400}
     username = user["username"]
@@ -3557,34 +4065,34 @@ def _score_profile(score: float) -> dict[str, str]:
             "grade": "A",
             "label": "高确定性强势",
             "stance": "趋势质量和因子共振较强，适合纳入核心候选，但仍要防止高位拥挤后的快速回撤。",
-            "bias": "强势优先",
+            "bias": "强势跟踪",
         }
     if score >= 78:
         return {
             "grade": "A-",
             "label": "强趋势候选",
-            "stance": "分数已经进入强势区间，核心问题不是能不能买，而是买点、仓位和止损是否有纪律。",
-            "bias": "积极但不追满",
+            "stance": "分数已经进入强势区间，核心问题是观察位、风险线和验证节奏是否清晰。",
+            "bias": "积极跟踪但不提高过高权重",
         }
     if score >= 72:
         return {
             "grade": "B+",
             "label": "中高胜率候选",
-            "stance": "趋势和动量有优势，但尚未达到无脑强势，适合等待回踩确认或突破放量后分批参与。",
+            "stance": "趋势和动量有优势，但尚未达到高确定性，适合等待回踩确认或突破放量后再提高关注级别。",
             "bias": "偏积极",
         }
     if score >= 65:
         return {
             "grade": "B",
             "label": "机会型观察",
-            "stance": "有可交易信号，但确定性来自局部因子，若风控或RSI拖累，需要降低仓位预期。",
-            "bias": "谨慎参与",
+            "stance": "有跟踪价值，但确定性来自局部因子，若风控或RSI拖累，需要降低关注权重。",
+            "bias": "谨慎跟踪",
         }
     if score >= 58:
         return {
             "grade": "C+",
             "label": "结构分歧",
-            "stance": "部分指标支持交易，整体胜率一般，适合观察或极小仓试错，不适合当作主线品种。",
+            "stance": "部分指标改善，但整体胜率一般，适合观察，不适合当作主线品种。",
             "bias": "观察优先",
         }
     if score >= 50:
@@ -3597,22 +4105,22 @@ def _score_profile(score: float) -> dict[str, str]:
     return {
         "grade": "D",
         "label": "弱势回避",
-        "stance": "主要因子不足，除非有明确基本面催化或极强反转信号，否则不建议参与。",
-        "bias": "回避",
+        "stance": "主要因子不足，除非有明确基本面催化或极强反转信号，否则不纳入重点跟踪。",
+        "bias": "暂不纳入",
     }
 
 
 def _rsi_profile(rsi: float) -> str:
     if rsi >= 85:
-        return "RSI处于极高位，短线筹码明显拥挤，追涨的回撤代价偏高。"
+        return "RSI处于极高位，短线筹码明显拥挤，继续上行的回撤代价偏高。"
     if rsi >= 70:
-        return "RSI偏高，说明买盘强但短线已不便宜，更适合等回踩或盘中分歧。"
+        return "RSI偏高，说明动量强但短线已不便宜，更适合观察回踩或盘中分歧。"
     if rsi >= 55:
         return "RSI处于偏强区间，动量仍在，但没有明显过热。"
     if rsi >= 45:
         return "RSI中性，价格方向更多依赖趋势延续和成交确认。"
     if rsi >= 30:
-        return "RSI偏弱，短线反弹可能存在，但主动买入胜率需要趋势配合。"
+        return "RSI偏弱，短线修复可能存在，但胜率需要趋势配合。"
     return "RSI低位，存在技术修复空间，但也说明近期承压明显，不能只按低位反弹处理。"
 
 
@@ -3627,16 +4135,16 @@ def _risk_level(volatility: float, max_drawdown: float) -> str:
 def _risk_profile(risk_level: str, volatility: float, max_drawdown: float, sharpe: float) -> str:
     parts = []
     if risk_level == "高":
-        parts.append("风险等级为高，说明它不是稳健低波动品种，仓位和止损比方向判断更重要")
+        parts.append("风险等级为高，说明它不是稳健低波动品种，观察权重和失效条件比方向判断更重要")
     elif risk_level == "中":
-        parts.append("风险等级为中，波动可接受但仍需要避免单次重仓")
+        parts.append("风险等级为中，波动可接受但仍需要避免过高关注权重")
     else:
         parts.append("风险等级为低，价格波动相对可控")
 
     if max_drawdown <= -0.35:
-        parts.append("历史最大回撤很深，若买点追高，账户体验会明显恶化")
+        parts.append("历史最大回撤很深，若观察位过高，收益回撤比会明显恶化")
     elif max_drawdown <= -0.25:
-        parts.append("最大回撤偏大，适合用分批和移动止损控制风险")
+        parts.append("最大回撤偏大，需要用动态失效条件控制风险")
     else:
         parts.append("最大回撤压力相对温和")
 
@@ -3655,35 +4163,35 @@ def _trade_plan(score: float, signal: str, risk_level: str, rsi: float) -> dict[
         if risk_level == "高" or rsi >= 70:
             return {
                 "action": "强势跟踪，等待回踩或放量突破确认",
-                "position": "单票初始仓位建议 10%-15%，确认后再加到 20% 以内",
-                "stop": "跌破短期关键均线或回撤超过 7%-10% 应减仓，不建议满仓硬扛",
+                "position": "关注优先级：高，但需等待风险释放或二次确认",
+                "stop": "跌破短期关键均线或回撤超过 7%-10%，视为趋势假设失效",
             }
         return {
-            "action": "可作为重点候选，分批建仓",
-            "position": "初始仓位 15%-20%，走势确认后再提高",
+            "action": "可作为重点候选，跟踪放量确认",
+            "position": "关注优先级：高，确认后再提高跟踪权重",
             "stop": "用最近一轮震荡低点或 6%-8% 回撤作为失效线",
         }
     if score >= 72:
         return {
-            "action": "偏积极，但买点要挑剔",
-            "position": "初始仓位 8%-12%，突破或回踩承接确认后再加仓",
-            "stop": "若放量跌破近期支撑，先降仓而不是补仓",
+            "action": "偏积极，但观察位要挑剔",
+            "position": "关注优先级：中高，突破或回踩承接确认后再提高",
+            "stop": "若放量跌破近期支撑，降低跟踪权重",
         }
     if score >= 65:
         return {
-            "action": "小仓试错或加入观察池",
-            "position": "仓位控制在 5%-8%，只适合有明确交易计划时参与",
+            "action": "加入观察池，等待二次确认",
+            "position": "关注优先级：中，只适合跟踪验证",
             "stop": "若趋势因子转弱或回撤扩大，应退出观察",
         }
     if score >= 58:
         return {
             "action": "观察为主，等待信号强化",
-            "position": "不建议主动建仓，可用 0%-5% 试错仓验证判断",
-            "stop": "没有量价改善前不加仓",
+            "position": "关注优先级：低，等待量价改善",
+            "stop": "没有量价改善前不提高跟踪权重",
         }
     return {
-        "action": "暂不参与",
-        "position": "保持空仓或仅保留已有底仓",
+        "action": "暂不纳入重点跟踪",
+        "position": "关注优先级：低",
         "stop": "只有评分重新回到 65 以上并出现成交确认时再评估",
     }
 
@@ -3867,7 +4375,7 @@ def _build_professional_single_stock_report(
         if quality.get("rationale"):
             fundamental_points.append(str(quality["rationale"]))
     if base_scenario.get("target_price") is not None:
-        fundamental_points.append(f"财务情景测算的基准目标价约 {base_scenario.get('target_price')}，该值来自财报收入、利润率、EPS/股本和估值推导。")
+        fundamental_points.append(f"财务情景测算的基准价格中枢约 {base_scenario.get('target_price')}，该值来自财报收入、利润率、EPS/股本和估值推导。")
     if not fundamental_points:
         fundamental_points.append("当前基本面层以量化和可用公开数据为主，若财报/公告数据不足，系统不会用固定假设伪造结论。")
 
@@ -3877,7 +4385,7 @@ def _build_professional_single_stock_report(
         f"它不是只看涨跌幅就能判断的票，关键要看趋势是否延续、短中期动量是否共振、成交额是否继续活跃，以及回撤风险有没有扩大。"
     )
     if label in {"强势候选", "重点跟踪"}:
-        conclusion += f" 短线核心看 {support:.2f} 附近是否有承接、{reclaim:.2f} 能否站稳；这些价位都按当前价附近重新计算，不再拿远端均线当止损。"
+        conclusion += f" 短线核心看 {support:.2f} 附近是否有承接、{reclaim:.2f} 能否站稳；这些价位都按当前价附近重新计算，不再拿远端均线当失效线。"
     else:
         conclusion += f" 现在更适合等确认，不能因为单日反弹就直接追；若跌破 {hard_stop:.2f}，短线风险就应该升级。"
 
@@ -3898,18 +4406,18 @@ def _build_professional_single_stock_report(
         f"趋势因子 {trend:.0f}，动量因子 {momentum:.0f}，RSI {rsi:.0f}，流动性 {liquidity:.0f}，风控 {risk_control:.0f}。"
         f"{extra_ind_line}"
         f"{_rsi_profile(rsi)} {_risk_profile(risk_level, volatility, max_drawdown, sharpe)}\n\n"
-        f"关键价位：短线承接位 {support:.2f}（距当前约 {support_gap:.1f}%），战术止损位 {hard_stop:.2f}（距当前约 {stop_gap:.1f}%），站稳确认位 {reclaim:.2f}（距当前约 {reclaim_gap:+.1f}%），加速确认位 {breakout:.2f}（距当前约 {breakout_gap:+.1f}%）。"
+        f"关键价位：短线承接位 {support:.2f}（距当前约 {support_gap:.1f}%），战术失效位 {hard_stop:.2f}（距当前约 {stop_gap:.1f}%），站稳确认位 {reclaim:.2f}（距当前约 {reclaim_gap:+.1f}%），加速确认位 {breakout:.2f}（距当前约 {breakout_gap:+.1f}%）。"
     )
 
     fundamental_section = "二、基本面和深度框架：\n\n" + "\n".join(f"- {item}" for item in fundamental_points)
 
     execution_section = (
         "三、接下来怎么做：\n\n"
-        f"- 已持有：重点看 {support:.2f} 附近的承接；跌破 {hard_stop:.2f} 就不是“继续看看”，应先控制仓位。\n"
-        f"- 未持有：不建议在涨幅已大时直接追。更好的入场是回踩 {support:.2f} 附近有承接，或放量站稳 {reclaim:.2f} 后再确认。\n"
+        f"- 已关注：重点看 {support:.2f} 附近的承接；跌破 {hard_stop:.2f} 就不是“继续看看”，应先降低关注权重。\n"
+        f"- 未关注：不建议在涨幅已大时直接提高权重；更好的观察条件是回踩 {support:.2f} 附近有承接，或放量站稳 {reclaim:.2f} 后再确认。\n"
         f"- 如果突破 {breakout:.2f} 且成交额同步放大，才说明短中期趋势有继续走一段的概率。\n"
         "- 若量化评分跌破 70、动量转弱或风控因子明显下降，应把它从进攻候选降级为观察。"
-        + (f"\n- ATR 自适应止损：吊灯止损位约 {chandelier_stop:.2f}（22 日最高 − 3×ATR），跌破视为趋势止损，比固定百分比更贴合个股波动。" if chandelier_stop else "")
+        + (f"\n- ATR 自适应风险线：吊灯线约 {chandelier_stop:.2f}（22 日最高 − 3×ATR），跌破视为趋势假设失效，比固定百分比更贴合个股波动。" if chandelier_stop else "")
     )
 
     final_report = "\n\n".join([
@@ -4072,40 +4580,40 @@ def build_lite_analysis_result(
         "生产版建议接入公告、交易所问询、行业政策和主流财经新闻，避免只凭量价信号做决策。"
     )
     atr_stop_line = (
-        f"\n\nATR 自适应止损参考：吊灯止损位约 {chandelier_stop:.2f}（= 22 日最高价 − 3×ATR），"
-        "跌破即视为趋势止损，比固定百分比更贴合个股波动。"
+        f"\n\nATR 自适应风险线：吊灯线约 {chandelier_stop:.2f}（= 22 日最高价 − 3×ATR），"
+        "跌破即视为趋势假设失效，比固定百分比更贴合个股波动。"
         if chandelier_stop > 0 else ""
     )
     investment_plan = (
-        f"操作倾向：{plan['action']}。\n\n"
-        f"仓位建议：{plan['position']}。\n\n"
-        f"风控规则：{plan['stop']}。{atr_stop_line}\n\n"
+        f"跟踪倾向：{plan['action']}。\n\n"
+        f"关注权重：{plan['position']}。\n\n"
+        f"失效规则：{plan['stop']}。{atr_stop_line}\n\n"
         "适用前提：趋势因子维持在当前水平附近，且最大回撤没有继续扩大。"
     )
     research_team_decision = (
-        f"多头理由：{strength_text}支撑当前评分，说明价格结构里有可交易的一面。\n\n"
-        f"空头理由：{weakness_text}和{risk_level}风险等级限制了仓位上限，"
-        "如果买点过高，收益风险比会变差。\n\n"
-        f"研究结论：{profile['bias']}。这不是只看 buy/strong_buy 的机械信号，"
+        f"正向理由：{strength_text}支撑当前评分，说明价格结构里有可跟踪的一面。\n\n"
+        f"反向理由：{weakness_text}和{risk_level}风险等级限制了关注权重，"
+        "如果观察位过高，收益风险比会变差。\n\n"
+        f"研究结论：{profile['bias']}。这不是只看强弱标签的机械信号，"
         "需要把评分区间和风险结构一起看。"
     )
     trader_plan = (
-        f"交易执行：{plan['action']}。\n\n"
-        "入场条件：优先选择回踩不破、缩量企稳后重新放量，或突破前高并伴随成交确认。\n\n"
-        f"仓位节奏：{plan['position']}。\n\n"
+        f"跟踪计划：{plan['action']}。\n\n"
+        "观察条件：优先看回踩不破、缩量企稳后重新放量，或突破前高并伴随成交确认。\n\n"
+        f"跟踪权重：{plan['position']}。\n\n"
         f"失效条件：{plan['stop']}。"
     )
     risk_management = (
         f"风险评级：{risk_level}。最大回撤约 {max_drawdown:.2%}，年化波动率约 {volatility:.2%}，夏普约 {sharpe:.2f}。\n\n"
         f"{risk_text}\n\n"
-        f"风控因子 {_fmt_score(risk_control_value)}，若该项低于 45，应把它视为限制仓位的硬条件，而不是普通扣分项。"
+        f"风控因子 {_fmt_score(risk_control_value)}，若该项低于 45，应把它视为限制关注权重的硬条件，而不是普通扣分项。"
     )
     final_decision = (
         f"最终结论：{profile['bias']}，但执行上按“{plan['action']}”处理。"
         f"{symbol} 当前不是一句简单的 {signal} 就能概括："
         f"评分 {score:.1f} 说明它处在“{profile['label']}”区间，"
         f"强项为{strength_text}，短板为{weakness_text}。"
-        f"建议按计划交易，核心是控制仓位和失效线：{plan['position']}；{plan['stop']}。"
+        f"后续按跟踪条件观察，核心是控制关注权重和失效线：{plan['position']}；{plan['stop']}。"
     )
 
     return {
@@ -4165,12 +4673,12 @@ def build_lite_analysis_result(
 
 def _normalize_deep_rating(rating: str) -> str:
     rating_map = {
-        "涔板叆": "买入",
-        "鎸佹湁": "持有",
+        "涔板叆": "积极关注",
+        "鎸佹湁": "继续跟踪",
         "瑙傚療": "观察",
         "鍥為伩": "回避",
-        "买入": "买入",
-        "持有": "持有",
+        "买入": "积极关注",
+        "持有": "继续跟踪",
         "观察": "观察",
         "回避": "回避",
     }
@@ -4222,7 +4730,7 @@ def _format_deep_scenarios(scenarios: dict[str, Any]) -> str:
         item = scenarios.get(key) or {}
         if item:
             lines.append(
-                f"- {label}：收入 {item.get('revenue', '-')}，净利润 {item.get('net_profit', '-')}，目标价格 {item.get('target_price', '-')}"
+                f"- {label}：收入 {item.get('revenue', '-')}，净利润 {item.get('net_profit', '-')}，价格中枢 {item.get('target_price', '-')}"
             )
     return "\n".join(lines) if lines else "暂无情景测算数据。"
 
@@ -4255,17 +4763,17 @@ def _format_deep_tracking(plan: dict[str, Any]) -> str:
 
 def _deep_action_to_decision(rating: str, current_price: Any) -> dict[str, Any]:
     action_map = {
-        "买入": "积极关注",
-        "持有": "继续跟踪",
+        "积极关注": "积极关注",
+        "继续跟踪": "继续跟踪",
         "观察": "等待确认",
-        "回避": "暂不参与",
+        "回避": "暂不纳入",
     }
-    confidence_map = {"买入": 0.72, "持有": 0.62, "观察": 0.52, "回避": 0.42}
+    confidence_map = {"积极关注": 0.72, "继续跟踪": 0.62, "观察": 0.52, "回避": 0.42}
     return {
         "action": action_map.get(rating, "等待确认"),
-        "target_price": current_price or "-",
+        "reference_price": current_price or "-",
         "confidence": confidence_map.get(rating, 0.5),
-        "risk_score": 0.45 if rating in {"买入", "持有"} else 0.62,
+        "risk_score": 0.45 if rating in {"积极关注", "继续跟踪"} else 0.62,
         "reasoning": f"Claude 深度分析给出“{rating}”倾向，SaaS Lite 量化层负责校验趋势、动量、RSI、流动性和回撤风险。",
     }
 
@@ -4302,11 +4810,11 @@ def _build_analysis_audit(result: dict[str, Any], deep_result: dict[str, Any] | 
 
     risk_checks = []
     if float(factors.get("risk_control") or 0) < 45:
-        risk_checks.append("风控因子低于 45，仓位上限应明显降低。")
+        risk_checks.append("风控因子低于 45，关注权重应明显降低。")
     if abs(float(risk.get("max_drawdown") or 0)) > 0.25:
-        risk_checks.append("历史最大回撤超过 25%，不适合重仓追涨。")
+        risk_checks.append("历史最大回撤超过 25%，不适合提高过高关注权重。")
     if float(factors.get("rsi") or 0) > 75:
-        risk_checks.append("RSI 偏高，短线追高风险上升。")
+        risk_checks.append("RSI 偏高，短线拥挤风险上升。")
 
     confidence = 0.72
     confidence -= min(0.25, len(gaps) * 0.08)
@@ -4325,7 +4833,7 @@ def _agent_stance(score: float, buy_line: float = 65, watch_line: float = 45) ->
         return "支持跟踪"
     if score >= watch_line:
         return "等待确认"
-    return "反对参与"
+    return "反对纳入"
 
 
 def _build_agent_review(result: dict[str, Any], deep_result: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -4358,7 +4866,7 @@ def _build_agent_review(result: dict[str, Any], deep_result: dict[str, Any] | No
             "confidence": round(max(0.35, min(0.86, score / 100)), 2),
             "points": [
                 f"趋势因子 {trend:.1f}，动量因子 {momentum:.1f}，流动性 {liquidity:.1f}",
-                f"RSI {rsi:.1f}，用于识别追高或超卖区间",
+                f"RSI {rsi:.1f}，用于识别拥挤或超卖区间",
             ],
         },
         {
@@ -4375,7 +4883,7 @@ def _build_agent_review(result: dict[str, Any], deep_result: dict[str, Any] | No
             "stance": _agent_stance(catalyst_score, 60, 45),
             "confidence": 0.42 if has_news_gap else 0.62,
             "points": [
-                "新闻/公告/研报证据不足，催化项不作为主买点" if has_news_gap else "新闻和催化信息已进入审查",
+                "新闻/公告/研报证据不足，催化项不作为核心依据" if has_news_gap else "新闻和催化信息已进入审查",
                 "只把催化作为加分项，不能替代量化和风控确认",
             ],
         },
@@ -4385,7 +4893,7 @@ def _build_agent_review(result: dict[str, Any], deep_result: dict[str, Any] | No
             "confidence": 0.74,
             "points": [
                 f"风控因子 {risk_control:.1f}，历史最大回撤 {max_drawdown:.2%}",
-                "RSI 偏高，追高风险上升" if rsi > 75 else "未触发 RSI 过热拦截",
+                "RSI 偏高，拥挤风险上升" if rsi > 75 else "未触发 RSI 过热拦截",
             ],
         },
         {
@@ -4393,20 +4901,20 @@ def _build_agent_review(result: dict[str, Any], deep_result: dict[str, Any] | No
             "stance": "要求降权" if max_drawdown > 0.25 or has_news_gap else "暂无硬拦截",
             "confidence": 0.7,
             "points": [
-                "如果买点过高，收益回撤比会快速恶化",
+                "如果观察位过高，收益回撤比会快速恶化",
                 "缺少新闻/公告证据时，不能把题材叙事写成确定性结论" if has_news_gap else "需要继续跟踪是否出现放量滞涨或破位",
             ],
         },
     ]
 
     support = sum(1 for agent in agents if agent["stance"] in {"支持跟踪", "暂无硬拦截"})
-    block = sum(1 for agent in agents if agent["stance"] in {"反对参与", "要求降权"})
+    block = sum(1 for agent in agents if agent["stance"] in {"反对纳入", "要求降权"})
     if block >= 2 or risk_score < 42:
         final_action = "先观察，等待风险释放"
     elif support >= 3 and score >= 65:
         final_action = "进入重点跟踪池"
     else:
-        final_action = "小仓观察，等待二次确认"
+        final_action = "低权重跟踪，等待二次确认"
 
     return {
         "final_action": final_action,
@@ -4417,7 +4925,7 @@ def _build_agent_review(result: dict[str, Any], deep_result: dict[str, Any] | No
 
 def _format_agent_review(review: dict[str, Any]) -> str:
     lines = [
-        f"最终动作：{review.get('final_action')}",
+        f"最终结论：{review.get('final_action')}",
         f"共识评分：{review.get('consensus_score')}",
         "",
     ]
@@ -4541,14 +5049,20 @@ async def favorites(user: dict[str, Any] = Depends(get_current_lite_user)):
         ).fetchall()
     items = []
     for row in rows:
+        try:
+            tags = json.loads(row["tags_json"] or "[]")
+        except json.JSONDecodeError:
+            tags = []
         items.append({
             "symbol": row["stock_code"],
             "stock_code": row["stock_code"],
             "stock_name": row["stock_name"],
             "market": row["market"],
-            "tags": [],
+            "tags": tags if isinstance(tags, list) else [],
             "notes": row["notes"] or "",
             "added_price": row["added_price"] if "added_price" in row.keys() else None,
+            "alert_price_high": row["alert_price_high"] if "alert_price_high" in row.keys() else None,
+            "alert_price_low": row["alert_price_low"] if "alert_price_low" in row.keys() else None,
             "added_at": row["added_at"],
         })
     quotes = await _realtime_quotes([item["stock_code"] for item in items])
@@ -4633,7 +5147,7 @@ async def favorites_portfolio_diagnostics(user: dict[str, Any] = Depends(get_cur
             "data": {
                 "score": 0,
                 "grade": "暂无自选",
-                "summary": "添加自选股后，系统会自动评估组合风险、行业集中度和建议仓位。",
+                "summary": "添加自选股后，系统会自动评估组合风险、行业集中度和关注权重。",
                 "items": [],
                 "industry_exposure": [],
                 "correlation_pairs": [],
@@ -4782,13 +5296,13 @@ async def favorites_portfolio_diagnostics(user: dict[str, Any] = Depends(get_cur
         suggested_actions.append("优先剔除高度相关且量化分较低的重复标的。")
     if portfolio_max_drawdown <= -0.22:
         risk_flags.append(f"等权历史最大回撤约 {portfolio_max_drawdown:.1%}，回撤压力偏大。")
-        suggested_actions.append("把高回撤个股的建议仓位降到 5% 以下。")
+        suggested_actions.append("把高回撤个股的关注权重降到低位。")
     weak_count = sum(1 for item in analyzed_items if item["risk_control"] < 45 or item["quant_score"] < 60)
     if weak_count:
         risk_flags.append(f"{weak_count} 只股票量化/风控偏弱，需要降级为观察。")
         suggested_actions.append("先处理风控弱、趋势动量弱的股票，再考虑新增标的。")
     if not risk_flags:
-        suggested_actions.append("组合暂无硬性风险，维持分散跟踪；单票建议仓位仍不超过 12%。")
+        suggested_actions.append("组合暂无硬性风险，维持分散跟踪；单票关注权重仍不宜过高。")
 
     score = 100
     score -= max(0, n < 5) * 15
@@ -4806,7 +5320,7 @@ async def favorites_portfolio_diagnostics(user: dict[str, Any] = Depends(get_cur
             "score": score,
             "grade": grade,
             "summary": f"当前自选 {n} 只，等权组合年化波动约 {portfolio_volatility:.1%}，最大回撤约 {portfolio_max_drawdown:.1%}，平均相关性 {avg_corr:.2f}。",
-            "assumption": "按自选股等权观察测算，建议仓位是研究约束，不是自动下单。",
+            "assumption": "按自选股等权观察测算，关注权重是研究约束，不是自动下单。",
             "portfolio": {
                 "count": n,
                 "equal_weight": round(equal_weight, 4),
@@ -4851,14 +5365,17 @@ async def add_favorite(payload: LiteFavoriteRequest, user: dict[str, Any] = Depe
         conn.execute(
             """
             INSERT INTO lite_favorites (
-                username, stock_code, stock_name, market, tags_json, notes, added_price, added_at, updated_at
+                username, stock_code, stock_name, market, tags_json, notes, added_price,
+                alert_price_high, alert_price_low, added_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(username, stock_code) DO UPDATE SET
                 stock_name = excluded.stock_name,
                 market = excluded.market,
                 tags_json = excluded.tags_json,
                 notes = excluded.notes,
+                alert_price_high = excluded.alert_price_high,
+                alert_price_low = excluded.alert_price_low,
                 updated_at = excluded.updated_at
             """,
             (
@@ -4866,9 +5383,11 @@ async def add_favorite(payload: LiteFavoriteRequest, user: dict[str, Any] = Depe
                 stock["symbol"],
                 stock["name"],
                 stock.get("market") or payload.market or "A股",
-                "[]",
+                json.dumps(payload.tags or [], ensure_ascii=False),
                 payload.notes or "",
                 added_price,
+                payload.alert_price_high,
+                payload.alert_price_low,
                 now,
                 now,
             ),
@@ -4909,8 +5428,20 @@ async def update_favorite(symbol: str, payload: LiteFavoriteRequest, user: dict[
     ensure_lite_favorites_table()
     with store.connect() as conn:
         conn.execute(
-            "UPDATE lite_favorites SET notes = ?, updated_at = ? WHERE username = ? AND stock_code = ?",
-            (payload.notes or "", now, user["username"], symbol),
+            """
+            UPDATE lite_favorites
+            SET tags_json = ?, notes = ?, alert_price_high = ?, alert_price_low = ?, updated_at = ?
+            WHERE username = ? AND stock_code = ?
+            """,
+            (
+                json.dumps(payload.tags or [], ensure_ascii=False),
+                payload.notes or "",
+                payload.alert_price_high,
+                payload.alert_price_low,
+                now,
+                user["username"],
+                symbol,
+            ),
         )
         conn.commit()
     return {"success": True, "data": {"message": "保存成功", "symbol": symbol, "stock_code": symbol}, "message": "保存成功"}
@@ -4933,7 +5464,7 @@ async def favorites_sync_realtime(user: dict[str, Any] = Depends(get_current_lit
     ensure_lite_favorites_table()
     with store.connect() as conn:
         rows = conn.execute(
-            "SELECT stock_code, alert_price_high, alert_price_low FROM lite_favorites WHERE username = ? ORDER BY added_at DESC",
+            "SELECT stock_code, stock_name, alert_price_high, alert_price_low FROM lite_favorites WHERE username = ? ORDER BY added_at DESC",
             (user["username"],),
         ).fetchall()
     symbols = [row["stock_code"] for row in rows]
@@ -4943,7 +5474,9 @@ async def favorites_sync_realtime(user: dict[str, Any] = Depends(get_current_lit
         price = quotes.get(symbol, {}).get("price")
         if price:
             _check_and_record_price_alert(
+                username=user["username"],
                 symbol=symbol,
+                stock_name=row["stock_name"],
                 price=float(price),
                 alert_high=row["alert_price_high"],
                 alert_low=row["alert_price_low"],
@@ -4965,7 +5498,10 @@ async def favorites_sync_realtime(user: dict[str, Any] = Depends(get_current_lit
 
 @app.get("/api/lite/alerts")
 async def get_price_alerts(user: dict[str, Any] = Depends(get_current_lite_user)):
-    alerts = list(lite_price_alerts.values())
+    alerts = [
+        item for item in lite_price_alerts.values()
+        if item.get("username") == user["username"]
+    ]
     return {"success": True, "data": alerts, "message": "ok"}
 
 
@@ -4975,8 +5511,10 @@ async def dismiss_price_alert(
     direction: str = "high",
     user: dict[str, Any] = Depends(get_current_lite_user),
 ):
-    key = f"{symbol}:{direction}"
-    lite_price_alerts.pop(key, None)
+    prefix = f"{user['username']}:{symbol}:{direction}:"
+    for key in list(lite_price_alerts.keys()):
+        if key.startswith(prefix):
+            lite_price_alerts.pop(key, None)
     return {"success": True, "data": None, "message": "已清除提醒"}
 
 
@@ -5091,7 +5629,7 @@ async def lite_datalake_sources_health():
     from quantcore.quant.data_sources import data_source_health
 
     sync_status = get_sync_service().status()
-    health = await asyncio.to_thread(data_source_health, sync_status.get("health") or {})
+    health = data_source_health(sync_status.get("health") or {})
     health["sync"] = {
         "running": bool(sync_status.get("running")),
         "phase": sync_status.get("phase"),
@@ -5111,8 +5649,54 @@ async def stock_analysis(symbol: str, current_user=Depends(get_current_lite_user
     深度多智能体分析仍走原有 /api/analysis/single 异步入口。
     """
     from quantcore.quant.report_service import build_stock_report
+    clean_symbol = str(symbol or "").strip().zfill(6)
     try:
-        report = await asyncio.to_thread(build_stock_report, symbol)
+        report = await asyncio.to_thread(build_stock_report, clean_symbol)
     except Exception as exc:
         report = {"available": False, "error": str(exc)}
+    try:
+        quotes = await _realtime_quotes([clean_symbol])
+        quote = quotes.get(clean_symbol)
+        if quote and report.get("available"):
+            header = dict(report.get("header") or {})
+            price = quote.get("price") if quote.get("price") is not None else quote.get("close")
+            pct = quote.get("change_percent") if quote.get("change_percent") is not None else quote.get("pct_chg")
+            if quote.get("name"):
+                header["name"] = quote["name"]
+            if price is not None:
+                header["last_price"] = round(float(price), 2)
+            if pct is not None:
+                header["pct_chg"] = round(float(pct), 2)
+            for key in ("pe", "pb", "total_mv", "circ_mv"):
+                if quote.get(key) is not None:
+                    header[key] = quote[key]
+            if quote.get("total_mv"):
+                total_mv = float(quote["total_mv"])
+                header["market_cap_yi"] = round(total_mv / 1e8 if total_mv > 1_000_000 else total_mv, 2)
+            header["quote_source"] = quote.get("quote_source")
+            header["quote_updated_at"] = quote.get("updated_at")
+            report["header"] = header
+            report["realtime_quote"] = {
+                "price": header.get("last_price"),
+                "change": quote.get("change"),
+                "change_percent": header.get("pct_chg"),
+                "volume": quote.get("volume"),
+                "amount": quote.get("amount"),
+                "turnover_rate": quote.get("turnover_rate"),
+                "amplitude": quote.get("amplitude"),
+                "updated_at": quote.get("updated_at"),
+                "source": quote.get("quote_source"),
+            }
+            rating = dict(report.get("rating") or {})
+            if price:
+                price_f = float(price)
+                rating["entry_low"] = round(price_f * 0.98, 2)
+                rating["entry_high"] = round(price_f * 1.02, 2)
+                if rating.get("stop_loss"):
+                    rating["stop_loss"] = round(price_f * 0.90, 2)
+                if rating.get("target"):
+                    rating["target"] = round(price_f * 1.15, 2)
+                report["rating"] = rating
+    except Exception:
+        pass
     return {"success": True, "data": report}

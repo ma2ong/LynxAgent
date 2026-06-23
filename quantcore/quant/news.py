@@ -7,8 +7,15 @@
 """
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Dict, List
+
+# 新闻抓取专用线程池：用于给无超时的 akshare 资讯接口套上硬超时，卡死时不阻塞调用方。
+_NEWS_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="news-fetch")
+_FLOW_CACHE: dict = {"ts": 0.0, "rows": []}
+_FLOW_TTL = 180  # 秒；催化剂监控轮询期间复用，减少对 akshare 的重复请求
 
 
 def _to_dt(value) -> datetime | None:
@@ -127,16 +134,41 @@ def market_news_flow(limit: int = 500) -> List[Dict[str, str]]:
     """全市场财经快讯流（财联社电报为主，失败回退东财全球财经）：[{time, title, content}]。
 
     供题材 Agent 做分词/热点板块打分。返回最多 limit 条，按时间倒序。
+
+    硬超时保护：akshare 资讯接口无超时控制、限流时会无限阻塞（曾导致催化剂监控页
+    长时间卡在「扫描中」）。这里在独立线程里抓取并 15s 封顶，超时则回退到缓存/空，
+    调用方据此降级为「暂无事件」，绝不挂死。
     """
-    rows = _cls_telegraph(limit) or _em_global(limit)
-    return rows[:limit]
+    now = time.time()
+    if _FLOW_CACHE["rows"] and now - _FLOW_CACHE["ts"] < _FLOW_TTL:
+        return _FLOW_CACHE["rows"][:limit]
+
+    def _fetch() -> List[Dict[str, str]]:
+        return _cls_telegraph(max(limit, 60)) or _em_global(max(limit, 60))
+
+    try:
+        rows = _NEWS_POOL.submit(_fetch).result(timeout=15)
+    except Exception:
+        rows = _FLOW_CACHE["rows"]  # 超时/失败回退到上次成功结果
+    if rows:
+        _FLOW_CACHE["ts"] = now
+        _FLOW_CACHE["rows"] = rows
+    return (rows or [])[:limit]
 
 
 def _cls_telegraph(limit: int) -> List[Dict[str, str]]:
     try:
+        import socket as _socket
+
         import akshare as ak
 
-        df = ak.stock_info_global_cls(symbol="全部")
+        # 财联社接口无超时控制，限流/卡顿时会无限阻塞、拖死催化剂监控；用 socket 默认超时封顶。
+        _old = _socket.getdefaulttimeout()
+        _socket.setdefaulttimeout(8)
+        try:
+            df = ak.stock_info_global_cls(symbol="全部")
+        finally:
+            _socket.setdefaulttimeout(_old)
     except Exception:
         return []
     if df is None or df.empty:
@@ -161,9 +193,16 @@ def _cls_telegraph(limit: int) -> List[Dict[str, str]]:
 
 def _em_global(limit: int) -> List[Dict[str, str]]:
     try:
+        import socket as _socket
+
         import akshare as ak
 
-        df = ak.stock_info_global_em()
+        _old = _socket.getdefaulttimeout()
+        _socket.setdefaulttimeout(8)
+        try:
+            df = ak.stock_info_global_em()
+        finally:
+            _socket.setdefaulttimeout(_old)
     except Exception:
         return []
     if df is None or df.empty:

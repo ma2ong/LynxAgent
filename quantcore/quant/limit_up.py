@@ -15,66 +15,38 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from .local_store import get_local_store
-from .concept_lookup import get_concept
+from .concept_lookup import get_concept, get_hot_concept
+from .limit_up_taxonomy import (
+    CONCEPT_ORDER,
+    limit_up_reason,
+    resolve_limit_up_concept,
+)
 from .market_sentiment import _limit_cause, _limit_threshold, _segment
 
 
-CONCEPT_ORDER = ["AI硬件", "光通信/CPO", "机器人", "国产芯片", "有色金属", "新能源车", "医药", "煤炭", "电力", "大消费", "航天军工", "公告重组", "其他"]
-
-REASON_BY_NAME = {
-    "亨通光电": "光纤光缆+CPO液冷，成交额显著放大，光通信主线资金承接强。",
-    "天洋新材": "电子胶+光学膜材料，受AI硬件材料链扩产预期带动。",
-    "惠丰钻石": "培育钻石+高端材料，叠加AI硬件散热/材料想象空间。",
-    "红星发展": "钡盐材料+锰系材料，材料端涨价和AI硬件链延伸预期共振。",
-    "郑州煤电": "煤炭供给偏紧预期+连板高度打开，短线资金聚焦煤炭弹性标的。",
-    "大有能源": "煤炭+地方国资，一字封板显示资金对煤炭补涨线认可度高。",
-    "节能铁汉": "公告/事件驱动叠加超跌低价属性，20%涨停强化辨识度。",
-    "模塑科技": "汽车零部件+机器人轻量化部件预期，二连板放大题材辨识度。",
-    "北投科技": "机器人/智能装备方向发酵，连续涨停说明资金沿设备端扩散。",
-    "金海高科": "公告催化+高端材料属性，二连板后成为公告线辨识度标的。",
-    "通富微电": "先进封测+国产芯片核心股，成交额放大说明大资金参与度高。",
-    "实益达": "电子制造+国产芯片链，连续涨停体现资金对低位电子股补涨偏好。",
-    "华电辽能": "电力+区域能源，电力板块活跃下资金选择低位补涨。",
-    "豫能控股": "电力+地方能源平台，板块扩散时资金偏好弹性电力股。",
-    "京能电力": "火电+电力运营，成交额放大确认电力方向资金承接。",
-    "久之洋": "红外探测+航天军工，军工电子方向资金短线回流。",
-    "海特高新": "航空维修+军工属性，航天军工线扩散带动。",
-}
-
-
-def _limit_reason(name: str, cause: str, boards: int, is_one_price: bool, is_big: bool, is_20pct: bool) -> str:
-    if name in REASON_BY_NAME:
-        return REASON_BY_NAME[name]
-    templates = {
-        "AI硬件": "AI硬件链扩散，材料/PCB/连接器等上游环节被资金挖掘。",
-        "光通信/CPO": "光通信/CPO主线活跃，光模块、光纤光缆或通信设备方向资金承接。",
-        "机器人": "机器人产业链延续活跃，零部件、自动化设备或执行机构方向被资金关注。",
-        "国产芯片": "国产芯片链走强，封测、材料、电子元件等环节出现补涨。",
-        "有色金属": "有色金属板块走强，稀土/钨/铜/锗等资源品受供给收紧或需求预期带动。",
-        "新能源车": "新能源车产业链活跃，电池/材料/充电桩等方向获得资金关注。",
-        "医药": "医药板块出现阶段性机会，创新药/CXO/器械等细分方向资金回流。",
-        "煤炭": "煤炭板块短线走强，能源价格和低估值补涨逻辑共振。",
-        "电力": "电力板块活跃，火电/地方能源平台获得资金轮动。",
-        "大消费": "大消费方向轮动，低位消费股获得短线资金修复。",
-        "航天军工": "航天军工方向回流，军工电子/航空装备标的辨识度提升。",
-        "公告重组": "公告或事件催化带动资金抢筹，短线情绪强于行业基本面归因。",
-        "公告": "公告或事件催化带动资金抢筹，短线情绪强于行业基本面归因。",
-        "其他": "未匹配到明确主线概念，保留在其他，避免强行归类。",
-    }
-    reason = templates.get(cause, templates["其他"])
-    tags = []
-    if boards >= 2:
-        tags.append(f"{boards}连板")
-    if is_one_price:
-        tags.append("一字封板")
-    if is_big:
-        tags.append("成交额放大")
-    if is_20pct:
-        tags.append("20cm高弹性")
-    return reason if not tags else f"{reason}（{'+'.join(tags)}）"
+def _realtime_limit_rows(target_date: str, realtime_quotes: Optional[Dict[str, Dict[str, object]]]) -> pd.DataFrame:
+    rows: List[Dict[str, object]] = []
+    for symbol, quote in (realtime_quotes or {}).items():
+        code = str(symbol or quote.get("symbol") or quote.get("code") or "").strip().zfill(6)
+        if len(code) != 6 or not code.isdigit():
+            continue
+        price = quote.get("price") if quote.get("price") is not None else quote.get("close")
+        if price is None or float(price or 0) <= 0:
+            continue
+        pct = quote.get("pct_chg") if quote.get("pct_chg") is not None else quote.get("change_percent")
+        rows.append({
+            "symbol": code,
+            "date": target_date,
+            "open": float(quote.get("open") or price),
+            "close": float(price),
+            "amount": float(quote.get("amount") or 0),
+            "pct_direct": float(pct) / 100.0 if pct is not None else None,
+            "name": str(quote.get("name") or ""),
+        })
+    return pd.DataFrame(rows)
 
 
-def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
+def compute_limit_up_distribution(target_date: str, realtime_quotes: Optional[Dict[str, Dict[str, object]]] = None) -> Dict[str, object]:
     store = get_local_store()
     conn = store._conn()
 
@@ -88,7 +60,8 @@ def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
         (buffer_start, target_date),
     ).fetchall()
 
-    if not rows:
+    realtime_df = _realtime_limit_rows(target_date, realtime_quotes)
+    if not rows and realtime_df.empty:
         return {
             "empty": True,
             "message": "本地行情为空，请先在「数据同步」做全量同步",
@@ -96,6 +69,11 @@ def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
         }
 
     df = pd.DataFrame(rows, columns=["symbol", "date", "open", "close", "amount"])
+    if not realtime_df.empty:
+        if not df.empty:
+            realtime_symbols = set(realtime_df["symbol"].astype(str))
+            df = df[~((df["date"] == target_date) & (df["symbol"].astype(str).str.zfill(6).isin(realtime_symbols)))].copy()
+        df = pd.concat([df, realtime_df], ignore_index=True)
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
     df["open"] = pd.to_numeric(df["open"], errors="coerce")
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
@@ -109,6 +87,9 @@ def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
     # 涨跌幅、涨停、连板高度
     g = df.groupby("symbol", sort=False)
     df["pct"] = g["close"].pct_change()
+    if "pct_direct" in df.columns:
+        direct_pct = pd.to_numeric(df["pct_direct"], errors="coerce")
+        df.loc[direct_pct.notna(), "pct"] = direct_pct[direct_pct.notna()]
     thr_map = df["symbol"].map(_limit_threshold)
     df["limit_up"] = df["pct"] >= thr_map
     df["limit_down"] = df["pct"] <= -thr_map
@@ -130,20 +111,26 @@ def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
         for s, n, i in meta_rows
     }
     df["seg"] = df["symbol"].map(_segment)
-    df["name"] = df["symbol"].map(
-        lambda s: meta.get(str(s).zfill(6), {}).get("name", "")
+    df["name"] = df.apply(
+        lambda r: meta.get(str(r.get("symbol")).zfill(6), {}).get("name", "") or str(r.get("name") or ""),
+        axis=1,
     )
     df["industry"] = df["symbol"].map(
         lambda s: meta.get(str(s).zfill(6), {}).get("industry", "")
     )
-    df["cause"] = df.apply(
-        lambda r: get_concept(str(r.get("name") or "")) or _limit_cause(
-            str(r.get("name") or ""),
-            str(r.get("industry") or ""),
-            str(r.get("seg") or ""),
-        ),
-        axis=1,
-    )
+
+    def resolve_row_cause(r) -> tuple[str, str]:
+        symbol = str(r.get("symbol") or "")
+        name = str(r.get("name") or "")
+        industry = str(r.get("industry") or "")
+        # 优先：当日最热概念板块（实时、自动跟随主线）。board 非空即命中动态映射。
+        hot = get_hot_concept(symbol, name)
+        if hot and hot[1] and hot[0] in CONCEPT_ORDER and hot[0] != "其他":
+            return hot[0], hot[1]
+        # 回退：策展字典 + 关键词；再不行才落「其他」。
+        fallback = get_concept(name) or _limit_cause(symbol, name, industry, str(r.get("seg") or ""))
+        cause = resolve_limit_up_concept(symbol, name, industry, fallback)
+        return cause, (hot[1] if hot else "")
 
     # 只取目标日
     day = df[df["date"] == target_date].copy()
@@ -177,14 +164,18 @@ def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
     stocks: List[Dict] = []
     for _, r in limit_up_day.iterrows():
         b = int(r["board_height"])
+        # 仅对目标日涨停股做概念归因（~数十行），不再对全 df 数万行无谓计算。
+        cause, hot_board = resolve_row_cause(r)
         stocks.append(
             {
                 "symbol": str(r["symbol"]).zfill(6),
                 "name": r["name"] or str(r["symbol"]).zfill(6),
                 "boards": b,
-                "cause": r["cause"],
-                "classification": "明确映射" if get_concept(str(r["name"] or "")) else "关键词/行业",
+                "cause": cause,
+                "hot_board": hot_board,
+                "classification": "主线映射" if cause != "其他" else "待确认",
                 "segment": r["seg"],
+                "industry": r["industry"],
                 "is_one_price": bool(r["is_one_price"]),
                 "is_big": bool(r["is_big"]),
                 "is_20pct": _limit_threshold(str(r["symbol"])) > 0.15,
@@ -196,13 +187,16 @@ def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
 
     stocks.sort(key=lambda s: (-s["boards"], -s["amount_yi"]))
     for s in stocks:
-        s["reason"] = _limit_reason(
-            str(s["name"]),
-            str(s["cause"]),
-            int(s["boards"]),
-            bool(s["is_one_price"]),
-            bool(s["is_big"]),
-            bool(s["is_20pct"]),
+        s["reason"] = limit_up_reason(
+            name=str(s["name"]),
+            symbol=str(s["symbol"]),
+            cause=str(s["cause"]),
+            boards=int(s["boards"]),
+            is_one_price=bool(s["is_one_price"]),
+            is_big=bool(s["is_big"]),
+            is_20pct=bool(s["is_20pct"]),
+            amount_yi=float(s["amount_yi"]),
+            hot_board=str(s["hot_board"]),
         )
 
     # 构建矩阵 {board_label: {cause: [stock...]}}
@@ -254,6 +248,7 @@ def compute_limit_up_distribution(target_date: str) -> Dict[str, object]:
     return {
         "empty": False,
         "date": target_date,
+        "realtime": bool(realtime_quotes and not realtime_df.empty),
         "total_limit_up": len(stocks),
         "total_limit_down": int(limit_down_day.shape[0]),
         "max_boards": max_boards,

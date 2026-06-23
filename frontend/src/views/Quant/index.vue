@@ -5,7 +5,7 @@
         <h1>智能选股</h1>
         <p>自动横向比较全市场 A 股，优先输出短中期更值得跟踪的量化推荐池</p>
       </div>
-      <el-tag effect="plain" type="info">研究与模拟，不直接下单</el-tag>
+      <el-tag effect="plain" type="info">研究跟踪，不构成交易建议</el-tag>
     </section>
 
     <section v-if="dataHealth" class="data-health" :class="`health-${dataHealth.status}`">
@@ -24,10 +24,20 @@
           同步中 {{ syncStatus.done || dataHealth.sync_done || 0 }}/{{ syncStatus.total || dataHealth.sync_total || 0 }}
         </el-tag>
         <el-button size="small" :loading="healthLoading || syncRunning" @click="refreshDataHealth(true)">刷新状态</el-button>
-        <el-button size="small" type="primary" :loading="syncRunning" @click="startSync(false)">补齐今日数据</el-button>
-        <el-button size="small" type="danger" plain :loading="syncRunning" @click="startSync(true)">重建全量数据</el-button>
+        <el-button size="small" type="primary" :loading="syncRunning" :disabled="isIntradayHealth" @click="startSync(false)">收盘后补日线</el-button>
+        <el-button size="small" type="danger" plain :loading="syncRunning" @click="startSync(true)">重建历史日线</el-button>
       </div>
     </section>
+
+    <el-alert
+      v-if="isIntradayHealth"
+      title="盘中使用实时行情，日 K 不需要现在补"
+      description="智能推荐会使用最近完整日线做结构评分，并叠加实时价格和涨跌幅；市场雷达、涨停热点不依赖今日完整日 K。"
+      type="info"
+      show-icon
+      :closable="false"
+      class="smart-tip"
+    />
 
     <el-tabs v-model="activeTab" class="quant-tabs">
       <el-tab-pane label="一键推荐" name="screen">
@@ -57,6 +67,23 @@
           </section>
 
           <section class="result-panel smart-result-panel">
+            <div v-if="smartPoolLoading" class="smart-progress">
+              <div class="progress-head">
+                <div>
+                  <b>正在生成智能推荐池</b>
+                  <span>{{ smartPoolTask?.message || '后台任务已启动，页面会自动刷新结果。' }}</span>
+                </div>
+                <strong>{{ smartProgress }}%</strong>
+              </div>
+              <el-progress :percentage="smartProgress" :stroke-width="10" />
+              <div class="progress-steps">
+                <div v-for="step in smartProgressSteps" :key="step.name" :class="['progress-step', step.status]">
+                  <span>{{ step.index }}</span>
+                  <b>{{ step.name }}</b>
+                  <em>{{ step.text }}</em>
+                </div>
+              </div>
+            </div>
             <div v-if="smartPoolResult?.items.length" class="mini-summary">
               <span>自动候选 {{ smartPoolResult.universe_size }} 只</span>
               <b>推荐 {{ smartPoolResult.items.length }} 只</b>
@@ -127,7 +154,7 @@
                 </template>
               </el-table-column>
             </el-table>
-            <el-empty v-else description="点击一键智能推荐后生成量化股票池" />
+            <el-empty v-else-if="!smartPoolLoading" description="点击一键智能推荐后生成量化股票池" />
           </section>
 
           <el-collapse class="advanced-tools">
@@ -195,6 +222,23 @@
           </section>
 
           <section class="result-panel smart-result-panel">
+            <div v-if="patternPoolLoading" class="smart-progress">
+              <div class="progress-head">
+                <div>
+                  <b>正在扫描拉升前形态</b>
+                  <span>全市场形态扫描计算量更大，系统会先用最近完整日线，再叠加实时行情兜底。</span>
+                </div>
+                <strong>{{ smartElapsed }}s</strong>
+              </div>
+              <el-progress :percentage="smartProgress" :stroke-width="10" />
+              <div class="progress-steps">
+                <div v-for="step in patternProgressSteps" :key="step.name" :class="['progress-step', step.status]">
+                  <span>{{ step.index }}</span>
+                  <b>{{ step.name }}</b>
+                  <em>{{ step.text }}</em>
+                </div>
+              </div>
+            </div>
             <div v-if="patternPoolResult?.items.length" class="mini-summary">
               <span>自动候选 {{ patternPoolResult.universe_size }} 只</span>
               <b>命中 {{ patternPoolResult.matched || patternPoolResult.items.length }} 只</b>
@@ -264,15 +308,15 @@
                 </template>
               </el-table-column>
             </el-table>
-            <el-empty v-else description="点击一键扫描形态，自动找出符合7类拉升前结构的股票" />
+            <el-empty v-else-if="!patternPoolLoading" description="点击一键扫描形态，自动找出符合7类拉升前结构的股票" />
           </section>
         </div>
       </el-tab-pane>
 
       <el-tab-pane label="数据同步" name="lake">
         <div class="sync-bar" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px;">
-          <el-button type="primary" :loading="syncRunning" @click="startSync(true)">全量同步</el-button>
-          <el-button :loading="syncRunning" @click="startSync(false)">增量同步</el-button>
+          <el-button type="primary" :loading="syncRunning" @click="startSync(true)">重建历史日线</el-button>
+          <el-button :loading="syncRunning" :disabled="isIntradayHealth" @click="startSync(false)">收盘后补日线</el-button>
           <span v-if="syncStatus.total">进度 {{ syncStatus.done }}/{{ syncStatus.total }}（{{ syncStatus.phase }}）失败 {{ syncStatus.errors_count }}</span>
           <el-progress v-if="syncStatus.total" :percentage="syncPct" style="flex:1;min-width:200px;" />
         </div>
@@ -290,8 +334,8 @@
               <el-input-number v-model="poolLimit" :min="1" :max="5000" style="width: 100%" />
             </el-form-item>
             <el-button native-type="button" :loading="poolLoading" @click="loadPool">读取股票池</el-button>
-            <el-button type="primary" native-type="button" :loading="syncRunning" @click="startSync(false)">同步今日K线</el-button>
-            <el-button type="danger" plain native-type="button" :loading="syncRunning" @click="startSync(true)">重建全量K线</el-button>
+            <el-button type="primary" native-type="button" :loading="syncRunning" :disabled="isIntradayHealth" @click="startSync(false)">收盘后补日线</el-button>
+            <el-button type="danger" plain native-type="button" :loading="syncRunning" @click="startSync(true)">重建历史日线</el-button>
           </el-form>
           <section class="result-panel">
             <div v-if="dataHealth" class="mini-summary">
@@ -402,7 +446,7 @@
                 <el-option label="多数满足 (Majority)" value="majority" />
               </el-select>
             </el-form-item>
-            <el-form-item label="止损 (%，0=不启用)">
+            <el-form-item label="失效线 (%，0=不启用)">
               <el-input-number v-model="backtestForm.stop_loss_pct" :min="0" :max="50" :step="1" style="width: 100%" />
             </el-form-item>
             <el-form-item label="回测引擎">
@@ -597,6 +641,7 @@ import {
   type QuantScreenResult,
   type QuantSmartPoolItem,
   type QuantSmartPoolResult,
+  type QuantSmartPoolTask,
   type QuantStockPoolResult
 } from '@/api/quant'
 
@@ -631,6 +676,7 @@ const screenResult = ref<QuantScreenResult | null>(null)
 const smartPoolForm = ref({ limit: 20, universe_limit: 5000 })
 const smartPoolLoading = ref(false)
 const smartPoolResult = ref<QuantSmartPoolResult | null>(null)
+const smartPoolTask = ref<QuantSmartPoolTask | null>(null)
 const smartTableRef = ref<any>()
 const selectedSmartRows = ref<QuantSmartPoolItem[]>([])
 const patternPoolForm = ref({ limit: 20, universe_limit: 5000, min_strength: 70, exclude_fundamental: true })
@@ -638,6 +684,9 @@ const patternPoolLoading = ref(false)
 const patternPoolResult = ref<QuantPatternPoolResult | null>(null)
 const patternTableRef = ref<any>()
 const selectedPatternRows = ref<QuantPatternPoolItem[]>([])
+const smartElapsed = ref(0)
+let smartProgressTimer: number | undefined
+let smartTaskTimer: number | undefined
 
 const backtestForm = ref({
   symbol: '600519',
@@ -711,9 +760,9 @@ const backtestDiagnosis = computed(() => {
   const verdict = score >= 70 ? '可继续研究' : score >= 50 ? '参数需优化' : '暂停使用'
   const suggestions: string[] = []
   if (trades < 5) suggestions.push('交易次数偏少，样本不足，先拉长回测区间或换更活跃标的。')
-  if (maxDrawdown > 0.25) suggestions.push('最大回撤超过 25%，需要收紧止损、降低仓位或增加趋势过滤。')
-  if (annualReturn <= 0) suggestions.push('年化收益为负，当前参数不具备继续实盘模拟价值。')
-  if (winRate < 0.45) suggestions.push('胜率偏低，检查入场条件是否太宽，优先减少假突破。')
+  if (maxDrawdown > 0.25) suggestions.push('最大回撤超过 25%，需要收紧失效线、降低风险暴露或增加趋势过滤。')
+  if (annualReturn <= 0) suggestions.push('年化收益为负，当前参数不具备继续横向验证价值。')
+  if (winRate < 0.45) suggestions.push('胜率偏低，检查触发条件是否太宽，优先减少假突破。')
   if (rewardRisk < 1) suggestions.push('收益回撤比不足 1，策略承担的波动没有换来足够回报。')
   if (!suggestions.length) suggestions.push('收益、回撤和胜率暂时匹配，可进入更多股票和更长周期的横向验证。')
   return { score, verdict, rewardRisk, suggestions }
@@ -730,9 +779,11 @@ const parseSymbols = (text: string) =>
 const syncStatus = ref<any>({ running: false, phase: 'idle', done: 0, total: 0, errors_count: 0 })
 const syncRunning = computed(() => !!syncStatus.value.running)
 const syncPct = computed(() => syncStatus.value.total ? Math.floor(syncStatus.value.done / syncStatus.value.total * 100) : 0)
+const isIntradayHealth = computed(() => dataHealth.value?.status === 'intraday')
 const healthTitle = computed(() => {
   const status = dataHealth.value?.status
   if (status === 'fresh') return '今日已更新'
+  if (status === 'intraday') return '盘中实时行情'
   if (status === 'partial_today') return '今日补齐中'
   if (status === 'stale_today') return '等待今日数据'
   if (status === 'ready') return '本地数据可用'
@@ -740,6 +791,91 @@ const healthTitle = computed(() => {
   if (status === 'empty') return '本地数据为空'
   return '数据状态'
 })
+const smartProgress = computed(() => {
+  const value = smartPoolTask.value?.progress
+  if (typeof value === 'number') return Math.max(1, Math.min(100, Math.round(value)))
+  return Math.min(92, 8 + smartElapsed.value * 3)
+})
+const smartStepStatus = (activeAt: number, doneAt: number) => {
+  const progress = smartProgress.value
+  if (progress >= doneAt) return 'done'
+  if (progress >= activeAt) return 'active'
+  return 'pending'
+}
+const smartProgressSteps = computed(() => {
+  return [
+    {
+      index: '1',
+      name: '检查数据',
+      text: dataHealth.value?.latest_complete_date ? `最近完整日线 ${dataHealth.value.latest_complete_date}` : '确认本地行情池可用',
+      status: smartStepStatus(1, 14)
+    },
+    {
+      index: '2',
+      name: '抽取行情',
+      text: isIntradayHealth.value ? '叠加盘中实时价格和涨跌幅' : '读取本地 K 线与最新行情',
+      status: smartStepStatus(14, 52)
+    },
+    {
+      index: '3',
+      name: '量化评分',
+      text: `横向比较 ${smartPoolForm.value.universe_limit} 只候选股票`,
+      status: smartStepStatus(52, 86)
+    },
+    {
+      index: '4',
+      name: '输出候选池',
+      text: `筛出前 ${smartPoolForm.value.limit} 只更值得跟踪的标的`,
+      status: smartStepStatus(86, 100)
+    }
+  ]
+})
+const patternProgressSteps = computed(() => {
+  const elapsed = smartElapsed.value
+  return [
+    {
+      index: '1',
+      name: '检查日线',
+      text: dataHealth.value?.latest_complete_date ? `最近完整日线 ${dataHealth.value.latest_complete_date}` : '确认 K 线样本可用',
+      status: elapsed >= 2 ? 'done' : 'active'
+    },
+    {
+      index: '2',
+      name: '结构扫描',
+      text: `扫描 ${patternPoolForm.value.universe_limit} 只候选的均线、量能和突破结构`,
+      status: elapsed >= 12 ? 'done' : elapsed >= 2 ? 'active' : 'pending'
+    },
+    {
+      index: '3',
+      name: '过滤风险',
+      text: '剔除基本面或形态证据不足的标的',
+      status: elapsed >= 24 ? 'done' : elapsed >= 12 ? 'active' : 'pending'
+    },
+    {
+      index: '4',
+      name: '输出结果',
+      text: `返回前 ${patternPoolForm.value.limit} 只形态更清晰的股票`,
+      status: elapsed >= 24 ? 'active' : 'pending'
+    }
+  ]
+})
+
+const startSmartProgress = () => {
+  smartElapsed.value = 0
+  if (smartProgressTimer) window.clearInterval(smartProgressTimer)
+  smartProgressTimer = window.setInterval(() => {
+    smartElapsed.value += 1
+  }, 1000)
+}
+
+const stopSmartProgress = () => {
+  if (smartProgressTimer) window.clearInterval(smartProgressTimer)
+  smartProgressTimer = undefined
+}
+const stopSmartTaskPolling = () => {
+  if (smartTaskTimer) window.clearTimeout(smartTaskTimer)
+  smartTaskTimer = undefined
+}
 let syncTimer: number | undefined
 let syncWatching = false
 const pollSync = async () => {
@@ -757,13 +893,17 @@ const pollSync = async () => {
   }
 }
 const startSync = async (full: boolean) => {
+  if (!full && isIntradayHealth.value) {
+    ElMessage.info('当前是盘中实时行情模式，收盘后再补日线；智能选股会先使用最近完整日线。')
+    return
+  }
   try {
     const s = await quantApi.syncMarket(full)
     if (s && typeof s === 'object') syncStatus.value = s
     syncWatching = true
     ElMessage.success(full
-      ? '已开始全量同步（约 5000 只日线，后台进行，可切换页面，完成约需几分钟）'
-      : '已开始补齐今日数据')
+      ? '已开始重建历史日线（约 5000 只，后台进行，可切换页面，完成约需几分钟）'
+      : '已开始收盘后日线补齐')
     pollSync()
   } catch (error: any) {
     ElMessage.error(error?.message || '启动同步失败')
@@ -792,7 +932,7 @@ const ensureDataBeforeScan = async () => {
   if (!health) return false
   if (!health.ready) {
     activeTab.value = 'lake'
-    ElMessage.warning('本地K线不足，已切到数据同步；请先完成一次全量同步。')
+    ElMessage.warning('本地K线不足，已切到数据同步；请先完成一次历史日线重建。')
     return false
   }
   if (health.needs_incremental_sync || health.sync_running || health.auto_started) {
@@ -811,7 +951,11 @@ onMounted(async () => {
     refreshDataHealth(true)
   }
 })
-onUnmounted(() => { if (syncTimer) window.clearTimeout(syncTimer) })
+onUnmounted(() => {
+  if (syncTimer) window.clearTimeout(syncTimer)
+  stopSmartTaskPolling()
+  stopSmartProgress()
+})
 
 const loadPool = async () => {
   poolLoading.value = true
@@ -855,15 +999,56 @@ const runScreen = async () => {
   }
 }
 
-const loadSmartPool = async () => {
-  smartPoolLoading.value = true
+const finishSmartPoolTask = () => {
+  stopSmartTaskPolling()
+  stopSmartProgress()
+  smartPoolLoading.value = false
+}
+
+const pollSmartPoolTask = async (taskId: string) => {
   try {
-    if (!(await ensureDataBeforeScan())) return
-    smartPoolResult.value = await quantApi.smartPool(smartPoolForm.value.limit, smartPoolForm.value.universe_limit)
+    const task = await quantApi.smartPoolTask(taskId)
+    smartPoolTask.value = task
+    if (task.status === 'completed') {
+      if (!task.result) throw new Error('智能推荐任务已完成，但结果为空')
+      smartPoolResult.value = task.result
+      selectedSmartRows.value = []
+      finishSmartPoolTask()
+      ElMessage.success(`智能推荐完成：${task.result.items.length} 只`)
+      return
+    }
+    if (task.status === 'failed') {
+      throw new Error(task.error || task.message || '智能推荐任务失败')
+    }
+    smartTaskTimer = window.setTimeout(() => pollSmartPoolTask(taskId), 1500)
+  } catch (error: any) {
+    finishSmartPoolTask()
+    smartPoolResult.value = null
+    ElMessage.error(error?.message || '智能推荐失败，请重试')
+  }
+}
+
+const loadSmartPool = async () => {
+  stopSmartTaskPolling()
+  smartPoolLoading.value = true
+  smartPoolTask.value = null
+  smartPoolResult.value = null
+  startSmartProgress()
+  try {
+    if (!(await ensureDataBeforeScan())) {
+      finishSmartPoolTask()
+      return
+    }
+    const task = await quantApi.startSmartPoolTask(smartPoolForm.value.limit, smartPoolForm.value.universe_limit)
+    smartPoolTask.value = task
     screenResult.value = null
     selectedSmartRows.value = []
-  } finally {
-    smartPoolLoading.value = false
+    ElMessage.success('智能推荐已转入后台任务，完成后自动展示结果')
+    pollSmartPoolTask(task.task_id)
+  } catch (error: any) {
+    finishSmartPoolTask()
+    smartPoolResult.value = null
+    ElMessage.error(error?.message || '启动智能推荐失败')
   }
 }
 
@@ -877,6 +1062,8 @@ const displayScore = (row: QuantSmartPoolItem) => formatScore(row.quant_score ??
 
 const loadPatternPool = async () => {
     patternPoolLoading.value = true
+    smartPoolTask.value = null
+    startSmartProgress()
     try {
         if (!(await ensureDataBeforeScan())) return
         patternPoolResult.value = await quantApi.patternPool(
@@ -889,6 +1076,7 @@ const loadPatternPool = async () => {
         ElMessage.error(error?.message || '形态扫描失败，请重试')
         patternPoolResult.value = null
     } finally {
+        stopSmartProgress()
         patternPoolLoading.value = false
     }
     }
@@ -1019,7 +1207,7 @@ const runMLFactorLab = async () => {
   }
 }
 
-const signalText = (signal: string) => ({ strong_buy: '强买入', buy: '买入', hold: '观察', avoid: '回避' }[signal] || signal)
+const signalText = (signal: string) => ({ strong_buy: '强势跟踪', buy: '重点跟踪', hold: '观察', avoid: '回避' }[signal] || signal)
 const signalTagType = (signal: string) => {
   if (signal === 'strong_buy') return 'success'
   if (signal === 'buy') return 'primary'
@@ -1256,6 +1444,100 @@ const openChart = async (row: any) => {
 
 .smart-result-panel {
   min-height: 0;
+}
+
+.smart-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #d9ecff;
+  border-radius: 8px;
+  background: #f5faff;
+}
+
+.progress-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+
+  b {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 15px;
+  }
+
+  span {
+    color: var(--el-text-color-secondary);
+    font-size: 13px;
+  }
+
+  strong {
+    color: var(--el-color-primary);
+    font-size: 18px;
+    white-space: nowrap;
+  }
+}
+
+.progress-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.progress-step {
+  min-height: 78px;
+  padding: 10px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-bg-color);
+
+  span {
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 8px;
+    border-radius: 50%;
+    background: var(--el-fill-color-light);
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  b {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 13px;
+  }
+
+  em {
+    display: block;
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+    font-style: normal;
+    line-height: 1.45;
+  }
+}
+
+.progress-step.active {
+  border-color: #91caff;
+
+  span {
+    background: var(--el-color-primary);
+    color: #fff;
+  }
+}
+
+.progress-step.done {
+  border-color: #b7eb8f;
+
+  span {
+    background: #67c23a;
+    color: #fff;
+  }
 }
 
 .advanced-tools {
@@ -1538,6 +1820,10 @@ const openChart = async (row: any) => {
 
   .smart-inline-settings {
     flex-wrap: wrap;
+  }
+
+  .progress-steps {
+    grid-template-columns: 1fr;
   }
 
   .lab-head {

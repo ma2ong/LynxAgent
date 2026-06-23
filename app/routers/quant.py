@@ -110,6 +110,14 @@ async def quant_pattern_pool(limit: int = 20, universe_limit: int = 5000, min_st
                             exclude_fundamental: bool = True):
     try:
         result = await asyncio.to_thread(engine.pattern_pool, limit, universe_limit, min_strength, exclude_fundamental)
+        # 补全「行业/板块」：stock_meta 行业常为空，按 cninfo 给返回项补行业（并行+整体超时，不拖死端点）。
+        items = result.get("items") if isinstance(result, dict) else None
+        if items:
+            try:
+                from quantcore.quant import industry as _industry
+                await asyncio.to_thread(_industry.enrich_industries, items)
+            except Exception:
+                pass
         return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -181,7 +189,14 @@ async def serenity_events(force: bool = False, max_news: int = 10,
         if not user.get("is_admin"):
             force = False
         max_news = max(1, min(int(max_news), 10))
-        return await asyncio.to_thread(request_events, force, max_news)
+        result = await asyncio.to_thread(request_events, force, max_news)
+        if isinstance(result, dict) and result.get("status") == "ready":
+            try:
+                from app.lite_notifications import notification_store
+                await asyncio.to_thread(notification_store.notify_favorite_catalysts, result.get("events") or [])
+            except Exception:
+                pass
+        return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

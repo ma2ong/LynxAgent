@@ -44,7 +44,16 @@ def _cap_band(symbol: str) -> str:
     return "小盘股"
 
 
-def _limit_cause(name: str, industry: str, segment: str) -> str:
+def _limit_cause(symbol: str, name: str, industry: str, segment: str) -> str:
+    try:
+        from .limit_up_taxonomy import resolve_limit_up_concept
+
+        resolved = resolve_limit_up_concept(symbol, name, industry, None)
+        if resolved and resolved != "其他":
+            return resolved
+    except Exception:
+        pass
+
     text = f"{name}{industry}"
     # 优先查动态概念板块缓存（concept_lookup 按需构建，日缓存）
     try:
@@ -74,6 +83,54 @@ def _limit_cause(name: str, industry: str, segment: str) -> str:
     return "其他"
 
 
+def _capital_flow_summary(
+    turnover_today: float,
+    turnover_prev: float,
+    advancers: int,
+    decliners: int,
+    limit_up: int,
+    limit_down: int,
+    above_ma5_pct: float,
+    sentiment_temp: int,
+) -> Dict[str, object]:
+    turnover_delta = turnover_today - turnover_prev
+    breadth_total = max(1, advancers + decliners)
+    breadth_pct = advancers / breadth_total * 100
+    limit_balance = limit_up - limit_down
+    score = (
+        min(100.0, max(0.0, breadth_pct)) * 0.35
+        + min(100.0, max(0.0, above_ma5_pct)) * 0.25
+        + min(100.0, max(0.0, 50 + turnover_delta / max(turnover_prev, 1) * 180)) * 0.20
+        + min(100.0, max(0.0, 50 + limit_balance * 1.6)) * 0.20
+    )
+    if score >= 65:
+        state = "资金活跃"
+    elif score <= 40:
+        state = "资金谨慎"
+    else:
+        state = "资金中性"
+
+    notes = [
+        f"成交额较上一交易日{'增加' if turnover_delta >= 0 else '减少'} {abs(turnover_delta):.0f} 亿",
+        f"上涨家数占比 {breadth_pct:.1f}%，5日线上方占比 {above_ma5_pct:.1f}%",
+        f"涨停 {limit_up} 家、跌停 {limit_down} 家，连板情绪同步影响温度分",
+    ]
+    if sentiment_temp >= 60 and score < 55:
+        notes.append("情绪温度强于资金面，需防止局部题材过热。")
+    elif sentiment_temp < 45 and score >= 55:
+        notes.append("资金活跃度好于情绪温度，可能处于修复早段。")
+
+    return {
+        "state": state,
+        "score": round(score, 1),
+        "turnover_yi": turnover_today,
+        "turnover_change_yi": round(turnover_delta, 1),
+        "breadth_pct": round(breadth_pct, 1),
+        "limit_balance": limit_balance,
+        "notes": notes[:4],
+    }
+
+
 def _append_realtime_rows(df: pd.DataFrame, end: str, realtime_quotes: Optional[Dict[str, Dict[str, object]]]) -> pd.DataFrame:
     if not realtime_quotes:
         return df
@@ -85,12 +142,14 @@ def _append_realtime_rows(df: pd.DataFrame, end: str, realtime_quotes: Optional[
         price = quote.get("price") or quote.get("close") or quote.get("current_price")
         if price is None or float(price or 0) <= 0:
             continue
+        pct = quote.get("pct_chg") if quote.get("pct_chg") is not None else quote.get("change_percent")
         rows.append(
             {
                 "symbol": str(symbol).zfill(6),
                 "date": today,
                 "close": float(price),
                 "amount": float(quote.get("amount") or 0),
+                "pct_direct": float(pct) / 100.0 if pct is not None else None,
             }
         )
     if not rows:
@@ -126,6 +185,9 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24, realti
 
     g = df.groupby("symbol", sort=False)
     df["pct"] = g["close"].pct_change()
+    if "pct_direct" in df.columns:
+        direct_pct = pd.to_numeric(df["pct_direct"], errors="coerce")
+        df.loc[direct_pct.notna(), "pct"] = direct_pct[direct_pct.notna()]
     df["ma5"] = g["close"].transform(lambda s: s.rolling(5).mean())
     df["above_ma5"] = df["close"] > df["ma5"]
     thr = df["symbol"].map(_limit_threshold)
@@ -140,10 +202,8 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24, realti
     meta = {str(s).zfill(6): {"name": n or "", "industry": i or ""} for s, n, i in meta_rows}
     df["name"] = df["symbol"].map(lambda s: meta.get(str(s).zfill(6), {}).get("name", ""))
     df["industry"] = df["symbol"].map(lambda s: meta.get(str(s).zfill(6), {}).get("industry", ""))
-    df["limit_cause"] = df.apply(
-        lambda row: _limit_cause(str(row.get("name") or ""), str(row.get("industry") or ""), str(row.get("seg") or "")),
-        axis=1,
-    )
+    # limit_cause 仅用于最新日的涨停梯队归因，原来对全 df（数万行）逐行算极慢；
+    # 下移到只对最新日涨停股（数十行）计算，市场情绪首屏从 ~25s 降到秒级。
 
     # 仅保留展示窗口
     win = df[(df["date"] >= start) & (df["date"] <= end)].copy()
@@ -174,6 +234,10 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24, realti
         if d != today_str and 0 < cnt < ref_count * 0.8:
             amount_scaled[d] = float(amount_raw[d]) * (ref_count / cnt)
     amount_yi = [round(float(v) / 1e8, 1) for v in amount_scaled]
+    amount_estimated = False
+    if dates and dates[-1] == today_str and amount_yi[-1] <= 0 and len(amount_yi) >= 2:
+        amount_yi[-1] = amount_yi[-2]
+        amount_estimated = True
     limit_up_cnt = [int(v) for v in daily["limit_up"].sum().reindex(dates).fillna(0)]
     limit_down_cnt = [int(v) for v in daily["limit_down"].sum().reindex(dates).fillna(0)]
     adv = daily.apply(lambda x: int((x["pct"] > 0).sum())).reindex(dates).fillna(0)
@@ -203,6 +267,15 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24, realti
     latest_limit = latest_limit[latest_limit["limit_up"]].copy()
     cause_ladder = []
     if not latest_limit.empty:
+        latest_limit["limit_cause"] = latest_limit.apply(
+            lambda row: _limit_cause(
+                str(row.get("symbol") or ""),
+                str(row.get("name") or ""),
+                str(row.get("industry") or ""),
+                str(row.get("seg") or ""),
+            ),
+            axis=1,
+        )
         for cause, frame in latest_limit.groupby("limit_cause"):
             stocks = frame.sort_values(["board_height", "amount"], ascending=False).head(8)
             cause_ladder.append({
@@ -240,12 +313,26 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24, realti
     turnover_prev = amount_yi[-2] if len(amount_yi) >= 2 else turnover_today
     adv_dec_ratio = round(adv_list[-1] / dec_list[-1], 2) if dec_list[-1] else float(adv_list[-1])
     sentiment_temp = _sentiment_temperature(above_all[-1], adv_dec_ratio, limit_up_cnt[-1], limit_down_cnt[-1], max_height[-1])
+    capital_flow = _capital_flow_summary(
+        turnover_today,
+        turnover_prev,
+        adv_list[-1],
+        dec_list[-1],
+        limit_up_cnt[-1],
+        limit_down_cnt[-1],
+        above_all[-1],
+        sentiment_temp,
+    )
 
     return {
         "empty": False,
         "start": start, "end": end, "dates": dates, "as_of": last,
         "as_of_time": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
         "realtime": bool(realtime_quotes and last == date.today().strftime("%Y-%m-%d")),
+        "data_quality": {
+            "amount_estimated": amount_estimated,
+            "realtime_symbols": len(realtime_quotes or {}),
+        },
         "kpi": {
             "sentiment_temperature": sentiment_temp,
             "turnover_yi": turnover_today,
@@ -257,6 +344,7 @@ def compute_market_sentiment(start: str, end: str, buffer_days: int = 24, realti
             "advancers": adv_list[-1], "decliners": dec_list[-1],
             "above_ma5_pct": above_all[-1],
         },
+        "capital_flow": capital_flow,
         "turnover_trend": {"dates": dates, "amount_yi": amount_yi},
         "above_ma5_trend": {"dates": dates, "all": above_all, **above_cap},
         "limit_distribution": {"dates": dates, "up": limit_up_cnt, "down": limit_down_cnt},

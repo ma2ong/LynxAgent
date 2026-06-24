@@ -87,6 +87,53 @@
         <div class="chart-card"><div class="ct">板块涨跌幅（区间累计）</div><div ref="indexEl" class="chart"></div></div>
       </div>
     </template>
+
+    <!-- 多源加权情绪 -->
+    <div class="chart-row">
+      <div class="chart-card">
+        <div class="ct">大盘加权情绪<small class="sub">（多源加权，区别于上方宽度情绪温度）</small></div>
+        <div v-if="ws.marketLoading" class="ws-empty">情绪计算中…</div>
+        <template v-else-if="ws.market && !ws.market.empty">
+          <div class="ws-head">
+            <div class="ws-score" :style="{ color: wsColor(ws.market.score) }">
+              <strong>{{ ws.market.score }}</strong><small>/ 100</small>
+            </div>
+            <el-tag size="small" :type="wsLevelType(ws.market.level)" effect="dark">{{ ws.market.level }}</el-tag>
+            <span v-if="ws.market.base_temperature != null" class="ws-cmp">宽度温度 {{ ws.market.base_temperature }}</span>
+          </div>
+          <div class="ws-bars">
+            <div v-for="(b, i) in ws.market.breakdown" :key="i" class="ws-bar">
+              <span class="wb-name">{{ b.name }}</span>
+              <div class="wb-track"><div class="wb-fill" :style="{ width: b.score + '%', background: wsColor(b.score) }"></div></div>
+              <span class="wb-val">{{ b.score }}</span>
+              <span class="wb-w">{{ Math.round(b.weight * 100) }}%</span>
+            </div>
+          </div>
+        </template>
+        <div v-else class="ws-empty">{{ ws.market?.message || '暂无' }}</div>
+      </div>
+
+      <div class="chart-card">
+        <div class="ct">板块情绪排行<small class="sub">（资金流 / 涨跌幅 / 新闻加权）</small></div>
+        <div v-if="ws.sectorLoading" class="ws-empty">加载中…</div>
+        <el-table v-else-if="ws.sector && ws.sector.length" :data="ws.sector" size="small" height="300" stripe>
+          <el-table-column type="index" label="#" width="44" />
+          <el-table-column prop="name" label="板块" />
+          <el-table-column label="情绪分" width="120">
+            <template #default="{ row }">
+              <el-tag size="small" :type="wsLevelType(row.level)" effect="plain">{{ row.score }} {{ row.level }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="资金净额(亿)" width="120">
+            <template #default="{ row }"><span :class="row.net_yi >= 0 ? 'up' : 'down'">{{ row.net_yi }}</span></template>
+          </el-table-column>
+          <el-table-column label="涨跌幅" width="100">
+            <template #default="{ row }"><span :class="row.pct >= 0 ? 'up' : 'down'">{{ row.pct }}%</span></template>
+          </el-table-column>
+        </el-table>
+        <div v-else class="ws-empty">暂无</div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -95,10 +142,32 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { echarts, type ECharts } from '@/utils/echarts'
 import { ElMessage } from 'element-plus'
 import { marketSentimentApi } from '@/api/marketSentiment'
+import { quantApi } from '@/api/quant'
 
 const UP = '#ef232a', DOWN = '#14b143'
 const loading = ref(false)
 const data = ref<any>(null)
+
+// 多源加权情绪
+const ws = reactive<{ market: any; sector: any[]; marketLoading: boolean; sectorLoading: boolean }>({
+  market: null, sector: [], marketLoading: false, sectorLoading: false,
+})
+const wsColor = (s: number) => (s >= 62 ? UP : s >= 45 ? '#e6a23c' : DOWN)
+const wsLevelType = (lv: string) =>
+  lv === '高涨' ? 'danger' : lv === '偏暖' ? 'warning' : lv === '中性' ? 'info' : 'success'
+const loadWeightedSentiment = () => {
+  ws.marketLoading = true
+  quantApi.marketWeightedSentiment()
+    .then((res) => { ws.market = res })
+    .catch(() => { ws.market = { empty: true, message: '加载失败' } })
+    .finally(() => { ws.marketLoading = false })
+  ws.sectorLoading = true
+  quantApi.sectorSentimentRank(20)
+    .then((res) => { ws.sector = res?.rows || [] })
+    .catch(() => { ws.sector = [] })
+    .finally(() => { ws.sectorLoading = false })
+}
+
 const kpi = reactive<Record<string, any>>({})
 const range = ref<[string, string] | null>(null)
 
@@ -234,7 +303,7 @@ const load = async () => {
   }
 }
 
-onMounted(() => { range.value = defaultRange(); load() })
+onMounted(() => { range.value = defaultRange(); load(); loadWeightedSentiment() })
 onUnmounted(disposeAll)
 </script>
 
@@ -278,4 +347,18 @@ onUnmounted(disposeAll)
 .chart { width: 100%; height: 280px; }
 .chart.wide { height: 320px; }
 @media (max-width: 900px) { .kpi-band, .chart-row, .flow-metrics { grid-template-columns: 1fr; } }
+/* 多源加权情绪 */
+.ct .sub { font-weight: 400; font-size: 11px; color: var(--el-text-color-secondary); }
+.ws-empty { color: var(--el-text-color-secondary); padding: 40px 0; text-align: center; }
+.ws-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.ws-score { display: flex; align-items: baseline; gap: 3px; strong { font-size: 30px; font-weight: 800; }
+  small { font-size: 12px; color: var(--el-text-color-secondary); } }
+.ws-cmp { font-size: 12px; color: var(--el-text-color-secondary); }
+.ws-bars { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+.ws-bar { display: flex; align-items: center; gap: 10px; font-size: 13px;
+  .wb-name { width: 88px; flex: none; color: var(--el-text-color-regular); }
+  .wb-track { flex: 1; height: 10px; border-radius: 5px; background: var(--el-fill-color); overflow: hidden; }
+  .wb-fill { height: 100%; border-radius: 5px; transition: width .3s; }
+  .wb-val { width: 36px; text-align: right; font-weight: 600; }
+  .wb-w { width: 40px; text-align: right; font-size: 11px; color: var(--el-text-color-secondary); } }
 </style>

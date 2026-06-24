@@ -112,56 +112,59 @@
       </el-table>
     </section>
 
-    <section class="panel">
-      <el-table :data="items" v-loading="loading" size="small">
-        <el-table-column label="代码" width="100">
-          <template #default="{ row }">{{ row.symbol || row.stock_code }}</template>
-        </el-table-column>
-        <el-table-column prop="stock_name" label="名称" width="120" />
-        <el-table-column prop="industry" label="行业" width="130" show-overflow-tooltip />
-        <el-table-column label="现价" width="90">
-          <template #default="{ row }">{{ row.current_price != null ? row.current_price.toFixed(2) : '-' }}</template>
-        </el-table-column>
-        <el-table-column label="涨跌幅" width="100">
-          <template #default="{ row }">
-            <span v-if="row.change_percent != null" :class="row.change_percent >= 0 ? 'up' : 'down'">
-              {{ row.change_percent >= 0 ? '+' : '' }}{{ row.change_percent.toFixed(2) }}%
-            </span>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="加入后涨跌" width="110">
-          <template #default="{ row }">
-            <span v-if="row.change_since_added_percent != null" :class="row.change_since_added_percent >= 0 ? 'up' : 'down'">
-              {{ row.change_since_added_percent >= 0 ? '+' : '' }}{{ row.change_since_added_percent.toFixed(2) }}%
-            </span>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="预警(低/高)" width="130">
-          <template #default="{ row }">
-            {{ row.alert_price_low ?? '-' }} / {{ row.alert_price_high ?? '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="标签">
-          <template #default="{ row }">
-            <el-tag v-for="t in row.tags || []" :key="t" size="small" effect="plain" class="tag">{{ t }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="140">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="goResearch(row.symbol || row.stock_code)">深研</el-button>
-            <el-button link type="danger" @click="remove(row)">删除</el-button>
-          </template>
-        </el-table-column>
-        <template #empty>
-          <div class="table-empty">
-            <strong>还没有自选股</strong>
-            <p>添加常看的股票后，这里会同步实时行情、预警和组合体检。</p>
-            <el-button type="primary" size="small" @click="addVisible = true">添加第一只</el-button>
-          </div>
-        </template>
-      </el-table>
+    <section class="panel" v-loading="loading">
+      <div v-if="!items.length && !loading" class="table-empty">
+        <strong>还没有自选股</strong>
+        <p>添加常看的股票后，这里会同步实时行情、预警和组合体检。</p>
+        <el-button type="primary" size="small" @click="addVisible = true">添加第一只</el-button>
+      </div>
+      <div v-else class="t-wrap">
+        <table class="t-table">
+          <thead>
+            <tr>
+              <th>个股</th>
+              <th class="r">现价</th>
+              <th class="r">涨跌幅</th>
+              <th class="r">加入后</th>
+              <th class="r">预警 低/高</th>
+              <th>标签</th>
+              <th class="r">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in items" :key="row.symbol || row.stock_code">
+              <td>
+                <div class="code-cell">
+                  <span class="nm">{{ row.stock_name }}</span>
+                  <span class="cd">{{ row.symbol || row.stock_code }}<template v-if="row.industry"> · {{ row.industry }}</template></span>
+                </div>
+              </td>
+              <td class="r num">{{ row.current_price != null ? row.current_price.toFixed(2) : '-' }}</td>
+              <td class="r">
+                <span v-if="row.change_percent != null" class="pill" :class="row.change_percent >= 0 ? 'u' : 'd'">
+                  {{ row.change_percent >= 0 ? '+' : '' }}{{ row.change_percent.toFixed(2) }}%
+                </span>
+                <span v-else class="muted">-</span>
+              </td>
+              <td class="r">
+                <span v-if="row.change_since_added_percent != null" class="pill ghost" :class="row.change_since_added_percent >= 0 ? 'u' : 'd'">
+                  {{ row.change_since_added_percent >= 0 ? '+' : '' }}{{ row.change_since_added_percent.toFixed(2) }}%
+                </span>
+                <span v-else class="muted">-</span>
+              </td>
+              <td class="r num muted">{{ row.alert_price_low ?? '-' }} / {{ row.alert_price_high ?? '-' }}</td>
+              <td>
+                <span v-for="t in row.tags || []" :key="t" class="chip-tag">{{ t }}</span>
+                <span v-if="!(row.tags || []).length" class="muted">-</span>
+              </td>
+              <td class="r ops">
+                <button class="op" @click="goResearch(row.symbol || row.stock_code)">深研</button>
+                <button class="op del" @click="remove(row)">删除</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <el-dialog v-model="addVisible" title="添加自选股" width="420px">
@@ -483,6 +486,33 @@ onMounted(load)
 
 .alert-row { display: flex; gap: 10px; width: 100%; }
 .alert-row :deep(.el-input-number) { flex: 1; }
+
+/* 终端风自选列表 */
+.t-wrap { overflow-x: auto; }
+.t-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.t-table thead th { background: #fafbfc; color: #9aa3b0; font-weight: 600; font-size: 11.5px; text-align: left;
+  padding: 11px 14px; border-bottom: 1px solid #e3e6eb; white-space: nowrap; }
+.t-table thead th.r { text-align: right; }
+.t-table tbody td { padding: 11px 14px; border-bottom: 1px solid #eceef2; vertical-align: middle; }
+.t-table tbody tr:last-child td { border-bottom: 0; }
+.t-table tbody tr:hover { background: #fafbfe; }
+.t-table .r { text-align: right; }
+.t-table .num { font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: -.2px; }
+.t-table .muted { color: #9aa3b0; }
+.code-cell { display: flex; flex-direction: column; line-height: 1.35; }
+.code-cell .nm { font-weight: 700; font-size: 13px; }
+.code-cell .cd { font-size: 11.5px; color: #9aa3b0; font-family: ui-monospace, Menlo, monospace; }
+.pill { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 64px; padding: 2px 9px; border-radius: 6px;
+  font-weight: 700; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.pill.u { background: #fdeef0; color: #e5384d; } .pill.d { background: #e9f7f1; color: #16a06a; }
+.pill.ghost { background: transparent; min-width: 0; padding: 2px 0; }
+.pill.ghost.u { color: #e5384d; } .pill.ghost.d { color: #16a06a; }
+.chip-tag { display: inline-block; background: #f3f5f9; border: 1px solid #e3e6eb; border-radius: 6px; padding: 1px 7px;
+  font-size: 11.5px; color: #5b6573; margin-right: 4px; }
+.ops { white-space: nowrap; }
+.op { border: 0; background: transparent; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 2px 6px; color: #2f6bff; }
+.op.del { color: #e5384d; }
+.op:hover { text-decoration: underline; }
 
 .up { color: #ef4444; }
 .down { color: #16a34a; }

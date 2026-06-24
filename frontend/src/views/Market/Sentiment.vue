@@ -103,7 +103,9 @@
           </div>
           <div class="ws-bars">
             <div v-for="(b, i) in ws.market.breakdown" :key="i" class="ws-bar">
-              <span class="wb-name">{{ b.name }}</span>
+              <el-tooltip :content="dimHint(b.name)" placement="top" :disabled="!dimHint(b.name)">
+                <span class="wb-name">{{ b.name }}</span>
+              </el-tooltip>
               <div class="wb-track"><div class="wb-fill" :style="{ width: b.score + '%', background: wsColor(b.score) }"></div></div>
               <span class="wb-val">{{ b.score }}</span>
               <span class="wb-w">{{ Math.round(b.weight * 100) }}%</span>
@@ -155,6 +157,14 @@ const ws = reactive<{ market: any; sector: any[]; marketLoading: boolean; sector
 const wsColor = (s: number) => (s >= 62 ? UP : s >= 45 ? '#e6a23c' : DOWN)
 const wsLevelType = (lv: string) =>
   lv === '高涨' ? 'danger' : lv === '偏暖' ? 'warning' : lv === '中性' ? 'info' : 'success'
+const DIM_HINTS: Record<string, string> = {
+  '宽度(>MA5)': '站上 5 日均线的个股占比，衡量多头宽度',
+  '涨跌比': '上涨家数 ÷ 下跌家数，大于 1 偏强',
+  '涨跌停强弱': '涨停数占涨跌停总数比例，反映情绪极端度',
+  '行业资金合计': '各行业主力资金净流入合计（亿），正值偏暖',
+  '市场新闻热度': '市场新闻标题的利好/利空词净值',
+}
+const dimHint = (name: string): string => DIM_HINTS[name] || ''
 const loadWeightedSentiment = () => {
   ws.marketLoading = true
   quantApi.marketWeightedSentiment()

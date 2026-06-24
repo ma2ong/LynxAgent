@@ -44,6 +44,9 @@
         <el-menu-item index="/insights/catalyst">
             <span>催化剂监控</span>
           </el-menu-item>
+        <el-menu-item index="/insights/capital">
+            <span>资金面板</span>
+          </el-menu-item>
         </el-sub-menu>
         <el-sub-menu index="pick">
           <template #title>

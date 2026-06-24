@@ -50,6 +50,11 @@
 
     <div class="content-grid">
       <section class="news-list">
+        <el-empty
+          v-if="!newsItems.length && !loading"
+          description="暂无热点新闻，点右上角「刷新」获取最新榜单"
+          :image-size="60"
+        />
         <div
           v-for="item in newsItems"
           :key="item.id"

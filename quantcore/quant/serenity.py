@@ -70,14 +70,13 @@ def composite_significance(scores: Dict[str, object], evidence_tier: str = "") -
 
 
 _SCAN_SYS = (
-    "你是 A 股事件驱动研究员，用 serenity 框架。【默认 qualified=true】：只要这条快讯涉及任何"
-    "具体产业或公司（政策、订单/中标、技术/量产、供需/涨价、资本动作、产业链动向、业绩等），"
-    "就判合格，强弱一律交给七维评分区分——早期、媒体报道、已部分炒作都不是否决理由，只在对应维度给低分。"
-    "只有命中硬否决（纯市场面/资金面、纯宏观数据、笼统情绪面、纯例行公告、纯口水）才 qualified=false。"
+    "你是 A 股事件驱动研究员，用 serenity 框架做严格收录。【默认 qualified=false】："
+    "只有新闻同时满足具体产业变化、清晰传导链、可映射 A 股受益标的、1-4 季度可验证，才 qualified=true。"
+    "纯市场面/资金面、宏观泛谈、海外孤立事故、例行公告、卖方观点、没有A股业绩传导的新闻一律剔除。"
     "无论 qualified 真假，都必须照实给出 7 个维度的 scores。你只做研究假设，不构成投资建议。"
 )
 
-_SCAN_PROMPT = """判断下面这条快讯是否值得作为事件跟踪。【默认合格 qualified=true】，只有命中下方任一硬否决才判 false。只输出 JSON。
+_SCAN_PROMPT = """判断下面这条快讯是否值得作为事件跟踪。【默认不合格 qualified=false】，必须满足全部收录条件才判 true。只输出 JSON。
 
 新闻标题：{title}
 新闻摘要：{summary}
@@ -88,11 +87,15 @@ _SCAN_PROMPT = """判断下面这条快讯是否值得作为事件跟踪。【�
 3. 笼统的情绪面/资金面/板块轮动描述（"XX板块活跃""资金流入XX"）
 4. 纯例行公司公告：分红、回购、股东增减持、人事变动、更名
 5. 既无产业指向、又讲不出"→具体环节→具体公司业绩"传导链的纯口水内容
+6. 海外事故/灾害/政治新闻，若不能清楚落到 A 股具体供需或订单链条
+7. 单一公司小额、低确定性、难验证的普通经营动态
 
-【合格标准——满足即 qualified=true（早期/媒体报道不否决，留给评分区分）】：
-- 带有具体产业指向的催化：政策落地或推进、订单/中标、产能/扩产、技术突破/量产、供需缺口/涨价、认证/资格、龙头资本动作（投资/并购/锁产能）、产业链动向
-- 能勾勒传导链：这个变化 → 哪个产业环节 → 为什么某些公司业绩受益（哪怕是中期）
-- 供给瓶颈环节加分（供应商少、验证周期长、扩产难、认证严；越临近瓶颈、越难替代，cap_elasticity 越高）
+【收录条件——必须全部满足才 qualified=true】：
+1. 催化具体：政策落地/订单中标/供需涨价/技术量产/产能认证/龙头资本动作/产业链瓶颈，至少命中一类
+2. 传导清楚：能写出“变化 → 产业环节 → A股公司收入/毛利/订单/估值重估”的路径
+3. 标的可信：beneficiary_names 中每家公司必须真实存在，且能说明为什么受益；宁缺毋滥
+4. 可验证：1-4 个季度内能通过订单、价格、出货、财报、产能、政策文件等观察
+5. 机会性：不是已经被广泛交易透支的泛题材；若已充分炒作，market_neglect 必须低分
 
 【证据阶梯 evidence_tier】：一手（公告/政策文件/中标/财报/认证）> 可核验（行业标准/可核验数据）> 管理层（管理层口径）> 推断（媒体报道/分析）> 传闻（小作文/据说）。传闻级会被压到门槛下淘汰；其余等级凭七维评分高低决定去留。
 
@@ -183,7 +186,7 @@ JSON 字段：
 - falsification_points: 数组，证伪信号
 - red_flags: 数组，命中的 A股红旗（无则空数组）
 - risks: 主要风险
-- position_note: 仓位/跟踪建议（研究性，非投顾）"""
+- tracking_note: 跟踪备注（只写观察点、验证节奏和证伪条件，不给仓位或交易动作）"""
 
 _REVIEW_SYS = (
     "你是独立复核员，立场独立、只挑刺不背书。审查下面这份 serenity 深度分析，"
@@ -205,7 +208,7 @@ def _review_report(report: Dict[str, object]) -> Optional[Dict[str, object]]:
     try:
         payload = json.dumps(report, ensure_ascii=False)[:3000]
         data = chat_json(_REVIEW_PROMPT.format(report=payload), _REVIEW_SYS,
-                         deep=True, max_tokens=700)
+                         deep=True, max_tokens=1200)
     except Exception:
         return None
     if not data or not data.get("verdict"):

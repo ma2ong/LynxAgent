@@ -50,7 +50,7 @@
       <section class="matrix-card">
         <div class="matrix-title">
           {{ fmtDate(data.date) }}　涨停热点分布
-          <span class="matrix-note">按明确概念归类，无法确认的只放「其他」</span>
+          <span class="matrix-note">按资金主线归类，无法确认的只放「其他」</span>
         </div>
         <div class="theme-strip">
           <button v-for="cause in data.causes" :key="cause" class="theme-pill" :class="`theme-${themeClass(cause)}`">
@@ -128,7 +128,7 @@
               </span>
             </template>
           </el-table-column>
-          <el-table-column prop="cause" label="概念" width="110" />
+          <el-table-column prop="cause" label="主线概念" width="120" />
           <el-table-column label="特征" width="130">
             <template #default="{ row }">
               <el-tag v-if="row.is_one_price" size="small" type="danger" effect="dark" style="margin-right:4px">一字</el-tag>
@@ -141,7 +141,7 @@
             <template #default="{ row }"><span class="up">+{{ row.pct_chg }}%</span></template>
           </el-table-column>
           <el-table-column prop="amount_yi" label="成交额(亿)" width="100" sortable />
-          <el-table-column prop="reason" label="涨停动因" min-width="360" show-overflow-tooltip>
+          <el-table-column prop="reason" label="涨停动因" min-width="520">
             <template #default="{ row }">
               <span class="reason-text">{{ row.reason }}</span>
             </template>
@@ -182,7 +182,7 @@ const filteredStocks = computed(() => {
 const load = async () => {
   loading.value = true
   try {
-    const res: any = await ApiClient.get('/api/lite/limit-up', { date: date.value }, { timeout: 30000 })
+    const res: any = await ApiClient.get('/api/lite/limit-up', { date: date.value }, { timeout: 45000 })
     const d = res?.data || res
     if (!d?.success && !d?.stocks) {
       data.value = d?.data || d
@@ -217,18 +217,30 @@ const levelClass = (level: string) => {
 const themeClass = (cause: string) => {
   if (cause.includes('光通信')) return 'optical'
   if (cause.includes('AI')) return 'ai'
+  if (cause.includes('数据中心')) return 'data'
   if (cause.includes('机器人')) return 'robot'
+  if (cause.includes('机械')) return 'machinery'
   if (cause.includes('芯片')) return 'chip'
+  if (cause.includes('汽车') || cause.includes('新能源车')) return 'auto'
+  if (cause.includes('有色')) return 'metal'
+  if (cause.includes('化工')) return 'material'
   if (cause.includes('煤炭')) return 'coal'
   if (cause.includes('电力')) return 'power'
+  if (cause.includes('医药')) return 'medical'
   if (cause.includes('消费')) return 'consumer'
+  if (cause.includes('游戏')) return 'media'
+  if (cause.includes('港口') || cause.includes('航运')) return 'shipping'
+  if (cause.includes('基建')) return 'infra'
+  if (cause.includes('轨交')) return 'infra'
+  if (cause.includes('地产')) return 'property'
   if (cause.includes('军工')) return 'aero'
+  if (cause.includes('金融')) return 'finance'
   if (cause.includes('公告')) return 'notice'
   return 'other'
 }
 
 const goAnalysis = (symbol: string) => {
-  router.push({ name: 'single-analysis', query: { symbol } })
+  router.push({ path: '/stock-analysis', query: { symbol } })
 }
 
 onMounted(load)
@@ -269,16 +281,27 @@ onMounted(load)
 .theme-pill b { font-size: 16px; line-height: 1; }
 .theme-optical { border-color: #409eff; background: #ecf5ff; }
 .theme-ai { border-color: #8e44ad; background: #f5edff; }
+.theme-data { border-color: #5b8def; background: #eef5ff; }
 .theme-robot { border-color: #00a870; background: #ecfff7; }
+.theme-machinery { border-color: #4b5563; background: #f3f4f6; }
 .theme-chip { border-color: #d35400; background: #fff4e6; }
+.theme-auto { border-color: #2f80ed; background: #eef6ff; }
+.theme-metal { border-color: #b7791f; background: #fff8e6; }
+.theme-material { border-color: #cb6ce6; background: #fbf0ff; }
 .theme-coal { border-color: #7f8c8d; background: #f4f6f7; }
 .theme-power { border-color: #f1c40f; background: #fffbe6; }
+.theme-medical { border-color: #e74c3c; background: #fff1f0; }
 .theme-consumer { border-color: #e84393; background: #fff0f6; }
+.theme-media { border-color: #7c3aed; background: #f5f0ff; }
+.theme-shipping { border-color: #118ab2; background: #eaf8fc; }
+.theme-infra { border-color: #64748b; background: #f1f5f9; }
+.theme-property { border-color: #22a06b; background: #edfdf5; }
 .theme-aero { border-color: #34495e; background: #eef2f7; }
+.theme-finance { border-color: #0f766e; background: #ecfdf5; }
 .theme-notice { border-color: #16a085; background: #edfdf9; }
 .matrix-wrap { overflow-x: auto; }
 
-.matrix-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.matrix-table { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px; }
 .matrix-table th, .matrix-table td {
   border: 1px solid var(--el-border-color-lighter); padding: 6px 8px; vertical-align: top; }
 .matrix-table thead th { background: #eaf4ff; color: #12314f; font-weight: 800;
@@ -327,11 +350,16 @@ sup { font-size: 9px; color: #9254de; }
 .leg-20 { color: #9254de; }
 
 /* Detail */
-.detail-card { background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 8px; padding: 14px; }
+.detail-card { background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 8px; padding: 14px; overflow-x: auto; }
 .detail-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
 .detail-title { font-size: 15px; font-weight: 700; }
 .up { color: #ef232a; }
-.reason-text { color: var(--el-text-color-regular); }
+.reason-text {
+  display: inline-block;
+  color: var(--el-text-color-regular);
+  line-height: 1.55;
+  white-space: normal;
+}
 
 .boards-tag { font-size: 12px; padding: 1px 6px; border-radius: 10px; font-weight: 600; }
 .boards-1 { background: #f0f9eb; color: #5a9e47; }
@@ -342,5 +370,18 @@ sup { font-size: 9px; color: #9254de; }
 
 @media (max-width: 900px) {
   .kpi-band { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 640px) {
+  .page-head { flex-direction: column; }
+  .head-ctrl { width: 100%; align-items: stretch; }
+  .head-ctrl :deep(.el-date-editor) { width: 100% !important; }
+  .kpi-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .matrix-card, .detail-card { padding: 10px; }
+  .matrix-title { font-size: 16px; }
+  .matrix-note { display: block; margin: 4px 0 0; }
+  .detail-head { align-items: stretch; flex-direction: column; gap: 8px; }
+  .detail-head :deep(.el-input) { width: 100% !important; }
+  .detail-card :deep(.el-table) { min-width: 960px; }
 }
 </style>

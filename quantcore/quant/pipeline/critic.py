@@ -35,9 +35,9 @@ def _rule_reject_reason(factors: Dict[str, float], snapshot: Dict[str, float]) -
     if rsi <= 15:
         return "RSI极度超卖，人气极端低迷、流动性枯竭"
     if factors.get("liquidity", 50.0) < 30:
-        return "流动性枯竭，成交不足以支撑建仓"
+        return "流动性枯竭，成交不足以支撑稳定跟踪"
     if factors.get("trend", 50.0) < 35 and factors.get("momentum", 50.0) < 35:
-        return "趋势与动量同时走坏，无右侧买点"
+        return "趋势与动量同时走坏，右侧确认不足"
     return None
 
 
@@ -77,7 +77,7 @@ def _critique_batch_llm(cands: List[Dict[str, object]], avoid_tags: List[str]) -
     avoid = ("，应警惕这些信号: " + "、".join(avoid_tags)) if avoid_tags else ""
     prompt = (
         "你是严格的 A 股选股评审。下面每行是一只候选股的量化因子与入选来源。"
-        f"请给每只打 0-10 分（越高越值得买），并给一句中文理由{avoid}。\n"
+        f"请给每只打 0-10 分（越高越值得进入跟踪池），并给一句中文理由{avoid}。\n"
         '输出 JSON：{"picks":[{"symbol":"600519","score":7.5,"reason":"...","keep":true}]}。'
         "keep 表示是否建议保留（分>=6 且无重大风险）。\n\n" + "\n".join(lines)
     )

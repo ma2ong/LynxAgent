@@ -44,6 +44,27 @@
       </div>
     </section>
 
+    <section v-if="data?.capital_flow" class="flow-panel">
+      <div class="flow-head">
+        <div>
+          <span>资金面板</span>
+          <strong>{{ data.capital_flow.state }}</strong>
+        </div>
+        <el-tag :type="data.capital_flow.score >= 65 ? 'danger' : data.capital_flow.score <= 40 ? 'success' : 'warning'" effect="plain">
+          {{ Math.round(data.capital_flow.score) }}
+        </el-tag>
+      </div>
+      <div class="flow-metrics">
+        <div><span>成交额</span><b>{{ fmtTurnover(data.capital_flow.turnover_yi) }}</b></div>
+        <div><span>较上一日</span><b :class="data.capital_flow.turnover_change_yi >= 0 ? 'up' : 'down'">{{ data.capital_flow.turnover_change_yi >= 0 ? '+' : '' }}{{ data.capital_flow.turnover_change_yi.toFixed(0) }}亿</b></div>
+        <div><span>上涨占比</span><b>{{ data.capital_flow.breadth_pct.toFixed(1) }}%</b></div>
+        <div><span>涨跌停差</span><b :class="data.capital_flow.limit_balance >= 0 ? 'up' : 'down'">{{ data.capital_flow.limit_balance }}</b></div>
+      </div>
+      <ul>
+        <li v-for="note in data.capital_flow.notes" :key="note">{{ note }}</li>
+      </ul>
+    </section>
+
     <section class="controls">
       <span class="title">大盘情绪</span>
       <div class="right">
@@ -71,7 +92,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import * as echarts from 'echarts'
+import { echarts, type ECharts } from '@/utils/echarts'
 import { ElMessage } from 'element-plus'
 import { marketSentimentApi } from '@/api/marketSentiment'
 
@@ -87,7 +108,7 @@ const ma5El = ref<HTMLDivElement>()
 const limitEl = ref<HTMLDivElement>()
 const ladderEl = ref<HTMLDivElement>()
 const indexEl = ref<HTMLDivElement>()
-const charts: echarts.ECharts[] = []
+const charts: ECharts[] = []
 
 const tempColor = computed(() => {
   const t = kpi.sentiment_temperature ?? 0
@@ -233,6 +254,21 @@ onUnmounted(disposeAll)
 .kpi-card small { color: var(--el-text-color-secondary); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .ladder { font-size: 12px; }
 .up { color: #ef232a; } .down { color: #14b143; }
+.flow-panel {
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.flow-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.flow-head span { display: block; color: var(--el-text-color-secondary); font-size: 12px; margin-bottom: 2px; }
+.flow-head strong { font-size: 20px; }
+.flow-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+.flow-metrics div { background: var(--el-fill-color-lighter); border-radius: 6px; padding: 8px 10px; }
+.flow-metrics span { display: block; color: var(--el-text-color-secondary); font-size: 11px; margin-bottom: 2px; }
+.flow-metrics b { font-size: 14px; }
+.flow-panel ul { margin: 0; padding-left: 18px; color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.7; }
 .controls { display: flex; align-items: center; justify-content: space-between; margin: 6px 0 12px;
   .title { font-size: 18px; font-weight: 700; } .right { display: flex; gap: 10px; } }
 .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
@@ -241,5 +277,5 @@ onUnmounted(disposeAll)
 .ct { font-weight: 700; text-align: center; margin-bottom: 8px; }
 .chart { width: 100%; height: 280px; }
 .chart.wide { height: 320px; }
-@media (max-width: 900px) { .kpi-band, .chart-row { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .kpi-band, .chart-row, .flow-metrics { grid-template-columns: 1fr; } }
 </style>

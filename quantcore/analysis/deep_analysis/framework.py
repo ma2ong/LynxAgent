@@ -15,13 +15,13 @@ logger = logging.getLogger(__name__)
 MACRO_PROMPT = "从宏观视角分析{name}({code})所处行业景气度和政策环境，50字以内。"
 QUALITY_PROMPT = """对{name}({code})打分（0-100），输出纯JSON：
 {{"fundamental":分数,"governance":分数,"competitive":分数,"growth":分数,"valuation":分数,"rationale":"1句话理由"}}"""
-RISK_PROMPT = "列出{name}({code})最主要的3个投资风险和对应止损建议，格式为JSON数组：[{{\"risk\":\"...\",\"mitigation\":\"...\"}}]"
+RISK_PROMPT = "列出{name}({code})最主要的3个研究风险和对应失效条件，格式为JSON数组：[{{\"risk\":\"...\",\"mitigation\":\"...\"}}]"
 TRACKING_PROMPT = "为{name}({code})制定跟踪计划：关键财务指标阈值和下次复盘建议，JSON格式：{{\"metrics\":[{{\"name\":\"...\",\"threshold\":\"...\"}}],\"next_review\":\"Q几财报季\"}}"
-RATING_PROMPT = """基于以下分析，给出综合评级（必须是：买入/持有/观察/回避 之一）：
+RATING_PROMPT = """基于以下分析，给出综合信号（必须是：积极关注/继续跟踪/观察/回避 之一）：
 质量评分: {quality}
 估值分位: {valuation_percentile}
 风险数量: {risk_count}
-只输出评级词，不要其他内容。"""
+只输出信号词，不要其他内容。"""
 
 
 def _strip_md(text: str) -> str:
@@ -94,7 +94,7 @@ class DeepAnalysisFramework:
             valuation_percentile=round(valuation_pct, 2),
             risk_count=len(risks),
         )).strip()
-        overall_rating = rating_raw if rating_raw in ["买入", "持有", "观察", "回避"] else "观察"
+        overall_rating = rating_raw if rating_raw in ["积极关注", "继续跟踪", "观察", "回避"] else "观察"
 
         return {
             "code": code,

@@ -18,8 +18,8 @@ body { background: var(--bg); color: var(--text); font-family: 'PingFang SC', sa
 .hero { background: var(--card); border-radius: 12px; padding: 24px; margin-bottom: 20px; border-left: 4px solid var(--accent); }
 .hero h1 { margin: 0 0 8px; font-size: 28px; color: white; }
 .rating-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-weight: bold; }
-.rating-买入 { background: var(--green); color: black; }
-.rating-持有 { background: #d29922; color: black; }
+.rating-积极关注 { background: var(--green); color: black; }
+.rating-继续跟踪 { background: #d29922; color: black; }
 .rating-观察 { background: #388bfd; color: white; }
 .rating-回避 { background: var(--red); color: white; }
 .card { background: var(--card); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
@@ -58,7 +58,7 @@ body { background: var(--bg); color: var(--text); font-family: 'PingFang SC', sa
 </div>
 
 <div class="card">
-  <h2>三情景目标价</h2>
+  <h2>三情景价格中枢</h2>
   <div class="scenarios">
     {% for s_name, s_data in scenarios.items() if s_name in ['bear', 'base', 'bull'] %}
     <div class="scenario {{ s_name }}">

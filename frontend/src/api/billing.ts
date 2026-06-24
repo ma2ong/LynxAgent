@@ -14,6 +14,38 @@ export function fetchBillingMe() {
   return ApiClient.get<ApiResponse<BillingMe>>('/api/billing/me')
 }
 
+export interface UpgradeInfo {
+  price_text: string
+  wechat_id: string
+  qr_url: string
+  configured: boolean
+  instructions: string
+}
+
+export function fetchUpgradeInfo() {
+  return ApiClient.get<ApiResponse<UpgradeInfo>>('/api/billing/upgrade-info')
+}
+
+export interface RuntimeConfigCheck {
+  key: string
+  label: string
+  ok: boolean
+  required: boolean
+  message: string
+}
+
+export interface RuntimeConfigValidation {
+  valid: boolean
+  mode: string
+  storage: string
+  checks: RuntimeConfigCheck[]
+  warnings: string[]
+}
+
+export function fetchRuntimeValidation() {
+  return ApiClient.get<ApiResponse<RuntimeConfigValidation>>('/api/system/config/validate')
+}
+
 export interface AdminUser {
   id: string
   username: string

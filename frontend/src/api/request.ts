@@ -35,7 +35,7 @@ http.interceptors.response.use(
     }
     if (error?.response?.status === 402) {
       const detail = error.response.data?.detail
-      const msg = detail?.message || '已达套餐限制'
+      const msg = detail?.message || '已达到套餐限制'
       if (!quotaDialogOpen) {
         quotaDialogOpen = true
         import('element-plus').then(({ ElMessageBox }) => {
@@ -63,15 +63,19 @@ export class ApiClient {
   static get<T = any>(url: string, params?: any, config?: RequestConfig): Promise<T> {
     return http.get(url, { params, ...config })
   }
+
   static post<T = any>(url: string, data?: any, config?: RequestConfig): Promise<T> {
     return http.post(url, data, config)
   }
+
   static put<T = any>(url: string, data?: any, config?: RequestConfig): Promise<T> {
     return http.put(url, data, config)
   }
+
   static delete<T = any>(url: string, config?: RequestConfig): Promise<T> {
     return http.delete(url, config)
   }
+
   static patch<T = any>(url: string, data?: any, config?: RequestConfig): Promise<T> {
     return http.patch(url, data, config)
   }

@@ -9,8 +9,8 @@
         <el-button :loading="loading" @click="load">
           <el-icon><Refresh /></el-icon>刷新
         </el-button>
-        <el-button type="primary" :loading="syncing" @click="sync(false)">增量同步</el-button>
-        <el-button :loading="syncing" @click="sync(true)">全量同步</el-button>
+        <el-button type="primary" :loading="syncing" :disabled="isIntradayMode" @click="sync(false)">收盘后补日线</el-button>
+        <el-button :loading="syncing" @click="sync(true)">重建历史日线</el-button>
       </div>
     </div>
 
@@ -22,6 +22,25 @@
       :closable="false"
       class="status-alert"
     />
+
+    <el-alert
+      v-if="isIntradayMode"
+      title="盘中无需等待日 K 同步"
+      description="市场雷达、涨停热点和个股价格优先使用实时行情；本地日 K 主要用于回测、形态扫描和历史统计，收盘后再补齐即可。"
+      type="info"
+      show-icon
+      :closable="false"
+      class="status-alert"
+    />
+
+    <section v-if="!loading && !health" class="panel empty-panel">
+      <el-empty description="暂时没有读取到本地数据状态" :image-size="86">
+        <div class="empty-actions">
+          <el-button @click="load">重新检查</el-button>
+          <el-button type="primary" :loading="syncing" @click="sync(false)">收盘后补日线</el-button>
+        </div>
+      </el-empty>
+    </section>
 
     <section class="kpi-grid" v-if="health">
       <div class="kpi">
@@ -109,6 +128,9 @@ const syncing = ref(false)
 const health = ref<QuantSourceHealth | null>(null)
 let timer: number | undefined
 
+const localStatus = computed(() => health.value?.local?.status || '')
+const isIntradayMode = computed(() => localStatus.value === 'intraday')
+
 const progress = computed(() => {
   const done = Number(health.value?.sync?.done || 0)
   const total = Number(health.value?.sync?.total || 0)
@@ -121,6 +143,7 @@ async function load() {
     health.value = await quantApi.sourceHealth()
     if (health.value?.sync?.running) startPolling()
   } catch (error: any) {
+    health.value = null
     ElMessage.error(error?.message || '数据中心加载失败')
   } finally {
     loading.value = false
@@ -136,10 +159,14 @@ function startPolling() {
 }
 
 async function sync(full: boolean) {
+  if (!full && isIntradayMode.value) {
+    ElMessage.info('当前是盘中实时行情模式，收盘后再补日线；页面数据不需要等同步完成。')
+    return
+  }
   syncing.value = true
   try {
     await quantApi.syncMarket(full)
-    ElMessage.success(full ? '已启动全量同步' : '已启动增量同步')
+    ElMessage.success(full ? '已启动历史日线重建' : '已启动收盘后日线补齐')
     await load()
     startPolling()
   } catch (error: any) {
@@ -165,7 +192,9 @@ onUnmounted(() => { if (timer) window.clearTimeout(timer) })
 .kpi span { display: block; color: var(--el-text-color-secondary); font-size: 12px; margin-bottom: 6px; }
 .kpi strong { font-size: 20px; }
 .grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(320px, .8fr); gap: 12px; }
-.panel { background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 8px; padding: 14px; }
+.panel { background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 8px; padding: 14px; overflow-x: auto; }
+.empty-panel { min-height: 260px; display: flex; align-items: center; justify-content: center; }
+.empty-actions { display: flex; justify-content: center; gap: 8px; }
 .panel-title { font-size: 16px; font-weight: 700; margin-bottom: 12px; }
 .cap { margin: 2px 4px 2px 0; }
 .policy-list { display: flex; flex-direction: column; gap: 10px; }
@@ -178,5 +207,6 @@ onUnmounted(() => { if (timer) window.clearTimeout(timer) })
 @media (max-width: 1000px) {
   .page-head, .actions { align-items: stretch; flex-direction: column; }
   .kpi-grid, .grid { grid-template-columns: 1fr; }
+  .empty-actions { flex-direction: column; }
 }
 </style>

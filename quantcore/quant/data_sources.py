@@ -285,7 +285,11 @@ def data_source_health(local_health: Optional[Dict[str, Any]] = None) -> Dict[st
 
     ready = bool(local_health.get("ready"))
     today_complete = bool(local_health.get("today_complete"))
-    if ready and today_complete:
+    local_status = str(local_health.get("status") or "")
+    if local_status == "intraday":
+        grade = "fresh"
+        message = "盘中页面使用实时行情 + 最近完整日线；无需等待今日日 K 同步完成。"
+    elif ready and today_complete:
         grade = "fresh"
         message = "本地行情已覆盖最近交易日，选股和热点可以优先使用本地高速数据。"
     elif ready:

@@ -88,6 +88,21 @@ export interface QuantSmartPoolResult {
   errors?: Record<string, string>
 }
 
+export interface QuantSmartPoolTask {
+  task_id: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  progress: number
+  phase: string
+  message: string
+  limit: number
+  universe_limit: number
+  created_at?: string
+  updated_at?: string
+  finished_at?: string
+  error?: string
+  result?: QuantSmartPoolResult
+}
+
 export interface QuantPatternPoolItem extends QuantSmartPoolItem {
   pattern_score: number
   matched_patterns?: PatternRecognitionResult['patterns']
@@ -260,31 +275,49 @@ const unwrap = <T>(response: any): T => {
 
 const nonce = () => Date.now()
 
+const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
+  const items = (raw?.items || []).map((item: any) => ({
+    ...item,
+    symbol: item.symbol || item.code,
+    code: item.code || item.symbol,
+    score: Number(item.score ?? item.quant_score ?? item.smart_score ?? 0),
+    quant_score: Number(item.quant_score ?? item.smart_score ?? item.score ?? 0),
+    market: item.market || 'A股',
+    industry: item.industry || item.board || '',
+    board: item.board || item.industry || ''
+  }))
+  return {
+    strategy: raw?.strategy,
+    source: raw?.source || 'lite-smart-pool',
+    universe_size: raw?.universe_size || items.length,
+    analyzed: raw?.analyzed || raw?.universe_size || items.length,
+    ai_factor: raw?.ai_factor,
+    items,
+    errors: raw?.errors || {}
+  }
+}
+
 export const quantApi = {
   capabilities: async () =>
     unwrap<QuantCapabilitiesResult>(await ApiClient.get('/api/quant/capabilities', undefined, { timeout: 60000 })),
 
   smartPool: async (limit = 20, universeLimit = 300) => {
     const raw = unwrap<any>(await ApiClient.get('/api/lite/smart-pool', { limit, universe_limit: universeLimit, _ts: nonce() }, { timeout: 300000 }))
-    const items = (raw.items || []).map((item: any) => ({
-      ...item,
-      symbol: item.symbol || item.code,
-      code: item.code || item.symbol,
-      score: Number(item.score ?? item.quant_score ?? item.smart_score ?? 0),
-      quant_score: Number(item.quant_score ?? item.smart_score ?? item.score ?? 0),
-      market: item.market || 'A股',
-      industry: item.industry || item.board || '',
-      board: item.board || item.industry || ''
-    }))
-    return {
-      strategy: raw.strategy,
-      source: raw.source || 'lite-smart-pool',
-      universe_size: raw.universe_size || items.length,
-      analyzed: raw.analyzed || raw.universe_size || items.length,
-      ai_factor: raw.ai_factor,
-      items,
-      errors: raw.errors || {}
-    } as QuantSmartPoolResult
+    return normalizeSmartPoolResult(raw)
+  },
+
+  startSmartPoolTask: async (limit = 20, universeLimit = 300, strategy = 'balanced') =>
+    unwrap<QuantSmartPoolTask>(await ApiClient.post('/api/lite/smart-pool/tasks', undefined, {
+      params: { limit, universe_limit: universeLimit, strategy, _ts: nonce() },
+      timeout: 15000
+    })),
+
+  smartPoolTask: async (taskId: string) => {
+    const task = unwrap<any>(await ApiClient.get(`/api/lite/smart-pool/tasks/${taskId}`, { _ts: nonce() }, { timeout: 15000 }))
+    if (task?.result) {
+      task.result = normalizeSmartPoolResult(unwrap<any>(task.result))
+    }
+    return task as QuantSmartPoolTask
   },
 
   patternPool: async (limit = 20, universeLimit = 500, minStrength = 70, excludeFundamental = true) => {
@@ -429,6 +462,11 @@ export interface SerenityEvent {
   event: string
   theme: string
   thesis: string
+  evidence?: string
+  evidence_tier?: string
+  stage?: string
+  significance?: number
+  scores?: Record<string, number>
   beneficiaries: SerenityBeneficiary[]
   validation: string
   falsification: string

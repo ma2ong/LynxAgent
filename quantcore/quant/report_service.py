@@ -1,7 +1,7 @@
 """个股 AI 研报组装服务（功能A）。
 
-一页纸研报：评级 / 核心摘要 / 目标价森林图 / 关键指标(当日) / 技术+基本面评分 /
-AI 投资观点 / 核心财务摘要 / 市场表现 / 机构持仓 / 近 7 天新闻。
+一页纸研报：研究信号 / 核心摘要 / 价格观察区间 / 关键指标(当日) / 技术+基本面评分 /
+AI 研究观点 / 核心财务摘要 / 市场表现 / 机构持仓 / 近 7 天新闻。
 
 设计：
 - 技术面评分复用 quant.factors 那套合成（compute_factor_scores -> composite_score），不另写。
@@ -178,13 +178,13 @@ def _market_performance(data: pd.DataFrame) -> Dict[str, Optional[float]]:
 
 
 def _valuation_forest(last_close: float, tech_score: float, fund_score: float, volatility: float) -> Dict[str, object]:
-    """目标价森林图 + 评级区间。
+    """价格观察区间 + 评级区间。
 
     以当前价为锚，用 综合分(技术+基本面)/100 决定方向偏移，波动率决定区间宽度：
       中性中枢 = 当前价 * (1 + bias)，bias = (avg_score-50)/50 * 0.10  （±10% 内）
       区间半宽 = 当前价 * vol_band，vol_band 由年化波动率给出（夹在 6%~25%）
       激进上移半个带宽，保守下移半个带宽。
-    评级区间：买入 < 中性下沿 / 观察 中性区间内 / 风险 > 中性上沿。
+    评级区间：偏低 < 中性下沿 / 观察 中性区间内 / 风险 > 中性上沿。
     """
     if not last_close or last_close <= 0:
         return {"available": False, "note": "暂无"}
@@ -200,20 +200,20 @@ def _valuation_forest(last_close: float, tech_score: float, fund_score: float, v
     conservative = (round(center - 2 * half, 2), round(center, 2))
 
     if last_close < neutral[0]:
-        position = "买入"
-        position_note = "当前价低于中性区间下沿，处于买入区间"
+        position = "偏低"
+        tracking_note = "当前价低于中性区间下沿，后续重点观察量能修复和基本面验证。"
     elif last_close > neutral[1]:
         position = "风险"
-        position_note = "当前价高于中性区间上沿，处于风险区间"
+        tracking_note = "当前价高于中性区间上沿，后续重点观察回撤承接和业绩兑现。"
     else:
         position = "观察"
-        position_note = "当前价处于中性区间内，处于观察区间"
+        tracking_note = "当前价处于中性区间内，后续重点观察趋势延续和风险释放。"
 
     return {
         "available": True,
         "current_price": round(last_close, 2),
         "rows": [
-            {"label": "激进买入", "low": aggressive[0], "high": aggressive[1]},
+            {"label": "弹性上沿", "low": aggressive[0], "high": aggressive[1]},
             {"label": "中性预期", "low": neutral[0], "high": neutral[1]},
             {"label": "保守预期", "low": conservative[0], "high": conservative[1]},
             {"label": "当前价格", "low": round(last_close, 2), "high": round(last_close, 2)},
@@ -225,7 +225,7 @@ def _valuation_forest(last_close: float, tech_score: float, fund_score: float, v
             "risk_above": neutral[1],
         },
         "position": position,
-        "position_note": position_note,
+        "tracking_note": tracking_note,
     }
 
 
@@ -320,18 +320,169 @@ def _fundamental_score(fund: Dict) -> float:
     return round(max(0.0, min(100.0, score)), 1)
 
 
-_SIGNAL_LABEL = {"strong_buy": "强烈买入", "buy": "买入", "hold": "观察", "avoid": "回避"}
+_SIGNAL_LABEL = {"strong_buy": "强势跟踪", "buy": "重点跟踪", "hold": "观察", "avoid": "回避"}
 
 
 def _core_summary(header: Dict, tech_score: float, fund_score: float, signal: str, perf: Dict) -> str:
     rating = _SIGNAL_LABEL.get(signal, signal)
     parts = [
-        f"{header.get('name')}（{header.get('symbol')}，{header.get('industry')}）综合评级：{rating}。",
+        f"{header.get('name')}（{header.get('symbol')}，{header.get('industry')}）综合信号：{rating}。",
         f"技术面 {tech_score:.0f}/100、基本面 {fund_score:.0f}/100。",
     ]
     if perf.get("ytd") is not None:
         parts.append(f"年初至今 {perf['ytd']:+.1f}%。")
     return "".join(parts)
+
+
+def _capital_flow_panel(data: pd.DataFrame, factors: Dict[str, float]) -> Dict[str, object]:
+    if data.empty:
+        return {"available": False, "state": "暂无资金数据", "score": 0, "metrics": [], "notes": []}
+    try:
+        enriched = enrich_indicators(data)
+        last = enriched.iloc[-1]
+        amount = _f(last.get("amount"), 0.0)
+        amount_ma20 = _f(last.get("amount_ma20"), 0.0)
+        volume = _f(last.get("volume"), 0.0)
+        volume_ma20 = _f(last.get("volume_ma20"), 0.0)
+        mfi = _f(last.get("mfi14"), 50.0)
+        cmf = _f(last.get("cmf20"), 0.0)
+        ret = _f(last.get("ret"), 0.0) * 100
+    except Exception:
+        return {"available": False, "state": "资金指标计算失败", "score": 0, "metrics": [], "notes": []}
+
+    amount_ratio = amount / amount_ma20 if amount and amount_ma20 else None
+    volume_ratio = volume / volume_ma20 if volume and volume_ma20 else None
+    score = float(factors.get("capital_flow") or 50.0)
+    if score >= 70 and (amount_ratio or 0) >= 1.2 and ret >= 0:
+        state = "资金配合"
+    elif score <= 40 or (cmf < -0.08 and ret < 0):
+        state = "资金偏弱"
+    elif (amount_ratio or 0) >= 1.5 and ret < 0:
+        state = "放量分歧"
+    else:
+        state = "资金中性"
+
+    notes: list[str] = []
+    if amount_ratio:
+        notes.append(f"成交额为20日均值的 {amount_ratio:.1f} 倍")
+    if mfi >= 80:
+        notes.append("MFI 偏高，短线情绪可能拥挤")
+    elif mfi <= 25:
+        notes.append("MFI 偏低，资金活跃度不足")
+    if cmf > 0.08:
+        notes.append("CMF 为正，收盘位置和量能偏积极")
+    elif cmf < -0.08:
+        notes.append("CMF 为负，资金承接偏弱")
+    if not notes:
+        notes.append("资金指标未出现明显极端信号")
+
+    return {
+        "available": True,
+        "state": state,
+        "score": round(score, 1),
+        "metrics": [
+            {"name": "成交额", "value": round(amount / 1e8, 2), "unit": "亿"},
+            {"name": "成交额/20日均值", "value": round(amount_ratio, 2) if amount_ratio else None, "unit": "倍"},
+            {"name": "成交量/20日均值", "value": round(volume_ratio, 2) if volume_ratio else None, "unit": "倍"},
+            {"name": "MFI14", "value": round(mfi, 1), "unit": ""},
+            {"name": "CMF20", "value": round(cmf, 3), "unit": ""},
+        ],
+        "notes": notes[:4],
+    }
+
+
+def _red_flags(header: Dict, fund: Dict, factors: Dict[str, float], risk: Dict, perf: Dict) -> List[Dict[str, str]]:
+    flags: List[Dict[str, str]] = []
+    max_drawdown = _f(risk.get("max_drawdown"), 0.0)
+    volatility = _f(risk.get("volatility"), 0.0)
+    ytd = _f(perf.get("ytd"), 0.0)
+    m1 = _f(perf.get("m1"), 0.0)
+    rsi = _f(factors.get("rsi"), 50.0)
+    risk_control = _f(factors.get("risk_control"), 50.0)
+
+    if max_drawdown <= -0.32:
+        flags.append({"level": "high", "title": "历史回撤偏大", "detail": f"历史最大回撤约 {max_drawdown:.1%}，波动承受要求高。"})
+    if volatility >= 0.50:
+        flags.append({"level": "high", "title": "波动率过高", "detail": f"年化波动率约 {volatility:.1%}，不适合低风险资金。"})
+    if ytd >= 80 or m1 >= 35:
+        flags.append({"level": "medium", "title": "涨幅可能透支", "detail": "近期或年内涨幅较大，需要关注兑现和回撤承接。"})
+    if (fund.get("net_profit_yoy") is not None and _f(fund.get("net_profit_yoy")) <= -25):
+        flags.append({"level": "high", "title": "盈利同比下滑", "detail": f"归母净利润同比 {fund.get('net_profit_yoy')}%，基本面兑现承压。"})
+    if (fund.get("revenue_yoy") is not None and _f(fund.get("revenue_yoy")) <= -15):
+        flags.append({"level": "medium", "title": "收入增长承压", "detail": f"营业收入同比 {fund.get('revenue_yoy')}%，需求侧需要验证。"})
+    if risk_control < 40:
+        flags.append({"level": "medium", "title": "风控因子偏弱", "detail": f"风控分 {risk_control:.0f}，趋势失效后的回撤风险较高。"})
+    if rsi >= 82:
+        flags.append({"level": "low", "title": "短线拥挤", "detail": f"RSI 分位偏高（{rsi:.0f}），短线追高性价比下降。"})
+    if not header.get("industry"):
+        flags.append({"level": "low", "title": "行业信息不完整", "detail": "行业/板块信息缺失，横向比较置信度偏低。"})
+    return flags[:6]
+
+
+def _investor_profile(
+    header: Dict,
+    tech_score: float,
+    fund_score: float,
+    factors: Dict[str, float],
+    risk: Dict,
+    perf: Dict,
+    red_flags: List[Dict[str, str]],
+) -> Dict[str, object]:
+    volatility = _f(risk.get("volatility"), 0.0)
+    max_drawdown = abs(_f(risk.get("max_drawdown"), 0.0))
+    momentum = _f(factors.get("momentum"), 50.0)
+    trend = _f(factors.get("trend"), 50.0)
+    risk_control = _f(factors.get("risk_control"), 50.0)
+    high_flags = sum(1 for flag in red_flags if flag.get("level") == "high")
+
+    fit_score = round(
+        max(0.0, min(100.0, tech_score * 0.35 + fund_score * 0.25 + risk_control * 0.25 + (100 - min(max_drawdown * 180, 60)) * 0.15 - high_flags * 12)),
+        1,
+    )
+    if high_flags or volatility >= 0.50:
+        profile = "高波动观察型"
+        horizon = "1-4周滚动跟踪"
+    elif trend >= 70 and momentum >= 65:
+        profile = "趋势进攻型"
+        horizon = "1-8周趋势验证"
+    elif fund_score >= 65 and risk_control >= 60:
+        profile = "稳健研究型"
+        horizon = "1-3个月基本面验证"
+    else:
+        profile = "均衡观察型"
+        horizon = "2-6周信号确认"
+
+    suitable = []
+    avoid = []
+    if trend >= 65:
+        suitable.append("能接受趋势跟踪和信号复核")
+    if fund_score >= 60:
+        suitable.append("关注业绩兑现和行业景气")
+    if risk_control >= 55:
+        suitable.append("偏好有明确失效观察线的标的")
+    if volatility >= 0.45:
+        avoid.append("低波动/低回撤偏好")
+    if high_flags:
+        avoid.append("不能接受基本面或波动红旗")
+    if _f(perf.get("m1"), 0.0) >= 30:
+        avoid.append("不适合无计划追高")
+    if not suitable:
+        suitable.append("适合先小样本观察，不适合作为核心标的")
+    if not avoid:
+        avoid.append("不适合忽略行业和大盘环境单独判断")
+
+    return {
+        "profile": profile,
+        "fit_score": fit_score,
+        "horizon": horizon,
+        "suitable_for": suitable[:3],
+        "not_suitable_for": avoid[:3],
+        "checklist": [
+            "下一交易日确认量价是否延续",
+            "复核行业主线和同板块强弱",
+            "红旗触发时降低研究优先级",
+        ],
+    }
 
 
 # --- 主入口 -------------------------------------------------------------
@@ -417,12 +568,15 @@ def build_stock_report(symbol: str) -> Dict[str, object]:
             "ma20": [None if pd.isna(v) else float(v) for v in ma20],
         }
 
-    # 操作建议价位（基于历史波动率估算）
+    # 价格观察位（基于历史波动率估算）
     vol = _f(risk.get("volatility"), 0.0) if has_data else 0.0
     stop_loss = round(last_close * (1 - vol * 0.5), 2) if vol and last_close else None
     target = round(last_close * (1 + vol * 1.5), 2) if vol and last_close and signal in ("buy", "strong_buy") else None
     entry_low = round(last_close * 0.98, 2) if last_close else None
     entry_high = round(last_close * 1.02, 2) if last_close else None
+    capital_flow = _capital_flow_panel(data, factors) if has_data else {"available": False, "state": "暂无资金数据", "score": 0, "metrics": [], "notes": []}
+    red_flags = _red_flags(header, fund, factors, risk, perf)
+    investor_profile = _investor_profile(header, tech_score, fund_score, factors, risk, perf, red_flags)
 
     return {
         "available": has_data or bool(prof) or bool(fund),
@@ -433,7 +587,7 @@ def build_stock_report(symbol: str) -> Dict[str, object]:
             "tech_score": round(tech_score, 1),
             "factors": factors,
             "position": valuation.get("position") if valuation.get("available") else None,
-            "position_note": valuation.get("position_note") if valuation.get("available") else None,
+            "tracking_note": valuation.get("tracking_note") if valuation.get("available") else None,
             "rating_bands": valuation.get("rating_bands") if valuation.get("available") else None,
             "stop_loss": stop_loss,
             "target": target,
@@ -450,6 +604,9 @@ def build_stock_report(symbol: str) -> Dict[str, object]:
             "factors": factors,
         },
         "ai_view": ai_view,
+        "investor_profile": investor_profile,
+        "red_flags": red_flags,
+        "capital_flow_panel": capital_flow,
         "financial_summary": _financial_summary(fund),
         "market_performance": perf,
         "institution_holdings": {"available": False, "note": "暂无"},

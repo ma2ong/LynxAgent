@@ -66,7 +66,7 @@
 
       <div class="portfolio-cols">
         <div class="portfolio-box">
-          <div class="box-title">建议动作</div>
+          <div class="box-title">优化动作</div>
           <ul>
             <li v-for="item in diagnostics.suggested_actions" :key="item">{{ item }}</li>
           </ul>
@@ -94,7 +94,7 @@
         <el-table-column prop="symbol" label="代码" width="90" />
         <el-table-column prop="name" label="名称" width="110" />
         <el-table-column prop="industry" label="行业" min-width="120" show-overflow-tooltip />
-        <el-table-column label="建议仓位" width="100">
+        <el-table-column label="关注权重" width="100">
           <template #default="{ row }"><b>{{ pct(row.suggested_weight) }}</b></template>
         </el-table-column>
         <el-table-column label="量化分" width="90">
@@ -113,7 +113,7 @@
     </section>
 
     <section class="panel">
-      <el-table :data="items" v-loading="loading" empty-text="还没有自选股，点右上角添加" size="small">
+      <el-table :data="items" v-loading="loading" size="small">
         <el-table-column label="代码" width="100">
           <template #default="{ row }">{{ row.symbol || row.stock_code }}</template>
         </el-table-column>
@@ -130,7 +130,7 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="持有涨跌" width="100">
+        <el-table-column label="加入后涨跌" width="110">
           <template #default="{ row }">
             <span v-if="row.change_since_added_percent != null" :class="row.change_since_added_percent >= 0 ? 'up' : 'down'">
               {{ row.change_since_added_percent >= 0 ? '+' : '' }}{{ row.change_since_added_percent.toFixed(2) }}%
@@ -154,6 +154,13 @@
             <el-button link type="danger" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
+        <template #empty>
+          <div class="table-empty">
+            <strong>还没有自选股</strong>
+            <p>添加常看的股票后，这里会同步实时行情、预警和组合体检。</p>
+            <el-button type="primary" size="small" @click="addVisible = true">添加第一只</el-button>
+          </div>
+        </template>
       </el-table>
     </section>
 
@@ -297,7 +304,7 @@ const remove = async (row: FavoriteItem) => {
 }
 
 const goResearch = (code: string) => {
-  router.push({ path: '/analysis/single', query: { stock: code } })
+  router.push({ path: '/stock-analysis', query: { symbol: code } })
 }
 
 onMounted(load)
@@ -453,6 +460,23 @@ onMounted(load)
   border: 1px solid var(--el-border-color-light);
   border-radius: 8px;
   padding: 14px;
+  overflow-x: auto;
+}
+
+.table-empty {
+  padding: 28px 0;
+  color: var(--el-text-color-secondary);
+
+  strong {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--el-text-color-primary);
+    font-size: 15px;
+  }
+
+  p {
+    margin: 0 0 12px;
+  }
 }
 
 .tag { margin-right: 4px; }
@@ -466,6 +490,48 @@ onMounted(load)
 @media (max-width: 1100px) {
   .metric-grid,
   .portfolio-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .page-head,
+  .portfolio-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .head-actions {
+    flex-wrap: wrap;
+  }
+
+  .head-actions :deep(.el-button) { flex: 1; }
+
+  .metric-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .portfolio-panel {
+    padding: 12px;
+  }
+
+  .panel :deep(.el-table),
+  .diagnostic-table {
+    min-width: 860px;
+  }
+
+  :deep(.el-dialog) {
+    width: calc(100vw - 24px) !important;
+  }
+
+  .alert-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 520px) {
+  .metric-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -28,6 +28,18 @@
       >{{ sym }}</el-tag>
     </div>
 
+    <div v-if="!loading && !data && !history.length" class="starter-panel">
+      <div>
+        <h2>从一个标的开始</h2>
+        <p>输入代码后会生成行情、K线、技术因子、财务速览、相关新闻和深度研究入口。</p>
+      </div>
+      <div class="starter-tags">
+        <el-tag v-for="sym in starterSymbols" :key="sym" effect="plain" @click="analyze(sym)">
+          {{ sym }}
+        </el-tag>
+      </div>
+    </div>
+
     <div v-if="loading" class="loading-hint">正在分析，请稍候（约10-30秒）…</div>
 
     <template v-if="data && data.available">
@@ -52,6 +64,11 @@
           <span v-if="data.header?.pe">PE {{ fmt(data.header.pe, 1) }}</span>
           <span v-if="data.header?.market_cap_yi">市值 {{ fmt(data.header.market_cap_yi) }}亿</span>
         </div>
+        <div class="hero-meta quote-meta" v-if="data.header?.quote_updated_at || data.realtime_quote?.amount">
+          <span v-if="data.header?.quote_updated_at">实时 {{ data.header.quote_updated_at }}</span>
+          <span v-if="data.realtime_quote?.amount">成交额 {{ fmtAmount(data.realtime_quote.amount) }}</span>
+          <span v-if="data.header?.quote_source">{{ data.header.quote_source }}</span>
+        </div>
       </div>
 
       <!-- K线图 -->
@@ -60,7 +77,7 @@
         <div ref="klineEl" class="kline-chart"></div>
       </div>
 
-      <!-- AI投资三栏 -->
+      <!-- AI研究三栏 -->
       <div class="ai-card" v-if="data.ai_view">
         <div class="ai-col bull">
           <div class="ai-col-head">📈 看多逻辑</div>
@@ -76,31 +93,81 @@
         </div>
       </div>
 
-      <!-- 操作建议 + 技术因子 -->
+      <div class="insight-grid" v-if="data.investor_profile || data.capital_flow_panel?.available || data.red_flags?.length">
+        <div class="card insight-card" v-if="data.investor_profile">
+          <div class="card-title">投资者画像</div>
+          <div class="profile-head">
+            <strong>{{ data.investor_profile.profile }}</strong>
+            <el-tag size="small" effect="plain">适配 {{ Math.round(data.investor_profile.fit_score || 0) }}</el-tag>
+          </div>
+          <div class="profile-horizon">{{ data.investor_profile.horizon }}</div>
+          <div class="mini-title">适合</div>
+          <ul class="compact-list">
+            <li v-for="item in data.investor_profile.suitable_for" :key="item">{{ item }}</li>
+          </ul>
+          <div class="mini-title">不适合</div>
+          <ul class="compact-list muted-list">
+            <li v-for="item in data.investor_profile.not_suitable_for" :key="item">{{ item }}</li>
+          </ul>
+        </div>
+
+        <div class="card insight-card" v-if="data.capital_flow_panel?.available">
+          <div class="card-title">资金面板</div>
+          <div class="profile-head">
+            <strong>{{ data.capital_flow_panel.state }}</strong>
+            <el-tag size="small" :type="data.capital_flow_panel.score >= 65 ? 'danger' : data.capital_flow_panel.score <= 40 ? 'success' : 'warning'" effect="plain">
+              {{ Math.round(data.capital_flow_panel.score || 0) }}
+            </el-tag>
+          </div>
+          <div class="metric-list">
+            <div v-for="m in data.capital_flow_panel.metrics" :key="m.name">
+              <span>{{ m.name }}</span>
+              <b>{{ m.value == null ? '-' : `${m.value}${m.unit || ''}` }}</b>
+            </div>
+          </div>
+          <ul class="compact-list">
+            <li v-for="item in data.capital_flow_panel.notes" :key="item">{{ item }}</li>
+          </ul>
+        </div>
+
+        <div class="card insight-card" v-if="data.red_flags?.length">
+          <div class="card-title">红旗扫描</div>
+          <div class="flag-list">
+            <div v-for="flag in data.red_flags" :key="flag.title" class="flag-row">
+              <el-tag size="small" :type="flagTagType(flag.level)" effect="dark">{{ flagLevel(flag.level) }}</el-tag>
+              <div>
+                <b>{{ flag.title }}</b>
+                <p>{{ flag.detail }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 跟踪观察 + 技术因子 -->
       <div class="two-col">
-        <!-- 操作建议 -->
         <div class="card">
-          <div class="card-title">操作建议</div>
+          <div class="card-title">跟踪观察</div>
           <div class="action-rows">
             <div class="action-row">
-              <span class="ak">交易信号</span>
+              <span class="ak">研究信号</span>
               <span class="av" :class="signalClass">{{ data.rating?.label || '-' }}</span>
             </div>
             <div class="action-row" v-if="data.rating?.entry_low">
-              <span class="ak">入场区间</span>
+              <span class="ak">价格观察区间</span>
               <span class="av">{{ fmt(data.rating.entry_low) }} – {{ fmt(data.rating.entry_high) }}</span>
             </div>
             <div class="action-row" v-if="data.rating?.stop_loss">
-              <span class="ak">止损参考</span>
+              <span class="ak">风险观察线</span>
               <span class="av loss">{{ fmt(data.rating.stop_loss) }}</span>
             </div>
             <div class="action-row" v-if="data.rating?.target">
-              <span class="ak">目标参考</span>
+              <span class="ak">弹性上沿</span>
               <span class="av gain">{{ fmt(data.rating.target) }}</span>
             </div>
-            <div class="action-row" v-if="data.rating?.position_note">
-              <span class="ak">仓位建议</span>
-              <span class="av">{{ data.rating.position_note }}</span>
+            <div class="action-row" v-if="data.rating?.tracking_note">
+              <span class="ak">跟踪备注</span>
+              <span class="av">{{ data.rating.tracking_note }}</span>
             </div>
           </div>
           <div class="core-summary" v-if="data.core_summary">{{ data.core_summary }}</div>
@@ -171,7 +238,19 @@
           <el-button type="primary" plain @click="startDeep">启动深度分析</el-button>
         </template>
         <div v-else-if="deepLoading" class="deep-spin">
-          <el-icon class="spin"><Loading /></el-icon> 多智能体分析中，请稍候…
+          <el-steps :active="deepStep" finish-status="success" align-center class="deep-steps">
+            <el-step title="获取数据" />
+            <el-step title="分析链条" />
+            <el-step title="独立复核" />
+          </el-steps>
+          <el-progress :percentage="deepProgress" :stroke-width="8" />
+          <div class="deep-status-grid">
+            <div v-for="item in deepStatusItems" :key="item.title" :class="{ active: item.active, done: item.done }">
+              <b>{{ item.title }}</b>
+              <span>{{ item.desc }}</span>
+            </div>
+          </div>
+          <span>多智能体分析中，已用 {{ deepElapsed }} 秒，可停留等待结果。</span>
         </div>
         <div v-else-if="deepResult" class="deep-result">
           <div v-if="deepAgentReview" class="agent-review">
@@ -240,20 +319,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onUnmounted } from 'vue'
-import * as echarts from 'echarts'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
+import { echarts, type ECharts } from '@/utils/echarts'
 import { ElMessage } from 'element-plus'
-import { Loading, Search } from '@element-plus/icons-vue'
+import { Search } from '@element-plus/icons-vue'
 import { ApiClient } from '@/api/request'
 
 const symbolInput = ref('')
 const loading = ref(false)
 const data = ref<any>(null)
 const klineEl = ref<HTMLDivElement>()
-let klineChart: echarts.ECharts | null = null
+let klineChart: ECharts | null = null
+const route = useRoute()
 
 const HISTORY_KEY = 'stock_analysis_history'
 const history = ref<string[]>(JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'))
+const starterSymbols = ['600519', '300570', '300502', '000001', '002594']
 
 function saveHistory(sym: string) {
   const h = history.value.filter((s) => s !== sym)
@@ -273,7 +355,10 @@ const deepStarted = ref(false)
 const deepLoading = ref(false)
 const deepResult = ref<any>(null)
 const deepError = ref('')
+const deepStep = ref(0)
+const deepElapsed = ref(0)
 let deepTimer: ReturnType<typeof setTimeout> | null = null
+let deepElapsedTimer: ReturnType<typeof setInterval> | null = null
 
 const PERF_LABELS: Record<string, string> = {
   d1: '1日', d5: '5日', m1: '1月', m3: '3月', ytd: '年初至今', y1: '1年',
@@ -285,7 +370,7 @@ const FACTOR_LABELS: Record<string, string> = {
 }
 
 const DEEP_TITLES: Record<string, string> = {
-  overall_conclusion: '综合结论', operation_advice: '操作建议',
+  overall_conclusion: '综合结论', operation_advice: '跟踪观察',
   technical_analysis: '技术面分析', industry_analysis: '行业分析',
   valuation_analysis: '估值分析', risk_assessment: '风险评估', tracking_plan: '跟踪计划',
 }
@@ -329,9 +414,33 @@ const deepSections = computed(() => {
 
 const deepAudit = computed(() => deepResult.value?.analysis_audit || null)
 const deepAgentReview = computed(() => deepResult.value?.agent_review || null)
+const deepProgress = computed(() => Math.min(92, deepStep.value * 28 + Math.floor(deepElapsed.value / 4)))
+const deepStatusItems = computed(() => [
+  {
+    title: '数据准备',
+    desc: '同步行情、财务、新闻和量化因子',
+    active: deepStep.value === 1,
+    done: deepStep.value > 1,
+  },
+  {
+    title: '研究生成',
+    desc: '组合行业、估值、风险和跟踪计划',
+    active: deepStep.value === 2,
+    done: deepStep.value > 2,
+  },
+  {
+    title: '独立复核',
+    desc: '检查证据链、风险缺口和结论一致性',
+    active: deepStep.value >= 3,
+    done: Boolean(deepResult.value),
+  },
+])
 
 const fmt = (v?: number | null, dp = 2) =>
   v == null ? '-' : v >= 1e8 ? `${(v / 1e8).toFixed(dp)}亿` : v.toFixed(dp)
+
+const fmtAmount = (v?: number | null) =>
+  v == null ? '-' : v >= 1e8 ? `${(v / 1e8).toFixed(2)}亿` : v >= 1e4 ? `${(v / 1e4).toFixed(1)}万` : v.toFixed(0)
 
 const fmtFin = (v?: number | null) => {
   if (v == null) return '-'
@@ -344,6 +453,8 @@ const signedPct = (v?: number | null) =>
   v == null ? '-' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
 
 const pctClass = (v?: number | null) => (v == null ? '' : v >= 0 ? 'up' : 'down')
+const flagTagType = (level?: string) => level === 'high' ? 'danger' : level === 'medium' ? 'warning' : 'info'
+const flagLevel = (level?: string) => level === 'high' ? '高' : level === 'medium' ? '中' : '低'
 
 const renderKline = () => {
   if (!klineEl.value || !data.value?.kline?.dates?.length) return
@@ -456,6 +567,14 @@ const startDeep = async () => {
   deepStarted.value = true
   deepLoading.value = true
   deepError.value = ''
+  deepStep.value = 1
+  deepElapsed.value = 0
+  if (deepElapsedTimer) clearInterval(deepElapsedTimer)
+  deepElapsedTimer = setInterval(() => {
+    deepElapsed.value += 1
+    if (deepElapsed.value > 12 && deepStep.value < 2) deepStep.value = 2
+    if (deepElapsed.value > 28 && deepStep.value < 3) deepStep.value = 3
+  }, 1000)
   const sym = symbolInput.value.trim()
   try {
     const res: any = await ApiClient.post('/api/analysis/single', {
@@ -463,8 +582,10 @@ const startDeep = async () => {
     })
     const taskId = res?.data?.task_id
     if (!taskId) throw new Error('未获取到任务ID')
+    deepStep.value = 2
     pollDeep(taskId)
   } catch (e: any) {
+    if (deepElapsedTimer) { clearInterval(deepElapsedTimer); deepElapsedTimer = null }
     deepLoading.value = false
     deepError.value = e?.message || '启动失败'
   }
@@ -478,9 +599,12 @@ const pollDeep = (taskId: string) => {
       if (status === 'completed') {
         const r: any = await ApiClient.get(`/api/analysis/tasks/${taskId}/result`)
         deepResult.value = r?.data || null
+        deepStep.value = 3
+        if (deepElapsedTimer) { clearInterval(deepElapsedTimer); deepElapsedTimer = null }
         deepLoading.value = false
       } else if (status === 'failed') {
         deepError.value = res?.data?.error || '深度分析失败'
+        if (deepElapsedTimer) { clearInterval(deepElapsedTimer); deepElapsedTimer = null }
         deepLoading.value = false
       } else {
         pollDeep(taskId)
@@ -491,8 +615,14 @@ const pollDeep = (taskId: string) => {
   }, 3000)
 }
 
+onMounted(() => {
+  const symbol = String(route.query.symbol || route.query.stock || '').trim()
+  if (symbol) analyze(symbol)
+})
+
 onUnmounted(() => {
   if (deepTimer) clearTimeout(deepTimer)
+  if (deepElapsedTimer) clearInterval(deepElapsedTimer)
   klineChart?.dispose()
 })
 </script>
@@ -508,6 +638,21 @@ onUnmounted(() => {
 .history-label { font-size: 12px; color: var(--el-text-color-secondary); white-space: nowrap; }
 .history-chip { cursor: pointer; }
 .history-chip:hover { border-color: var(--el-color-primary); color: var(--el-color-primary); }
+.starter-panel {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  padding: 18px 20px;
+
+  h2 { margin: 0 0 6px; font-size: 18px; }
+  p { margin: 0; color: var(--el-text-color-secondary); font-size: 13px; }
+}
+.starter-tags { display: flex; gap: 8px; flex-wrap: wrap; }
+.starter-tags :deep(.el-tag) { cursor: pointer; }
 
 /* Hero */
 .hero-card {
@@ -572,6 +717,44 @@ onUnmounted(() => {
 .cat .ai-col-head { color: #409eff; }
 .ai-col ul { margin: 0; padding-left: 16px; font-size: 13px; line-height: 1.8; color: var(--el-text-color-regular); }
 
+/* Insight cards */
+.insight-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.insight-card { min-height: 220px; }
+.profile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.profile-head strong { font-size: 17px; }
+.profile-horizon { color: var(--el-text-color-secondary); font-size: 13px; margin-bottom: 10px; }
+.mini-title { font-size: 12px; color: var(--el-text-color-secondary); margin: 10px 0 4px; }
+.compact-list { margin: 0; padding-left: 16px; line-height: 1.7; font-size: 13px; }
+.muted-list { color: var(--el-text-color-secondary); }
+.metric-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+.metric-list div { background: var(--el-fill-color-lighter); border-radius: 6px; padding: 8px 10px; }
+.metric-list span { display: block; color: var(--el-text-color-secondary); font-size: 11px; margin-bottom: 2px; }
+.metric-list b { font-size: 14px; }
+.flag-list { display: flex; flex-direction: column; gap: 10px; }
+.flag-row {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 8px;
+  align-items: flex-start;
+}
+.flag-row b { font-size: 13px; }
+.flag-row p { margin: 3px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
+
 /* Two col */
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 
@@ -631,9 +814,38 @@ onUnmounted(() => {
 
 /* Deep */
 .deep-hint { font-size: 13px; color: var(--el-text-color-secondary); margin-bottom: 12px; }
-.deep-spin { display: flex; align-items: center; gap: 8px; color: var(--el-text-color-secondary); padding: 12px 0; }
-.spin { animation: spin 1s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
+.deep-spin { display: flex; flex-direction: column; gap: 12px; color: var(--el-text-color-secondary); padding: 12px 0; }
+.deep-steps { width: 100%; }
+.deep-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.deep-status-grid div {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--el-fill-color-extra-light);
+}
+.deep-status-grid div.active {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
+}
+.deep-status-grid div.done {
+  border-color: var(--el-color-success-light-5);
+  background: var(--el-color-success-light-9);
+}
+.deep-status-grid b {
+  display: block;
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+  margin-bottom: 3px;
+}
+.deep-status-grid span {
+  display: block;
+  font-size: 12px;
+  line-height: 1.45;
+}
 .deep-section { margin-bottom: 16px; &:last-child { margin-bottom: 0; } }
 .ds-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
 .ds-body { font-size: 13px; line-height: 1.8; white-space: pre-wrap; color: var(--el-text-color-regular); }
@@ -704,4 +916,36 @@ onUnmounted(() => {
 /* Colors */
 .up { color: #ef232a; }
 .down { color: #14b143; }
+
+@media (max-width: 900px) {
+  .search-bar { align-items: stretch; flex-direction: column; }
+  .starter-panel { align-items: flex-start; flex-direction: column; }
+  .ai-card, .two-col, .insight-grid { grid-template-columns: 1fr; }
+  .ai-col + .ai-col { border-left: none; border-top: 1px solid var(--el-border-color-lighter); }
+  .perf-grid { grid-template-columns: repeat(3, 1fr); }
+  .audit-cols { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .stock-analysis { gap: 12px; }
+  .search-bar :deep(.el-input) { max-width: none !important; }
+  .hero-prices,
+  .hero-meta {
+    flex-wrap: wrap;
+  }
+  .price { font-size: 24px; }
+  .kline-chart { height: 320px; }
+  .metric-list,
+  .perf-grid,
+  .deep-status-grid {
+    grid-template-columns: 1fr;
+  }
+  .news-item {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .nt { white-space: normal; }
+  .nd { margin-left: 0; }
+}
 </style>

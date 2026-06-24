@@ -91,6 +91,7 @@ def chat(
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            timeout=30,
         )
         return (resp.choices[0].message.content or "").strip()
     except Exception:

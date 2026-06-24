@@ -86,7 +86,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Loading } from '@element-plus/icons-vue'
-import * as echarts from 'echarts'
+import { echarts, type ECharts } from '@/utils/echarts'
 import { quantApi, type MLFactorResult } from '@/api/quant'
 
 const loading = ref(false)
@@ -97,7 +97,7 @@ const form = reactive({ universe_limit: 500, horizon: 5, k: 50, mode: 'rolling' 
 const busy = computed(() => loading.value || computing.value)
 
 const chartEl = ref<HTMLDivElement>()
-let chart: echarts.ECharts | null = null
+let chart: ECharts | null = null
 let pollTimer: number | undefined
 let elapsedTimer: number | undefined
 

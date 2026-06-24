@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -143,6 +144,25 @@ async def billing_me(user: dict = Depends(get_current_lite_user)):
             "used_today": used,
             "remaining_today": max(0, plan["daily_llm"] - used),
             "features": sorted(plan["features"]),
+        },
+        "message": "ok",
+    }
+
+
+@router.get("/upgrade-info")
+async def upgrade_info():
+    """Manual membership opening info. Values come from env, never hard-coded secrets."""
+    wechat_id = os.getenv("LYNX_MEMBERSHIP_WECHAT", "").strip()
+    qr_url = os.getenv("LYNX_MEMBERSHIP_QR_URL", "").strip()
+    price_text = os.getenv("LYNX_MEMBERSHIP_PRICE_TEXT", "内测会员：人工确认后开通").strip()
+    return {
+        "success": True,
+        "data": {
+            "price_text": price_text,
+            "wechat_id": wechat_id,
+            "qr_url": qr_url,
+            "configured": bool(wechat_id or qr_url),
+            "instructions": "添加运营微信并备注注册用户名，付款确认后由管理员在后台开通会员。",
         },
         "message": "ok",
     }

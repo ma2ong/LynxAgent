@@ -24,11 +24,11 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import * as echarts from 'echarts'
+import { echarts, type ECharts } from '@/utils/echarts'
 
 const props = defineProps<{ payload: any }>()
 const el = ref<HTMLDivElement>()
-let chart: echarts.ECharts | null = null
+let chart: ECharts | null = null
 const hasData = computed(() => !!props.payload?.candles?.length)
 const patterns = computed(() => props.payload?.patterns || [])
 

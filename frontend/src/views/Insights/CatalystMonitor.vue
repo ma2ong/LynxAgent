@@ -12,9 +12,21 @@
       <el-card v-for="(ev, i) in events" :key="i" shadow="hover" class="card">
         <div class="theme">
           <el-tag size="small">{{ ev.theme }}</el-tag>
-          <el-tag v-if="ev.significance != null" size="small" type="danger" effect="plain">
-            重要性 {{ ev.significance }}/10
-          </el-tag>
+          <template v-if="ev.significance != null">
+            <el-tooltip v-if="hasScores(ev)" placement="top" effect="light" :show-after="80">
+              <template #content>
+                <div class="dim-hover">
+                  <div v-for="d in SCORE_DIMS" :key="d.key" class="dim-row">
+                    <span class="dn">{{ d.label }}</span>
+                    <b class="ds">{{ ev.scores?.[d.key] ?? '-' }}/5</b>
+                    <span class="dh">{{ d.hint }}</span>
+                  </div>
+                </div>
+              </template>
+              <el-tag size="small" type="danger" effect="plain" class="sig-tag">重要性 {{ ev.significance }}/10 ⓘ</el-tag>
+            </el-tooltip>
+            <el-tag v-else size="small" type="danger" effect="plain">重要性 {{ ev.significance }}/10</el-tag>
+          </template>
           <el-tag v-if="ev.evidence_tier" size="small" type="info" effect="plain">
             {{ ev.evidence_tier }}
           </el-tag>
@@ -152,6 +164,19 @@ import { Loading } from '@element-plus/icons-vue'
 import { quantApi, type SerenityEvent } from '@/api/quant'
 
 const events = ref<SerenityEvent[]>([])
+
+// serenity 七维评分（悬停解释）
+const SCORE_DIMS = [
+  { key: 'demand_certainty', label: '需求确定性', hint: '真实可观察=5，纯预期=1' },
+  { key: 'transmission_clarity', label: '传导清晰度', hint: '变化→公司业绩链条越清晰=5' },
+  { key: 'business_purity', label: '业务纯度', hint: '主业纯正暴露=5，只占零头=1' },
+  { key: 'cap_elasticity', label: '市值弹性', hint: '小市值遇大需求=5，大白马稀释=1' },
+  { key: 'market_neglect', label: '市场忽视度', hint: '尚未炒作=5，已充分炒作=1' },
+  { key: 'verification_speed', label: '验证速度', hint: '1-2季度可证实=5，要等数年=1' },
+  { key: 'downside_safety', label: '下行安全度', hint: '风险小=5，高商誉/质押/透支=1' },
+] as const
+const hasScores = (ev: SerenityEvent) =>
+  !!ev.scores && SCORE_DIMS.some((d) => ev.scores![d.key] != null)
 const loading = ref(false)
 const computing = ref(false)
 const elapsed = ref(0)
@@ -258,6 +283,11 @@ onUnmounted(stop)
 .risk-alert { margin-top: 8px; }
 .review-section { background: var(--el-bg-color); }
 .review-block { margin-top: 10px; }
+.sig-tag { cursor: help; }
+.dim-hover { display: flex; flex-direction: column; gap: 4px; max-width: 300px; }
+.dim-row { display: grid; grid-template-columns: 74px 34px 1fr; gap: 6px; align-items: baseline; font-size: 12px; }
+.dim-row .ds { font-weight: 700; text-align: right; }
+.dim-row .dh { color: var(--el-text-color-secondary); }
 @media (max-width: 900px) {
   .split-section { grid-template-columns: 1fr; }
 }

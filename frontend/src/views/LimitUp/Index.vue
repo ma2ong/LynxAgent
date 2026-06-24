@@ -58,56 +58,29 @@
             <b>{{ data.cause_total[cause] || 0 }}</b>
           </button>
         </div>
-        <div class="matrix-wrap">
-          <table class="matrix-table">
-            <thead>
-              <tr>
-                <th class="col-level">连板</th>
-                <th v-for="cause in data.causes" :key="cause" class="col-cause">{{ cause }}</th>
-                <th class="col-total">合计</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="level in data.level_order" :key="level"
-                  :class="`row-${levelClass(level)}`">
-                <td class="cell-level">
-                  <div class="level-badge" :class="`badge-${levelClass(level)}`">
-                    {{ level }}
-                    <small v-if="data.level_counts[level]">{{ data.level_counts[level] }}</small>
-                  </div>
-                </td>
-                <td v-for="cause in data.causes" :key="cause" class="cell-stocks">
-                  <div v-for="stock in (data.matrix[level]?.[cause] || [])" :key="stock.symbol"
-                    class="stock-chip"
-                    :class="{
-                      'chip-one-price': stock.is_one_price,
-                      'chip-big': stock.is_big,
-                      'chip-20pct': stock.is_20pct,
-                    }"
-                    @click="goAnalysis(stock.symbol)"
-                    :title="`${stock.symbol}｜${stock.reason || ''}`"
-                  >
-                    {{ stock.name }}<sup v-if="stock.is_20pct">★</sup>
-                  </div>
-                </td>
-                <td class="cell-row-total">{{ data.level_counts[level] }}</td>
-              </tr>
-            </tbody>
-            <tfoot>
-              <tr class="row-total">
-                <td class="cell-level"><b>涨停数</b></td>
-                <td v-for="cause in data.causes" :key="cause" class="cell-total-num">
-                  <b>{{ data.cause_total[cause] || 0 }}</b>
-                </td>
-                <td class="cell-row-total"><b>{{ data.total_limit_up }}</b></td>
-              </tr>
-            </tfoot>
-          </table>
+        <div class="lu-ladder">
+          <div v-for="level in laddersWithStocks" :key="level" class="lu-level" :class="`lvl-${levelClass(level)}`">
+            <div class="lu-level-head">
+              <span class="lu-badge">{{ level }}</span>
+              <span class="lu-count">{{ data.level_counts[level] }} 只</span>
+            </div>
+            <div class="lu-concepts">
+              <div v-for="cause in conceptsForLevel(level)" :key="cause" class="lu-concept">
+                <div class="lu-concept-label">{{ cause }}<i>{{ data.matrix[level][cause].length }}</i></div>
+                <div class="lu-names">
+                  <span v-for="s in data.matrix[level][cause]" :key="s.symbol"
+                    class="lu-name" :class="{ one: s.is_one_price, p20: s.is_20pct, big: s.is_big }"
+                    :title="`${s.symbol}｜${s.reason || ''}`" @click="goAnalysis(s.symbol)">{{ s.name }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="legend">
-          <span class="leg-item"><b>粗体</b> 一字板（开盘即封，未被打开）</span>
-          <span class="leg-item leg-big">橙色</span> 成交额 &gt; 5亿
-          <span class="leg-item leg-20">★</span> 20% 涨幅（创业板/科创板）
+          <span class="leg-item"><b style="color:#e5384d">红色</b> 一字板</span>
+          <span class="leg-item"><b style="color:#2f6bff">蓝色</b> 20% 涨幅（创业板/科创板）</span>
+          <span class="leg-item"><b>加粗</b> 成交额 &gt; 5 亿（权重票）</span>
+          <span class="leg-item">点名称进个股深研</span>
         </div>
       </section>
 
@@ -178,6 +151,12 @@ const filteredStocks = computed(() => {
     (s: any) => s.symbol.includes(q) || (s.name || '').toLowerCase().includes(q)
   )
 })
+
+const laddersWithStocks = computed(() =>
+  (data.value?.level_order || []).filter((l: string) => (data.value?.level_counts?.[l] || 0) > 0)
+)
+const conceptsForLevel = (level: string) =>
+  (data.value?.causes || []).filter((c: string) => (data.value?.matrix?.[level]?.[c] || []).length)
 
 const load = async () => {
   loading.value = true
@@ -348,6 +327,29 @@ sup { font-size: 9px; color: #9254de; }
 .leg-item { display: inline-flex; align-items: center; gap: 3px; }
 .leg-big { color: #9a5a00; }
 .leg-20 { color: #9254de; }
+
+/* 连板梯队 — 概念分组流式（替代刚性矩阵，消除留白）*/
+.lu-ladder { display: flex; flex-direction: column; gap: 12px; margin: 4px 0 10px; }
+.lu-level { border: 1px solid var(--el-border-color-lighter); border-radius: 10px; overflow: hidden; }
+.lu-level-head { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.lu-badge { font-size: 12.5px; font-weight: 700; color: #fff; padding: 2px 11px; border-radius: 6px; }
+.lu-count { font-size: 12px; font-weight: 600; color: var(--el-text-color-secondary); }
+.lvl-5p .lu-level-head { background: #fff0f0; } .lvl-5p .lu-badge { background: #c0392b; }
+.lvl-4 .lu-level-head { background: #fff5ec; } .lvl-4 .lu-badge { background: #d35400; }
+.lvl-3 .lu-level-head { background: #fffbe6; } .lvl-3 .lu-badge { background: #c89400; }
+.lvl-2 .lu-level-head { background: #f0fff4; } .lvl-2 .lu-badge { background: #1f9d57; }
+.lvl-1 .lu-level-head { background: #f5f8ff; } .lvl-1 .lu-badge { background: #2f6bff; }
+.lu-concepts { columns: 210px; column-gap: 2px; padding: 4px; }
+.lu-concept { break-inside: avoid; padding: 7px 10px; border-radius: 8px; }
+.lu-concept:hover { background: var(--el-fill-color-extra-light); }
+.lu-concept-label { font-size: 11.5px; font-weight: 700; color: var(--el-text-color-secondary); margin-bottom: 5px; }
+.lu-concept-label i { font-style: normal; font-size: 10.5px; font-weight: 600; color: var(--el-text-color-placeholder); margin-left: 5px; }
+.lu-names { display: flex; flex-wrap: wrap; gap: 2px 12px; line-height: 1.55; }
+.lu-name { font-size: 12.5px; color: var(--el-text-color-primary); cursor: pointer; white-space: nowrap; }
+.lu-name:hover { color: #2f6bff; text-decoration: underline; }
+.lu-name.one { color: #e5384d; font-weight: 700; }
+.lu-name.p20 { color: #2f6bff; }
+.lu-name.big { font-weight: 700; }
 
 /* Detail */
 .detail-card { background: var(--el-bg-color); border: 1px solid var(--el-border-color-light); border-radius: 8px; padding: 14px; overflow-x: auto; }

@@ -1,7 +1,7 @@
 <template>
   <div class="serenity">
     <div class="head">
-      <h2>催化剂监控 <el-tag size="small" type="warning">事件驱动 · serenity</el-tag></h2>
+      <h2>催化剂监控 <el-tag size="small" type="warning">事件引擎</el-tag></h2>
       <p class="sub">从真实新闻中筛出"可观察需求变化"，映射到可投资 A 股受益标的。研究假设，非投资建议。</p>
       <el-button size="small" :loading="busy" @click="load(true)">刷新</el-button>
     </div>
@@ -36,7 +36,7 @@
       <el-empty v-if="!events.length && !busy" description="暂无事件，点刷新扫描" />
     </div>
 
-    <el-drawer v-model="drawer" :title="`${deepTheme} · serenity 深度报告`" size="42%">
+    <el-drawer v-model="drawer" :title="`${deepTheme} · 事件引擎深度报告`" size="42%">
       <div v-if="deepLoading" class="deep-loading" v-loading="true" />
       <div v-else-if="deepData" class="deep-report">
         <el-alert

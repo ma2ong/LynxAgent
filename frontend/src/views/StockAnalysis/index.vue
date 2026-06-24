@@ -144,6 +144,40 @@
         </div>
       </div>
 
+      <!-- AI 评委打分（按需加载，消耗 AI 额度）-->
+      <div class="card" v-if="data.header?.symbol">
+        <div class="card-title">AI 评委打分<small class="src">（5 位不同风格投资人独立打分）</small></div>
+        <div v-if="panelLoading" class="panel-empty">评委评分中…</div>
+        <template v-else-if="panel && !panel.empty">
+          <div class="panel-head">
+            <div class="consensus" :style="{ color: scoreColor(panel.consensus_score) }">
+              <span class="label">共识分</span><strong>{{ panel.consensus_score }}</strong><small>/ 100</small>
+            </div>
+            <div class="panel-tags">
+              <el-tag size="small" type="danger" effect="plain">看多 {{ panel.bull_count }}</el-tag>
+              <el-tag size="small" type="success" effect="plain">看空 {{ panel.bear_count }}</el-tag>
+              <el-tag size="small" type="info" effect="plain">分歧 {{ panel.divergence }}</el-tag>
+            </div>
+            <p class="panel-summary">{{ panel.summary }}</p>
+          </div>
+          <div class="verdict-grid">
+            <div v-for="(v, i) in panel.verdicts" :key="i" class="verdict-card">
+              <div class="vc-head">
+                <span class="persona">{{ v.persona }}</span>
+                <span class="stance" :class="stanceClass(v.stance)">{{ v.stance }}</span>
+              </div>
+              <div class="vc-score" :style="{ color: scoreColor(v.score) }">{{ v.score }}</div>
+              <p class="vc-reason">{{ v.reason }}</p>
+            </div>
+          </div>
+        </template>
+        <div v-else-if="panel && panel.empty" class="panel-empty">{{ panel.message || '暂无评委打分' }}</div>
+        <div v-else class="panel-cta">
+          <el-button type="primary" plain :loading="panelLoading" @click="loadPanel">生成 AI 评委打分</el-button>
+          <span class="cta-hint">5 位风格投资人独立打分 · 消耗 1 次 AI 额度</span>
+        </div>
+      </div>
+
       <!-- 跟踪观察 + 技术因子 -->
       <div class="two-col">
         <div class="card">
@@ -325,10 +359,27 @@ import { echarts, type ECharts } from '@/utils/echarts'
 import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { ApiClient } from '@/api/request'
+import { quantApi } from '@/api/quant'
 
 const symbolInput = ref('')
 const loading = ref(false)
 const data = ref<any>(null)
+
+// AI 评委打分（按需，走 LLM 计配额）
+const panel = ref<any>(null)
+const panelLoading = ref(false)
+const scoreColor = (s: number) => (s >= 62 ? '#ef232a' : s >= 45 ? '#e6a23c' : '#14b143')
+const stanceClass = (s: string) => (s === '看多' ? 'st-bull' : s === '看空' ? 'st-bear' : 'st-neutral')
+const loadPanel = () => {
+  const code = data.value?.header?.symbol
+  if (!code) return
+  panelLoading.value = true
+  quantApi.investorPanel(code)
+    .then((res) => { panel.value = res })
+    .catch((e: any) => { panel.value = { empty: true, message: e?.message || '评委打分生成失败' } })
+    .finally(() => { panelLoading.value = false })
+}
+
 const klineEl = ref<HTMLDivElement>()
 let klineChart: ECharts | null = null
 const route = useRoute()
@@ -543,6 +594,7 @@ const analyze = async (sym?: string) => {
   symbolInput.value = s
   loading.value = true
   data.value = null
+  panel.value = null
   deepStarted.value = false
   deepResult.value = null
   deepError.value = ''
@@ -916,6 +968,30 @@ onUnmounted(() => {
 /* Colors */
 .up { color: #ef232a; }
 .down { color: #14b143; }
+
+/* AI 评委打分 */
+.card-title .src { font-weight: 400; font-size: 11px; color: var(--el-text-color-secondary); }
+.panel-empty { color: var(--el-text-color-secondary); padding: 24px 0; text-align: center; }
+.panel-cta { display: flex; align-items: center; gap: 12px; padding: 10px 0; flex-wrap: wrap; }
+.cta-hint { font-size: 12px; color: var(--el-text-color-secondary); }
+.panel-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.consensus { display: flex; align-items: baseline; gap: 4px;
+  .label { font-size: 12px; color: var(--el-text-color-secondary); } strong { font-size: 32px; font-weight: 800; }
+  small { font-size: 12px; color: var(--el-text-color-secondary); } }
+.panel-tags { display: flex; gap: 6px; }
+.panel-summary { margin: 0; flex: 1 1 240px; font-size: 13px; color: var(--el-text-color-secondary); }
+.verdict-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.verdict-card { border: 1px solid var(--el-border-color-light); border-radius: 8px; padding: 10px; text-align: center;
+  background: var(--el-fill-color-light); }
+.vc-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;
+  .persona { font-weight: 700; font-size: 13px; } }
+.stance { font-size: 11px; padding: 1px 6px; border-radius: 4px; }
+.st-bull { color: #ef232a; background: #fdeaea; }
+.st-bear { color: #14b143; background: #eef9f0; }
+.st-neutral { color: #e6a23c; background: #fdf6ec; }
+.vc-score { font-size: 28px; font-weight: 800; line-height: 1.2; }
+.vc-reason { margin: 4px 0 0; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.5; }
+@media (max-width: 900px) { .verdict-grid { grid-template-columns: repeat(2, 1fr); } }
 
 @media (max-width: 900px) {
   .search-bar { align-items: stretch; flex-direction: column; }

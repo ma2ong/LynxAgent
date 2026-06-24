@@ -86,11 +86,20 @@ def get_industry(symbol: str) -> str:
     return industry
 
 
-def enrich_industries(items: List[Dict[str, Any]], timeout: float = 12.0) -> List[Dict[str, Any]]:
-    """给结果项批量补全 industry/board（仅补未填的），并行 + 整体超时，绝不拖死端点。"""
+# 非真实行业的占位值：这些都视为「未解析」，需要用 cninfo 重新补全。
+_PLACEHOLDERS = {"", "-", "A股", "行业待识别", "待识别", "未识别", "其他"}
+
+
+def _needs_industry(it: Dict[str, Any]) -> bool:
+    val = str(it.get("industry") or it.get("board") or "").strip()
+    return val in _PLACEHOLDERS
+
+
+def enrich_industries(items: List[Dict[str, Any]], timeout: float = 20.0) -> List[Dict[str, Any]]:
+    """给结果项批量补全 industry/board（未填或占位值的），并行 + 整体超时，绝不拖死端点。"""
     if not items:
         return items
-    targets = [it for it in items if isinstance(it, dict) and not (it.get("industry") or it.get("board"))]
+    targets = [it for it in items if isinstance(it, dict) and _needs_industry(it)]
     if not targets:
         return items
     syms = {str(it.get("symbol") or it.get("code") or "").strip().zfill(6) for it in targets}

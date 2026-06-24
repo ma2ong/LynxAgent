@@ -1896,8 +1896,9 @@ async def _resolve_real_industry(symbol: str, name: str, event_labels: set[str])
     return industry
 
 
-async def _enrich_smart_pool_industries(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    # 行业归类是装饰性补充，整体 6s 封顶：逐股查询慢/限流时直接用原值，绝不拖垮端点。
+async def _enrich_smart_pool_industries(items: list[dict[str, Any]], timeout: float = 20.0) -> list[dict[str, Any]]:
+    # 每只 _resolve_real_industry 已带 5s 超时、并行 gather；外层只设宽松总超时兜底，
+    # 不要太短（之前 6s 会把 ~20 只冷缓存的行业增强截断，导致行业回退成「A股」）。
     try:
         industries = await asyncio.wait_for(
             asyncio.gather(
@@ -1907,7 +1908,7 @@ async def _enrich_smart_pool_industries(items: list[dict[str, Any]]) -> list[dic
                 ],
                 return_exceptions=True,
             ),
-            timeout=6.0,
+            timeout=timeout,
         )
     except (asyncio.TimeoutError, Exception):
         return items
@@ -2269,6 +2270,12 @@ async def _compute_lite_smart_pool(
 
         items.sort(key=lambda item: float(item.get("smart_score") or 0), reverse=True)
         items = await _enrich_smart_pool_industries(items[:safe_limit])
+        # 用可靠的 cninfo 行业模块再兜底一遍：把仍为「A股/行业待识别」等占位值的补成真实行业。
+        try:
+            from quantcore.quant import industry as _industry
+            await asyncio.to_thread(_industry.enrich_industries, items)
+        except Exception:
+            pass
         if ai_factor_pool.get("status") != "ready":
             response = {
                 "strategy": "quant_center_smart_pool",
@@ -2750,7 +2757,8 @@ async def _enrich_catalysts_realtime(response: dict[str, Any]) -> dict[str, Any]
         if quote and quote.get("change_percent") is not None:
             item["change_percent"] = quote["change_percent"]
     if items:
-        items = await _enrich_smart_pool_industries(items)
+        # 催化剂是较快端点，行业增强 6s 封顶即可（一键推荐异步任务用默认 20s）。
+        items = await _enrich_smart_pool_industries(items, timeout=6.0)
     data[item_key] = items
     enriched = dict(response)
     enriched["data"] = data

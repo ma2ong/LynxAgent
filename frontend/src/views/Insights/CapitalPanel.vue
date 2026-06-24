@@ -155,4 +155,10 @@ onMounted(() => { loadFlow(); loadLhb(); loadCalendar() })
 .capital-panel { padding: 16px; }
 .hint { color: var(--el-text-color-secondary); font-size: 12px; margin-top: 6px; }
 h4 { margin: 14px 0 8px; }
+@media (max-width: 760px) {
+  .capital-panel { padding: 12px 6px; }
+  .capital-panel :deep(.el-tabs__item) { padding: 0 12px; font-size: 14px; }
+  .capital-panel :deep(.el-table) { font-size: 12px; }
+  .capital-panel :deep(.el-drawer) { width: 90% !important; }
+}
 </style>

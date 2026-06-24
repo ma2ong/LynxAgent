@@ -12,6 +12,20 @@ from quantcore.quant.chart_service import build_chart_payload
 from quantcore.quant.data_sources import data_source_status
 from quantcore.quant.report_service import build_stock_report
 from quantcore.quant.pipeline import run_pipeline, list_runs, get_run, run_t5_review, quick_critic_batch
+from quantcore.quant.capital_flow import (
+    industry_fund_flow_rank,
+    concept_fund_flow_rank,
+    individual_fund_flow_rank,
+)
+from quantcore.quant.dragon_tiger import dragon_tiger_list, dragon_tiger_seats
+from quantcore.quant.calendar_events import financial_calendar
+from quantcore.quant.investor_panel import investor_panel
+from quantcore.quant.red_flags import red_flag_scan
+from quantcore.quant.weighted_sentiment import (
+    stock_sentiment,
+    market_weighted_sentiment,
+    sector_weighted_sentiment_rank,
+)
 
 
 router = APIRouter(prefix="/api/quant", tags=["quant"])
@@ -317,3 +331,62 @@ async def pipeline_quick_critic(req: QuickCriticRequest,
         return await asyncio.to_thread(quick_critic_batch, req.symbols, req.names)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---- 资金面：资金流向 / 龙虎榜 / 财经日历（纯本地数据，不计费）----
+@router.get("/capital/industry-flow")
+async def capital_industry_flow():
+    return await asyncio.to_thread(industry_fund_flow_rank)
+
+
+@router.get("/capital/concept-flow")
+async def capital_concept_flow():
+    return await asyncio.to_thread(concept_fund_flow_rank)
+
+
+@router.get("/capital/stock-flow")
+async def capital_stock_flow(limit: int = 50):
+    return await asyncio.to_thread(individual_fund_flow_rank, limit)
+
+
+@router.get("/dragon-tiger")
+async def dragon_tiger(date: str = ""):
+    return await asyncio.to_thread(dragon_tiger_list, date)
+
+
+@router.get("/dragon-tiger/seats")
+async def dragon_tiger_seat_detail(symbol: str, date: str = ""):
+    return await asyncio.to_thread(dragon_tiger_seats, symbol, date)
+
+
+@router.get("/calendar")
+async def capital_calendar(types: str = "earnings,unlock,ipo", days: int = 14):
+    type_list = [t.strip() for t in types.split(",") if t.strip()]
+    return await asyncio.to_thread(financial_calendar, type_list, days)
+
+
+# ---- 个股深研增强：评委打分 / 红旗快查（走 LLM，计入配额）----
+@router.get("/stock/investor-panel")
+async def quant_investor_panel(symbol: str, user: dict = require_quota("investor_panel")):
+    return await asyncio.to_thread(investor_panel, symbol)
+
+
+@router.get("/stock/red-flags")
+async def quant_red_flags(symbol: str, user: dict = require_quota("red_flags")):
+    return await asyncio.to_thread(red_flag_scan, symbol)
+
+
+# ---- 加权情绪：个股 / 大盘 / 板块（纯本地，无 LLM，不计费）----
+@router.get("/stock/sentiment")
+async def quant_stock_sentiment(symbol: str):
+    return await asyncio.to_thread(stock_sentiment, symbol)
+
+
+@router.get("/market/weighted-sentiment")
+async def quant_market_weighted_sentiment():
+    return await asyncio.to_thread(market_weighted_sentiment)
+
+
+@router.get("/sector/sentiment-rank")
+async def quant_sector_sentiment_rank(limit: int = 20):
+    return await asyncio.to_thread(sector_weighted_sentiment_rank, limit)

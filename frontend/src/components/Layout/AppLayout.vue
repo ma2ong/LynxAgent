@@ -22,65 +22,20 @@
         :default-active="route.path"
         router
         class="menu"
-        :default-openeds="['market', 'pick', 'stock', 'mine']"
         @select="mobileMenuOpen = false"
       >
-        <el-menu-item index="/today">
-          <el-icon><Calendar /></el-icon><span>今日</span>
-        </el-menu-item>
-        <el-sub-menu index="market">
-          <template #title>
-            <el-icon><Odometer /></el-icon><span>市场</span>
-          </template>
-        <el-menu-item index="/market/sentiment">
-            <span>市场雷达</span>
-        </el-menu-item>
-        <el-menu-item index="/limit-up">
-            <span>涨停热点</span>
-        </el-menu-item>
-        <el-menu-item index="/insights/hot-news">
-            <span>A股热点</span>
-        </el-menu-item>
-        <el-menu-item index="/insights/catalyst">
-            <span>催化剂监控</span>
-          </el-menu-item>
-        <el-menu-item index="/insights/capital">
-            <span>资金面板</span>
-          </el-menu-item>
-        </el-sub-menu>
-        <el-sub-menu index="pick">
-          <template #title>
-            <el-icon><TrendCharts /></el-icon><span>选股</span>
-          </template>
-          <el-menu-item index="/quant">
-            <span>智能选股</span>
-          </el-menu-item>
-        </el-sub-menu>
-        <el-sub-menu index="stock">
-          <template #title>
-            <el-icon><DocumentChecked /></el-icon><span>个股</span>
-          </template>
-          <el-menu-item index="/stock-analysis">
-            <span>个股深研</span>
-        </el-menu-item>
-        </el-sub-menu>
-        <el-sub-menu index="mine">
-          <template #title>
-            <el-icon><Star /></el-icon><span>我的</span>
-          </template>
-          <el-menu-item index="/favorites">
-            <span>我的自选股</span>
-          </el-menu-item>
-          <el-menu-item index="/account/membership">
-            <span>会员与用量</span>
-          </el-menu-item>
-          <el-menu-item v-if="currentUser?.is_admin" index="/admin/users">
-            <span>用户管理</span>
-          </el-menu-item>
-        </el-sub-menu>
-        <el-menu-item index="/data-center">
-          <el-icon><Coin /></el-icon><span>数据中心</span>
-        </el-menu-item>
+        <el-menu-item index="/today"><el-icon><Calendar /></el-icon><span>今日</span></el-menu-item>
+        <el-menu-item index="/market/sentiment"><el-icon><Odometer /></el-icon><span>市场雷达</span></el-menu-item>
+        <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
+        <el-menu-item index="/insights/hot-news"><el-icon><ChatDotRound /></el-icon><span>A股热点</span></el-menu-item>
+        <el-menu-item index="/insights/catalyst"><el-icon><Bell /></el-icon><span>催化剂监控</span></el-menu-item>
+        <el-menu-item index="/insights/capital"><el-icon><Coin /></el-icon><span>资金面板</span></el-menu-item>
+        <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
+        <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
+        <el-menu-item index="/favorites"><el-icon><Star /></el-icon><span>我的自选股</span></el-menu-item>
+        <el-menu-item index="/account/membership"><el-icon><Medal /></el-icon><span>会员与用量</span></el-menu-item>
+        <el-menu-item v-if="currentUser?.is_admin" index="/admin/users"><el-icon><Setting /></el-icon><span>用户管理</span></el-menu-item>
+        <el-menu-item index="/data-center"><el-icon><DataLine /></el-icon><span>数据中心</span></el-menu-item>
       </el-menu>
       <div class="sidebar-foot">
         <div v-if="billingInfo" class="quota-chip" @click="$router.push('/account/membership')">
@@ -103,6 +58,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, TrendCharts, Star, SwitchButton,
   DocumentChecked, Coin, Calendar, Menu,
+  ChatDotRound, Bell, MagicStick, Medal, Setting, DataLine,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'

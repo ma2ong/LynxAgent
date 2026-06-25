@@ -13,19 +13,42 @@
       <el-button type="primary" size="large" :loading="loading" @click="() => analyze()">
         <el-icon><Search /></el-icon> 分析
       </el-button>
+
+      <!-- 常驻最近搜索：出结果后也能随时调出 -->
+      <el-popover v-if="history.length" placement="bottom-end" :width="300" trigger="click" popper-class="recent-popover">
+        <template #reference>
+          <el-button size="large" plain class="recent-trigger">
+            <el-icon><Clock /></el-icon> 最近搜索
+            <span class="recent-count">{{ history.length }}</span>
+          </el-button>
+        </template>
+        <div class="recent-pop">
+          <div class="recent-pop-head">
+            <span>最近搜索</span>
+            <el-button link size="small" @click="clearHistory">清空</el-button>
+          </div>
+          <div class="recent-pop-list">
+            <div v-for="item in history" :key="item.code" class="recent-pop-item" @click="analyze(item.code)">
+              <span class="rp-name">{{ item.name || '未知' }}</span>
+              <span class="rp-code">{{ item.code }}</span>
+              <el-icon class="rp-del" @click.stop="(e: Event) => removeHistory(item.code, e)"><Close /></el-icon>
+            </div>
+          </div>
+        </div>
+      </el-popover>
     </div>
 
-    <!-- 搜索历史 -->
+    <!-- 搜索历史（空态内联展示）-->
     <div v-if="!loading && !data && history.length" class="history-bar">
       <span class="history-label">最近搜索</span>
       <el-tag
-        v-for="sym in history" :key="sym"
+        v-for="item in history" :key="item.code"
         class="history-chip"
         closable
         size="small"
-        @click="analyze(sym)"
-        @close="(e: Event) => removeHistory(sym, e)"
-      >{{ sym }}</el-tag>
+        @click="analyze(item.code)"
+        @close="(e: Event) => removeHistory(item.code, e)"
+      >{{ item.name ? item.name + ' ' : '' }}{{ item.code }}</el-tag>
     </div>
 
     <div v-if="!loading && !data && !history.length" class="starter-panel">
@@ -357,7 +380,7 @@ import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { echarts, type ECharts } from '@/utils/echarts'
 import { ElMessage } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
+import { Search, Clock, Close } from '@element-plus/icons-vue'
 import { ApiClient } from '@/api/request'
 import { quantApi } from '@/api/quant'
 
@@ -385,21 +408,38 @@ let klineChart: ECharts | null = null
 const route = useRoute()
 
 const HISTORY_KEY = 'stock_analysis_history'
-const history = ref<string[]>(JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'))
+type HistItem = { code: string; name: string }
+function loadHistory(): HistItem[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]')
+    return (raw as any[])
+      .map((it) => (typeof it === 'string' ? { code: it, name: '' } : { code: String(it.code || ''), name: String(it.name || '') }))
+      .filter((it) => it.code)
+  } catch {
+    return []
+  }
+}
+const history = ref<HistItem[]>(loadHistory())
 const starterSymbols = ['600519', '300570', '300502', '000001', '002594']
 
-function saveHistory(sym: string) {
-  const h = history.value.filter((s) => s !== sym)
-  h.unshift(sym)
+function saveHistory(code: string, name?: string) {
+  const prevName = history.value.find((s) => s.code === code)?.name
+  const h = history.value.filter((s) => s.code !== code)
+  h.unshift({ code, name: name || prevName || '' })
   if (h.length > 12) h.splice(12)
   history.value = h
   localStorage.setItem(HISTORY_KEY, JSON.stringify(h))
 }
 
-function removeHistory(sym: string, e: Event) {
+function removeHistory(code: string, e: Event) {
   e.stopPropagation()
-  history.value = history.value.filter((s) => s !== sym)
+  history.value = history.value.filter((s) => s.code !== code)
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value))
+}
+
+function clearHistory() {
+  history.value = []
+  localStorage.removeItem(HISTORY_KEY)
 }
 
 const deepStarted = ref(false)
@@ -602,7 +642,7 @@ const analyze = async (sym?: string) => {
     const res: any = await ApiClient.get(`/api/quant/stock-analysis/${s}`, { _ts: Date.now() }, { timeout: 120000 })
     data.value = res?.data || null
     if (data.value?.available) {
-      saveHistory(s)
+      saveHistory(s, data.value?.header?.name)
       await nextTick()
       renderKline()
     } else {
@@ -667,7 +707,23 @@ const pollDeep = (taskId: string) => {
   }, 3000)
 }
 
+async function backfillHistoryNames() {
+  const missing = history.value.filter((h) => !h.name).map((h) => h.code)
+  if (!missing.length) return
+  try {
+    const res: any = await ApiClient.get('/api/lite/stock-names', { codes: missing.join(',') })
+    const map = res?.data || {}
+    let changed = false
+    history.value = history.value.map((h) => {
+      if (!h.name && map[h.code]) { changed = true; return { ...h, name: map[h.code] } }
+      return h
+    })
+    if (changed) localStorage.setItem(HISTORY_KEY, JSON.stringify(history.value))
+  } catch { /* 忽略：名称只是显示增强 */ }
+}
+
 onMounted(() => {
+  backfillHistoryNames()
   const symbol = String(route.query.symbol || route.query.stock || '').trim()
   if (symbol) analyze(symbol)
 })
@@ -690,6 +746,34 @@ onUnmounted(() => {
 .history-label { font-size: 12px; color: var(--el-text-color-secondary); white-space: nowrap; }
 .history-chip { cursor: pointer; }
 .history-chip:hover { border-color: var(--el-color-primary); color: var(--el-color-primary); }
+
+/* 常驻最近搜索下拉 */
+.recent-trigger { display: inline-flex; align-items: center; }
+.recent-count {
+  margin-left: 6px; font-size: 11px; line-height: 1; font-weight: 600;
+  background: var(--el-color-primary-light-8); color: var(--el-color-primary);
+  border-radius: 9px; padding: 2px 7px;
+}
+.recent-pop { display: flex; flex-direction: column; }
+.recent-pop-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 13px; font-weight: 600; color: var(--el-text-color-primary);
+  padding: 0 2px 8px; margin-bottom: 4px; border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.recent-pop-list { display: flex; flex-direction: column; max-height: 320px; overflow-y: auto; }
+.recent-pop-item {
+  display: flex; align-items: center; gap: 10px; padding: 7px 8px;
+  border-radius: 6px; cursor: pointer;
+}
+.recent-pop-item:hover { background: var(--el-fill-color-light); }
+.rp-name {
+  flex: 1; font-size: 13px; font-weight: 500; color: var(--el-text-color-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rp-code { font-size: 12px; color: var(--el-text-color-secondary); font-variant-numeric: tabular-nums; }
+.rp-del { color: var(--el-text-color-placeholder); font-size: 13px; opacity: 0; transition: opacity .15s; }
+.recent-pop-item:hover .rp-del { opacity: 1; }
+.rp-del:hover { color: var(--el-color-danger); }
 .starter-panel {
   display: flex;
   justify-content: space-between;

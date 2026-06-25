@@ -5607,6 +5607,21 @@ async def lite_datalake_sync_status():
     return {"success": True, "data": svc.status()}
 
 
+@app.get("/api/lite/stock-names")
+async def lite_stock_names(codes: str = ""):
+    """批量「代码→名称」本地查询（stock_meta），用于个股深研最近搜索等显示名称+代码。"""
+    code_list = [c.strip().zfill(6) for c in codes.split(",") if c.strip()][:50]
+    if not code_list:
+        return {"success": True, "data": {}}
+    from quantcore.quant.local_store import get_local_store
+    conn = get_local_store()._conn()
+    placeholders = ",".join("?" * len(code_list))
+    rows = conn.execute(
+        f"SELECT symbol, name FROM stock_meta WHERE symbol IN ({placeholders})", code_list
+    ).fetchall()
+    return {"success": True, "data": {str(s).zfill(6): (n or "") for s, n in rows}}
+
+
 @app.get("/api/lite/datalake/health")
 async def lite_datalake_health(auto_start: bool = True):
     svc = get_sync_service()

@@ -216,11 +216,15 @@ class LocalQuantStore:
         }
 
     def latest_snapshots(self) -> Dict[str, Dict[str, float]]:
+        # 只取「最近一根有成交额的完整日线」：盘中增量同步会写入当日 bar（有 close 无
+        # amount=0），若直接取最新 bar 会让全市场 amount=0 而被筛股的流动性过滤误判为停牌，
+        # 导致候选池被砍到只剩零星几只。amount>0 过滤跳过当日不完整 bar，回到最近完整交易日。
         sql = """
         WITH ranked AS (
             SELECT symbol, close, amount,
                    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
             FROM daily_kline
+            WHERE amount > 0
         )
         SELECT latest.symbol, latest.close, latest.amount, prev.close
         FROM ranked latest

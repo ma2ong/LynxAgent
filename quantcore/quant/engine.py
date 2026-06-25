@@ -503,15 +503,47 @@ class QuantEngine:
                 continue
             candidates.append(meta)
 
-        def _activity(meta: Dict[str, object]) -> float:
-            q = quote_map.get(str(meta.get("symbol") or "").strip().zfill(6), {})
-            return _safe_float(q.get("amount"), 0) / 1e8 + abs(_safe_float(q.get("pct_chg"), 0)) * 0.5
+        def _board_limit(sym: str) -> float:
+            # 日涨跌幅上限：科创板688/689、创业板300/301 = 20%；北交所 8/4/920 = 30%；主板 = 10%
+            if sym.startswith(("688", "689", "300", "301")):
+                return 20.0
+            if sym.startswith(("8", "4", "920")):
+                return 30.0
+            return 10.0
 
-        # 本地数据就绪时用本地最新K线做预筛；未就绪才用实时行情回退。
-        scan_cap = min(len(candidates), max(safe_limit * 5, 80))
-        if not local_ready:
-            scan_cap = min(len(candidates), max(safe_limit * 5, 80))
-        candidates = sorted(candidates, key=_activity, reverse=True)[:scan_cap]
+        def _board(sym: str) -> str:
+            if sym.startswith(("688", "689")):
+                return "科创板"
+            if sym.startswith(("300", "301")):
+                return "创业板"
+            if sym.startswith(("8", "4", "920")):
+                return "北交所"
+            return "主板"
+
+        def _activity(meta: Dict[str, object]) -> float:
+            sym = str(meta.get("symbol") or "").strip().zfill(6)
+            q = quote_map.get(sym, {})
+            amount = _safe_float(q.get("amount"), 0) / 1e8
+            # 波动按板块涨跌幅上限归一，消除 20%/30% 板（科创/创业/北交）的天然加权
+            vol = abs(_safe_float(q.get("pct_chg"), 0)) / _board_limit(sym)
+            return amount + vol * 3.0
+
+        # 预筛：放大扫描上限 + 按板块分层 round-robin，保证主板/创业/科创/北交都被分析，
+        # 不再被高换手的科创板挤占（旧逻辑写死前 100 只 → 实际只分析了 ~52 只）。
+        scan_cap = min(len(candidates), max(safe_limit * 6, 120))
+        by_board: Dict[str, List[Dict[str, object]]] = {}
+        for meta in sorted(candidates, key=_activity, reverse=True):
+            by_board.setdefault(_board(str(meta.get("symbol") or "").strip().zfill(6)), []).append(meta)
+        balanced: List[Dict[str, object]] = []
+        cursor = {b: 0 for b in by_board}
+        while len(balanced) < scan_cap and any(cursor[b] < len(by_board[b]) for b in by_board):
+            for b in list(by_board.keys()):
+                if cursor[b] < len(by_board[b]):
+                    balanced.append(by_board[b][cursor[b]])
+                    cursor[b] += 1
+                    if len(balanced) >= scan_cap:
+                        break
+        candidates = balanced
         if local_ready:
             scan_symbols = [str(meta.get("symbol") or "").strip().zfill(6) for meta in candidates if meta.get("symbol")]
             quote_map.update(_fetch_tencent_quotes(scan_symbols))

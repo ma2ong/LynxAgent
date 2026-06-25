@@ -30,8 +30,10 @@ from .limit_up_taxonomy import CONCEPT_ORDER, KEYWORD_RULES
 logger = logging.getLogger(__name__)
 
 _MAP_DIR = os.environ.get("QUANT_DATA_DIR", "runtime")
-# 取当日涨幅前 N 的「可映射主题板块」抓成分股，聚焦真正的资金主线、控制请求量。
-_HOT_BOARD_LIMIT = 45
+# 抓「所有可映射主题板块」的成分股——概念归属是稳定的（长电科技永远是封测），不应随每日
+# 板块热度波动而漏掉。按涨幅排序仅用于「一股属多概念时取当日最强者」。上限设大以覆盖全部
+# 主题板块（封测/MLCC/钽铌等当日不热也不漏）；映射图按周持久化、跨日复用，不必每天重建。
+_HOT_BOARD_LIMIT = 400
 # 元/梯队/指数类板块：不是行业主题，即使含主题词也排除。
 _EXCLUDE_BOARD_KEYS = (
     "涨停", "连板", "昨日", "融资", "融券", "转融", "股通", "沪深",
@@ -156,6 +158,17 @@ def _load_disk(d: str) -> Optional[dict]:
         return None
 
 
+def _load_recent_disk(max_days: int = 7) -> Optional[dict]:
+    """近 max_days 天内最近一次落盘的映射图（概念归属稳定，老图照样准），当日未建成时兜底。"""
+    from datetime import timedelta
+    today = date.today()
+    for back in range(max_days + 1):
+        payload = _load_disk((today - timedelta(days=back)).strftime("%Y-%m-%d"))
+        if payload and (payload.get("by_code") or payload.get("by_name")):
+            return payload
+    return None
+
+
 def _save_disk(d: str, payload: dict) -> None:
     try:
         os.makedirs(_MAP_DIR, exist_ok=True)
@@ -252,6 +265,13 @@ def _ensure_today(blocking: bool = False) -> None:
         _apply_payload(disk)
         _map_date = today
         return
+
+    # 今日全板块图未建成：先用近 7 天最近一次映射图兜底（避免 akshare 当日不可用时掉回小种子），
+    # 再后台异步重建今日图。
+    recent = _load_recent_disk(7)
+    if recent:
+        _apply_payload(recent)
+        _map_date = today
 
     def _run():
         global _map_date, _building

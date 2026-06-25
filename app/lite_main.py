@@ -1127,8 +1127,9 @@ def _classify_event(title: str, content: str = "", source_type: str = "news") ->
         event_type = "research_rating"
         event_label = "研报评级"
 
-    positive_words = ["利好", "增长", "预增", "扭亏", "中标", "订单", "回购", "增持", "获批", "突破", "买入", "推荐", "上调", "创新高"]
-    negative_words = ["利空", "下滑", "预减", "亏损", "减持", "处罚", "立案", "问询", "诉讼", "退市", "终止", "下调", "风险"]
+    positive_words = ["利好", "增长", "预增", "扭亏", "中标", "订单", "回购", "增持", "获批", "突破", "买入", "推荐", "上调", "创新高", "提振", "回暖", "企稳", "修复"]
+    # 注意「风险」是裸词会误命中「风险偏好/化解风险」等利好语境，改用精确的负面措辞
+    negative_words = ["利空", "下滑", "预减", "亏损", "减持", "处罚", "立案", "问询", "诉讼", "退市", "终止", "下调", "风险警示", "退市风险"]
     pos = sum(1 for word in positive_words if word in text)
     neg = sum(1 for word in negative_words if word in text)
     if pos > neg:

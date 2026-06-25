@@ -1020,6 +1020,12 @@ const pollSmartPoolTask = async (taskId: string) => {
     if (task.status === 'failed') {
       throw new Error(task.error || task.message || '智能推荐任务失败')
     }
+    if (smartElapsed.value > 300) {
+      finishSmartPoolTask()
+      smartPoolResult.value = null
+      ElMessage.warning('智能推荐超时（后台任务 5 分钟未完成），请刷新或稍后重试')
+      return
+    }
     smartTaskTimer = window.setTimeout(() => pollSmartPoolTask(taskId), 1500)
   } catch (error: any) {
     finishSmartPoolTask()

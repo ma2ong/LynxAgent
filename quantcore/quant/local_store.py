@@ -120,11 +120,29 @@ class LocalQuantStore:
         不用 MAX(date)：批量快照会把 MAX 写成今天、掩盖中间缺口（如 6-16..6-22），
         单看最新日期会漏判；按近窗 bar 数才能准确发现不连续。
         """
+        # 只数「有成交额的真实 bar」：盘中快照会写入 amount=0 的占位 bar（close=前收），
+        # 若按存在与否计数会把占位符当成「已就绪」→ 跳过真实日线回补 → 连板/成交额/情绪全错。
+        # 改为只数 amount>0 的真实 bar，占位符不计入 → 触发逐股回补，自愈坏数据。
         rows = self._conn().execute(
-            "SELECT symbol, COUNT(*) FROM daily_kline WHERE date >= ? GROUP BY symbol",
+            "SELECT symbol, COUNT(*) FROM daily_kline WHERE date >= ? AND amount > 0 GROUP BY symbol",
             (since_date,),
         ).fetchall()
         return {r[0]: int(r[1]) for r in rows}
+
+    def placeholder_symbols(self, since_date: str) -> set:
+        """近窗内存在「历史交易日占位 bar」(amount<=0 且 date<今天) 的股票集合。
+
+        盘中快照会写 amount=0 的占位 bar（close=前收）；过去交易日本应有真实成交额，
+        若仍为 0 即说明真实日线回补漏了。仅靠 bar 计数无法发现「13 根里混 1 根占位」的情况，
+        故单独识别，纳入增量同步回补目标，自愈坏数据（连板/成交额/情绪依赖它）。
+        """
+        from datetime import date as _date
+        today = _date.today().strftime("%Y-%m-%d")
+        rows = self._conn().execute(
+            "SELECT DISTINCT symbol FROM daily_kline WHERE date >= ? AND date < ? AND amount <= 0",
+            (since_date, today),
+        ).fetchall()
+        return {str(r[0]).zfill(6) for r in rows}
 
     def bulk_upsert_kline_snapshot(self, bars: List[tuple]) -> int:
         """批量写入多只股票的单日 bar。bars: [(symbol,date,open,high,low,close,volume,amount), ...]。"""

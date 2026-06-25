@@ -318,10 +318,13 @@ class MarketSyncService:
             if full:
                 targets = list(universe)
             else:
+                # 占位符感知：除「近窗真实 bar 数不足」外，凡历史交易日仍是 amount=0 占位 bar 的
+                # 股票也纳入回补，自愈盘中快照遗留的坏数据（否则连板/成交额/情绪持续错）。
+                placeholder_syms = self.store.placeholder_symbols(recent_since)
                 def has_gap(meta) -> bool:
                     sym = str(meta.get("symbol"))
                     cnt = recent_counts.get(sym) or recent_counts.get(sym.zfill(6)) or 0
-                    return cnt < MIN_RECENT_BARS
+                    return cnt < MIN_RECENT_BARS or sym.zfill(6) in placeholder_syms
                 targets = [meta for meta in universe if has_gap(meta)]
             self._progress["total"] = len(targets)
             self._progress["done"] = 0

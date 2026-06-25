@@ -22,6 +22,16 @@ from dotenv import load_dotenv
 # so logins stay valid across restarts when JWT_SECRET is set.
 load_dotenv()
 
+# Hard ceiling on blocking network I/O (akshare/requests without an explicit
+# timeout). Without this, a hung upstream call holds its worker thread forever;
+# over a long-running process these accumulate and exhaust the threadpool, which
+# then blocks ALL endpoints — even local-data ones — and the whole app appears to
+# "stop loading". This is a per-read idle timeout: uvicorn's asyncio sockets are
+# non-blocking (unaffected), the LLM client sets its own httpx timeout
+# (unaffected), and slow-but-progressing responses keep resetting the timer.
+import socket as _socket
+_socket.setdefaulttimeout(30)
+
 from app.lite_auth import get_current_lite_user, router as lite_auth_router, store
 from app.lite_billing import PLANS, billing, effective_plan, require_quota, router as billing_router
 from app.lite_admin import router as admin_router

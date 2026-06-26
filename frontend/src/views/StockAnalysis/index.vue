@@ -51,15 +51,45 @@
       >{{ item.name ? item.name + ' ' : '' }}{{ item.code }}</el-tag>
     </div>
 
-    <div v-if="!loading && !data && !history.length" class="starter-panel">
-      <div>
-        <h2>从一个标的开始</h2>
-        <p>输入代码后会生成行情、K线、技术因子、财务速览、相关新闻和深度研究入口。</p>
+    <!-- 赛道龙头入口（无选中标的时展示）：按赛道浏览龙头股，实时行情一目了然 -->
+    <div v-if="!loading && !data" class="sector-home">
+      <div class="sector-intro">
+        <div>
+          <h2>按赛道浏览龙头股</h2>
+          <p>实时行情一目了然，点击任意个股进入深度研究报告。</p>
+        </div>
+        <span v-if="sectorsUpdatedAt" class="sector-updated">行情更新于 {{ sectorsUpdatedAt }}</span>
       </div>
-      <div class="starter-tags">
-        <el-tag v-for="sym in starterSymbols" :key="sym" effect="plain" @click="analyze(sym)">
-          {{ sym }}
-        </el-tag>
+
+      <div v-if="sectorsLoading && !sectors.length" class="sector-loading">正在加载赛道行情…</div>
+
+      <div v-for="sector in sectors" :key="sector.key" class="sector-block">
+        <div class="sector-head">
+          <span class="dot" />
+          <b>{{ sector.name }}</b>
+          <em>{{ sector.en }}</em>
+          <span class="sector-sub">{{ sector.subtitle }}</span>
+        </div>
+        <div class="leader-grid">
+          <button
+            v-for="stk in sector.items"
+            :key="stk.code"
+            type="button"
+            class="leader-card"
+            @click="analyze(stk.code)"
+          >
+            <div class="lc-top">
+              <span class="lc-code">{{ stk.code }}</span>
+              <span class="lc-name">{{ stk.name }}</span>
+            </div>
+            <div class="lc-bottom">
+              <span class="lc-price">{{ stk.price != null ? stk.price.toFixed(2) : '—' }}</span>
+              <span class="lc-pct" :class="stk.pct_chg == null ? '' : (stk.pct_chg >= 0 ? 'up' : 'down')">
+                {{ stk.pct_chg == null ? '—' : (stk.pct_chg >= 0 ? '+' : '') + stk.pct_chg.toFixed(2) + '%' }}
+              </span>
+            </div>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -435,7 +465,26 @@ function loadHistory(): HistItem[] {
   }
 }
 const history = ref<HistItem[]>(loadHistory())
-const starterSymbols = ['600519', '300570', '300502', '000001', '002594']
+
+// 赛道龙头入口
+type LeaderItem = { code: string; name: string; price: number | null; pct_chg: number | null }
+type SectorItem = { key: string; name: string; en: string; subtitle: string; items: LeaderItem[] }
+const sectors = ref<SectorItem[]>([])
+const sectorsLoading = ref(false)
+const sectorsUpdatedAt = ref('')
+const loadSectors = async () => {
+  if (sectors.value.length) return
+  sectorsLoading.value = true
+  try {
+    const res: any = await ApiClient.get('/api/lite/sector-leaders', { _ts: Date.now() }, { timeout: 20000 })
+    sectors.value = res?.data?.sectors || []
+    sectorsUpdatedAt.value = res?.data?.updated_at || ''
+  } catch {
+    // 静默降级：拉取失败时入口区为空，不影响搜索分析
+  } finally {
+    sectorsLoading.value = false
+  }
+}
 
 function saveHistory(code: string, name?: string) {
   const prevName = history.value.find((s) => s.code === code)?.name
@@ -741,6 +790,7 @@ onMounted(() => {
   backfillHistoryNames()
   const symbol = String(route.query.symbol || route.query.stock || '').trim()
   if (symbol) analyze(symbol)
+  else loadSectors()
 })
 
 onUnmounted(() => {
@@ -755,6 +805,37 @@ onUnmounted(() => {
 
 .search-bar { display: flex; gap: 10px; align-items: center; }
 .loading-hint { color: var(--el-text-color-secondary); font-size: 13px; }
+
+/* 赛道龙头入口 */
+.sector-home { display: flex; flex-direction: column; gap: 18px; }
+.sector-intro { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  h2 { margin: 0 0 4px; font-size: 22px; }
+  p { margin: 0; color: var(--el-text-color-secondary); font-size: 13px; }
+}
+.sector-updated { font-size: 12px; color: var(--el-text-color-secondary); }
+.sector-loading { color: var(--el-text-color-secondary); font-size: 13px; padding: 20px 0; }
+.sector-block { display: flex; flex-direction: column; gap: 10px; }
+.sector-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--el-color-warning); align-self: center; }
+  b { font-size: 15px; }
+  em { font-style: normal; font-size: 12px; color: var(--el-text-color-secondary); }
+  .sector-sub { font-size: 12px; color: var(--el-text-color-placeholder); margin-left: 4px; }
+}
+.leader-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+.leader-card {
+  text-align: left; cursor: pointer; padding: 12px 14px; border-radius: 10px;
+  background: var(--el-fill-color-lighter); border: 1px solid var(--el-border-color-lighter);
+  transition: all .15s ease; display: flex; flex-direction: column; gap: 10px;
+}
+.leader-card:hover { border-color: var(--el-color-primary); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.08); }
+.lc-top { display: flex; align-items: baseline; gap: 8px; }
+.lc-code { font-size: 12px; color: var(--el-text-color-secondary); font-variant-numeric: tabular-nums; }
+.lc-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lc-bottom { display: flex; align-items: baseline; justify-content: space-between; }
+.lc-price { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lc-pct { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.lc-pct.up { color: #ef232a; }
+.lc-pct.down { color: #14b143; }
 
 /* 搜索历史 */
 .history-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

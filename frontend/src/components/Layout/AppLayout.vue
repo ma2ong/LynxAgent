@@ -27,8 +27,9 @@
         <el-menu-item index="/today"><el-icon><Calendar /></el-icon><span>今日</span></el-menu-item>
         <el-menu-item index="/market/sentiment"><el-icon><Odometer /></el-icon><span>市场雷达</span></el-menu-item>
         <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
+        <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
         <el-menu-item index="/insights/hot-news"><el-icon><ChatDotRound /></el-icon><span>A股热点</span></el-menu-item>
-        <el-menu-item index="/insights/catalyst"><el-icon><Bell /></el-icon><span>催化剂监控</span></el-menu-item>
+        <el-menu-item index="/insights/kol"><el-icon><Bell /></el-icon><span>KOL日报</span></el-menu-item>
         <el-menu-item index="/insights/capital"><el-icon><Coin /></el-icon><span>资金面板</span></el-menu-item>
         <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
         <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
@@ -58,7 +59,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, TrendCharts, Star, SwitchButton,
   DocumentChecked, Coin, Calendar, Menu,
-  ChatDotRound, Bell, MagicStick, Medal, Setting, DataLine,
+  ChatDotRound, Bell, MagicStick, Medal, Setting, DataLine, Sunrise,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'

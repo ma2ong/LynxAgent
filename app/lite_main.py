@@ -2728,6 +2728,90 @@ async def lite_smart_pool_task_status(task_id: str):
     return {"success": True, "data": task, "message": "ok"}
 
 
+@app.get("/api/lite/sector-leaders")
+async def lite_sector_leaders():
+    """个股深研「按赛道浏览龙头股」：策划赛道 + 龙头实时行情，点击即进深研报告。"""
+    from quantcore.quant.sector_leaders import SECTOR_LEADERS, all_leader_codes
+
+    cache_key = "sector-leaders:v1"
+    cached = _cache_get(cache_key, 30)
+    if cached:
+        return cached
+
+    quotes = await _realtime_quotes(all_leader_codes(), allow_snapshot_fallback=True)
+    sectors = []
+    for sector in SECTOR_LEADERS:
+        items = []
+        for code, name in sector["leaders"]:
+            code = str(code).zfill(6)
+            q = quotes.get(code) or {}
+            price = q.get("price")
+            if price is None:
+                price = q.get("close")
+            pct = q.get("change_percent")
+            if pct is None:
+                pct = q.get("pct_chg")
+            items.append({
+                "code": code,
+                "name": q.get("name") or name,
+                "price": round(float(price), 2) if price is not None else None,
+                "pct_chg": round(float(pct), 2) if pct is not None else None,
+            })
+        sectors.append({
+            "key": sector["key"],
+            "name": sector["name"],
+            "en": sector["en"],
+            "subtitle": sector["subtitle"],
+            "items": items,
+        })
+
+    payload = {
+        "success": True,
+        "data": {
+            "sectors": sectors,
+            "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+            "note": "赛道与龙头为人工策划，实时行情每 30 秒刷新；点击个股进入深研报告。",
+        },
+        "message": "ok",
+    }
+    _cache_set(cache_key, payload)
+    return payload
+
+
+@app.get("/api/lite/call-auction")
+async def lite_call_auction():
+    """集合竞价板块：从全市场快照的今开/昨收推导竞价情绪、热门板块、买入推荐。"""
+    from quantcore.quant.call_auction import compute_call_auction
+    from quantcore.quant.sector_leaders import SECTOR_LEADERS
+
+    cache_key = "call-auction:v1"
+    cached = _cache_get(cache_key, 60)
+    if cached:
+        return cached
+
+    snapshot = await asyncio.to_thread(_load_realtime_quotes_snapshot, 60)
+    result = await asyncio.to_thread(compute_call_auction, snapshot, SECTOR_LEADERS)
+    payload = {
+        "success": True,
+        "data": {**result, "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S")},
+        "message": "ok",
+    }
+    if result.get("available"):
+        _cache_set(cache_key, payload)
+    return payload
+
+
+@app.get("/api/lite/kol/digest")
+async def lite_kol_digest():
+    """KOL 日报：单页平铺当日 KOL 关注度排行 + 个股观点摘要 + 其他热议（当前为占位数据）。"""
+    from quantcore.quant.kol_rooms import get_digest
+    data = get_digest()
+    return {"success": True,
+            "data": {**data, "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+                     "note": "占位数据：真实雪球/微博/推特 KOL 采集源待接入，界面与数据结构已就绪。"},
+            "message": "ok"}
+
+
 @app.get("/api/lite/hot-news")
 async def lite_hot_news(limit: int = 30):
     cache_key = f"hot-news:sentiment-v2:{limit}"

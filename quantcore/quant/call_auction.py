@@ -10,7 +10,16 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, time
 from typing import Dict, List
+
+
+def _in_auction_window(now: datetime | None = None) -> bool:
+    """是否处于集合竞价时段（交易日 09:15–09:26）。该时段快照的成交量额即真实竞价撮合量额。"""
+    now = now or datetime.now()
+    if now.weekday() >= 5:
+        return False
+    return time(9, 15) <= now.time() <= time(9, 26)
 
 
 def _board_limit(symbol: str) -> float:
@@ -76,6 +85,34 @@ def compute_call_auction(
     avg_open = round(sum(r["open_pct"] for r in rows) / total, 2)
     high_ratio = round(len(high) / total * 100, 1)
 
+    # 高开幅度分布（始终精确，仅依赖 今开/昨收）
+    def _bucket(r: dict) -> str:
+        op = r["open_pct"]
+        if op >= r["board_limit"] * 0.985:
+            return "竞价涨停"
+        if op >= 5:
+            return "大幅高开"
+        if op >= 2:
+            return "高开"
+        if op > 0.05:
+            return "微高开"
+        if op > -0.05:
+            return "平开"
+        if op > -3:
+            return "低开"
+        return "大幅低开"
+
+    _order = ["竞价涨停", "大幅高开", "高开", "微高开", "平开", "低开", "大幅低开"]
+    _counts: Dict[str, int] = {k: 0 for k in _order}
+    for r in rows:
+        _counts[_bucket(r)] += 1
+    distribution = [{"label": k, "count": _counts[k]} for k in _order]
+
+    # 时段口径：竞价时段(09:15-09:25)快照的成交额即真实竞价撮合额；盘后为全日累计，仅作参考。
+    in_window = _in_auction_window()
+    caliber = "竞价撮合" if in_window else "全日参考"
+    total_amount_yi = round(sum(r["amount"] for r in rows) / 1e8, 1)
+
     # 竞价情绪分（0-100）：高开占比 + 平均高开幅度
     sentiment = max(0.0, min(100.0, 50 + (high_ratio - 50) * 1.2 + avg_open * 8))
     sentiment = round(sentiment, 1)
@@ -104,6 +141,10 @@ def compute_call_auction(
         "sentiment_score": sentiment,
         "mood": mood,
         "verdict": verdict,
+        "distribution": distribution,
+        "total_amount_yi": total_amount_yi,
+        "caliber": caliber,
+        "is_auction_window": in_window,
     }
 
     # 竞价热门板块：按策划赛道，算成分股平均竞价高开 + 高开家数，排序
@@ -141,11 +182,18 @@ def compute_call_auction(
         # 评分：高开强度 + 量比配合（量比缺失给中性 1.0）
         vr_eff = vr if vr > 0 else 1.0
         score = round(min(r["open_pct"], 7.0) * 6 + min(vr_eff, 4.0) * 8, 1)
+        # 抢筹强度：以竞价高开幅度为精确口径（始终可得），量比为辅助
+        if r["open_pct"] >= 5:
+            grab = "强抢筹"
+        elif r["open_pct"] >= 3:
+            grab = "抢筹"
+        else:
+            grab = "温和高开"
         reasons = [f"竞价高开 +{r['open_pct']:.2f}%"]
         if vr_eff >= 1.5:
             reasons.append(f"量比 {vr_eff:.1f}")
         if r["amount"]:
-            reasons.append(f"成交额 {r['amount'] / 1e8:.2f}亿")
+            reasons.append(f"{caliber}成交额 {r['amount'] / 1e8:.2f}亿")
         candidates.append({
             "code": r["code"],
             "name": r["name"],
@@ -153,6 +201,7 @@ def compute_call_auction(
             "price": round(r["price"], 2),
             "volume_ratio": round(vr, 2) if vr else None,
             "amount": r["amount"],
+            "grab": grab,
             "score": score,
             "reasons": reasons,
         })
@@ -163,5 +212,9 @@ def compute_call_auction(
         "overview": overview,
         "hot_sectors": hot_sectors[:8],
         "buy_candidates": candidates[:buy_limit],
-        "note": "竞价高开=今开/昨收。盘前 09:15-09:25 反映实时竞价，盘后反映当日开盘结果；量比/成交额为辅助参考。研究用途，不构成投资建议。",
+        "note": (
+            "竞价高开=今开/昨收，高开分布与抢筹强度始终精确。"
+            "成交额口径：竞价时段(09:15-09:25)即真实竞价撮合额，盘后为全日累计(仅参考)；"
+            "因数据源限制，盘后无法单独还原 09:25 撮合量。研究用途，不构成投资建议。"
+        ),
     }

@@ -146,6 +146,33 @@
         </div>
       </div>
 
+      <!-- 双逻辑分离 + 明日三情景 -->
+      <div class="logic-card" v-if="data.ai_view?.dual_logic?.industry || data.ai_view?.scenarios?.length">
+        <div class="dual-logic" v-if="data.ai_view?.dual_logic?.industry">
+          <div class="card-title">双逻辑判断</div>
+          <div class="dl-row">
+            <span class="dl-name">产业逻辑</span>
+            <span class="dl-status" :class="logicClass(data.ai_view.dual_logic.industry.status)">{{ data.ai_view.dual_logic.industry.status }}</span>
+            <span class="dl-note">{{ data.ai_view.dual_logic.industry.note }}</span>
+          </div>
+          <div class="dl-row">
+            <span class="dl-name">交易逻辑</span>
+            <span class="dl-status" :class="logicClass(data.ai_view.dual_logic.trading.status)">{{ data.ai_view.dual_logic.trading.status }}</span>
+            <span class="dl-note">{{ data.ai_view.dual_logic.trading.note }}</span>
+          </div>
+        </div>
+        <div class="scenarios" v-if="data.ai_view?.scenarios?.length">
+          <div class="card-title">明日三情景</div>
+          <div v-for="(sc, i) in data.ai_view.scenarios" :key="i" class="sc-row">
+            <span class="sc-level" :class="'lv-' + sc.level">{{ sc.level }}</span>
+            <div class="sc-body">
+              <div class="sc-trigger">{{ sc.trigger }}</div>
+              <div class="sc-meta"><b>{{ sc.action }}</b><span v-if="sc.target"> · {{ sc.target }}</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="insight-grid" v-if="data.investor_profile || data.capital_flow_panel?.available || data.red_flags?.length">
         <div class="card insight-card" v-if="data.investor_profile">
           <div class="card-title">投资者画像</div>
@@ -438,6 +465,7 @@ const panel = ref<any>(null)
 const panelLoading = ref(false)
 const scoreColor = (s: number) => (s >= 62 ? '#ef232a' : s >= 45 ? '#e6a23c' : '#14b143')
 const stanceClass = (s: string) => (s === '看多' ? 'st-bull' : s === '看空' ? 'st-bear' : 'st-neutral')
+const logicClass = (s: string) => (s === '在' ? 'lg-on' : s === '失效' ? 'lg-off' : 'lg-weak')
 const loadPanel = () => {
   const code = data.value?.header?.symbol
   if (!code) return
@@ -948,6 +976,28 @@ onUnmounted(() => {
 .risk .ai-col-head { color: #e6a23c; }
 .cat .ai-col-head { color: #409eff; }
 .ai-col ul { margin: 0; padding-left: 16px; font-size: 13px; line-height: 1.8; color: var(--el-text-color-regular); }
+
+/* 双逻辑 + 三情景 */
+.logic-card { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+@media (max-width: 820px) { .logic-card { grid-template-columns: 1fr; } }
+.dual-logic, .scenarios { border: 1px solid var(--el-border-color-light); border-radius: 8px; padding: 14px 16px; }
+.dual-logic .card-title, .scenarios .card-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; }
+.dl-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
+.dl-row + .dl-row { border-top: 1px solid var(--el-border-color-lighter); }
+.dl-name { font-size: 13px; font-weight: 600; min-width: 56px; }
+.dl-status { font-size: 12px; font-weight: 700; padding: 1px 9px; border-radius: 4px; }
+.lg-on { color: #fff; background: #ef232a; }
+.lg-weak { color: #fff; background: #e6a23c; }
+.lg-off { color: #fff; background: #909399; }
+.dl-note { font-size: 12px; color: var(--el-text-color-secondary); }
+.sc-row { display: flex; gap: 12px; padding: 9px 0; }
+.sc-row + .sc-row { border-top: 1px solid var(--el-border-color-lighter); }
+.sc-level { flex-shrink: 0; width: 24px; height: 24px; border-radius: 6px; text-align: center; line-height: 24px; font-size: 13px; font-weight: 700; color: #fff; }
+.lv-强 { background: #ef232a; }
+.lv-中 { background: #e6a23c; }
+.lv-弱 { background: #14b143; }
+.sc-trigger { font-size: 13px; color: var(--el-text-color-regular); }
+.sc-meta { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 2px; b { color: var(--el-text-color-primary); } }
 
 /* Insight cards */
 .insight-grid {

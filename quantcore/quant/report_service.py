@@ -231,11 +231,57 @@ def _valuation_forest(last_close: float, tech_score: float, fund_score: float, v
     }
 
 
+def _rule_dual_logic(tech_score: float, fund_score: float, signal: str, fund: Dict) -> Dict[str, object]:
+    """双逻辑分离：产业逻辑(基本面) + 交易逻辑(技术面) 各判 在/弱化/失效。"""
+    np_yoy = fund.get("net_profit_yoy")
+    rev_yoy = fund.get("revenue_yoy")
+    # 产业逻辑
+    if fund_score >= 58 and (np_yoy is None or _f(np_yoy) >= 0):
+        ind = {"status": "在", "note": f"基本面分 {fund_score:.0f}，盈利未见恶化"}
+    elif (np_yoy is not None and _f(np_yoy) <= -25) and (rev_yoy is not None and _f(rev_yoy) <= -15):
+        ind = {"status": "失效", "note": "营收净利双降，产业逻辑走坏"}
+    else:
+        ind = {"status": "弱化", "note": "盈利或增速边际转弱，需下期财报验证"}
+    # 交易逻辑
+    if signal in ("buy", "strong_buy") and tech_score >= 60:
+        trd = {"status": "在", "note": f"技术分 {tech_score:.0f}，量价偏强"}
+    elif tech_score < 45 or signal == "avoid":
+        trd = {"status": "失效", "note": "趋势走弱，短期交易结构破坏"}
+    else:
+        trd = {"status": "弱化", "note": "信号中性，等待方向确认"}
+    return {"industry": ind, "trading": trd}
+
+
+def _rule_scenarios(last_close: float, plan: Dict, signal: str) -> List[Dict[str, str]]:
+    """明日三情景动作：强/中/弱，各配 触发条件→动作→目标位，复用 ATR 交易计划的价位。"""
+    buy = plan.get("buy_price") or round(_f(last_close), 2)
+    stop = plan.get("stop_loss")
+    tp = plan.get("take_profit")
+    if not buy:
+        return []
+    strong = {
+        "level": "强", "trigger": f"放量站上 {buy} 并突破近期高点",
+        "action": "顺势加仓 / 持有", "target": f"看 {tp}" if tp else "上看前高",
+    }
+    medium = {
+        "level": "中", "trigger": f"在 {stop}–{tp} 区间内震荡" if stop and tp else "区间震荡、量能未放大",
+        "action": "持有观察，不追高", "target": "等量价共振再加仓",
+    }
+    weak = {
+        "level": "弱", "trigger": f"跌破 {stop}" if stop else "跌破关键支撑、放量下杀",
+        "action": "止损离场，规避回撤", "target": f"止损 {stop}" if stop else "保护本金",
+    }
+    return [strong, medium, weak]
+
+
 def _ai_view(header: Dict, tech_score: float, fund_score: float, signal: str,
-             fund: Dict, perf: Dict) -> Dict[str, object]:
-    """AI 投资观点：看多逻辑 / 风险提示 / 关键催化。优先 LLM，降级走规则。"""
+             fund: Dict, perf: Dict, last_close: float = 0.0, plan: Dict | None = None) -> Dict[str, object]:
+    """AI 投资观点：看多/风险/催化 + 双逻辑分离 + 明日三情景。优先 LLM，降级走规则。"""
+    plan = plan or {}
     name = header.get("name")
     industry = header.get("industry")
+    rule_dual = _rule_dual_logic(tech_score, fund_score, signal, fund)
+    rule_scen = _rule_scenarios(last_close, plan, signal)
 
     if llm.available():
         prompt = (
@@ -245,16 +291,26 @@ def _ai_view(header: Dict, tech_score: float, fund_score: float, signal: str,
             f"近期表现：1日 {perf.get('d1')}% / 1月 {perf.get('m1')}% / 年初至今 {perf.get('ytd')}%。\n"
             f"财务：营收同比 {fund.get('revenue_yoy')}%，净利同比 {fund.get('net_profit_yoy')}%，"
             f"毛利率 {fund.get('gross_margin')}%，ROE {fund.get('roe')}%。\n"
-            "请输出 JSON：{\"bull\":[3条看多逻辑],\"risk\":[3条风险提示],\"catalyst\":[2-3条关键催化]}，"
-            "每条不超过 30 字，基于给定数据，不要编造具体数字。"
+            f"价格参考：现价 {round(_f(last_close), 2)}，止损位 {plan.get('stop_loss')}，止盈位 {plan.get('take_profit')}。\n"
+            "请输出 JSON，含以下字段：\n"
+            "\"bull\":[3条看多逻辑], \"risk\":[3条风险提示], \"catalyst\":[2-3条关键催化]，每条≤30字；\n"
+            "\"dual_logic\":{\"industry\":{\"status\":\"在|弱化|失效\",\"note\":\"产业(基本面)逻辑一句话\"},"
+            "\"trading\":{\"status\":\"在|弱化|失效\",\"note\":\"交易(技术面)逻辑一句话\"}}；\n"
+            "\"scenarios\":[{\"level\":\"强\",\"trigger\":\"触发条件\",\"action\":\"动作\",\"target\":\"目标位\"},"
+            "{\"level\":\"中\",...},{\"level\":\"弱\",\"trigger\":...,\"action\":\"止损动作\",\"target\":\"止损位\"}]。\n"
+            "scenarios 的 target 用给定的止盈/止损位或文字描述，不要编造精确数字。基于给定数据，不夸大。"
         )
-        result = llm.chat_json(prompt, system="你是严谨的A股卖方分析师，只基于给定数据，不夸大。")
+        result = llm.chat_json(prompt, system="你是严谨的A股卖方分析师，遵循证据优先、双逻辑分离、三情景输出原则，只基于给定数据。")
         if isinstance(result, dict) and (result.get("bull") or result.get("risk")):
+            dual = result.get("dual_logic")
+            scen = result.get("scenarios")
             return {
                 "source": "llm",
                 "bull": [str(x) for x in (result.get("bull") or [])][:4],
                 "risk": [str(x) for x in (result.get("risk") or [])][:4],
                 "catalyst": [str(x) for x in (result.get("catalyst") or [])][:4],
+                "dual_logic": dual if isinstance(dual, dict) and dual.get("industry") else rule_dual,
+                "scenarios": scen if isinstance(scen, list) and scen else rule_scen,
             }
 
     # --- 规则降级 ---
@@ -283,7 +339,8 @@ def _ai_view(header: Dict, tech_score: float, fund_score: float, signal: str,
     if signal in ("buy", "strong_buy"):
         catalyst.append("量价信号转强，关注突破确认")
 
-    return {"source": "rule", "bull": bull[:4], "risk": risk[:4], "catalyst": catalyst[:4]}
+    return {"source": "rule", "bull": bull[:4], "risk": risk[:4], "catalyst": catalyst[:4],
+            "dual_logic": rule_dual, "scenarios": rule_scen}
 
 
 def _financial_summary(fund: Dict) -> Dict[str, object]:
@@ -554,15 +611,20 @@ def build_stock_report(symbol: str) -> Dict[str, object]:
     last_close = header.get("last_price") or 0.0
     perf = _market_performance(data) if has_data else {}
 
+    # 可执行交易计划：现价为买点，止损=现价−2×ATR，止盈=现价+3×ATR（盈亏比 1.5）。
+    # 在 _ai_view 之前算好，供「明日三情景」引用具体止盈/止损位。
+    plan = trade_plan(_f(last_close), latest_atr(data) if has_data else 0.0)
+
     try:
         valuation = _valuation_forest(_f(last_close), tech_score, fund_score, volatility)
     except Exception:
         valuation = {"available": False, "note": "暂无"}
 
     try:
-        ai_view = _ai_view(header, tech_score, fund_score, signal, fund, perf)
+        ai_view = _ai_view(header, tech_score, fund_score, signal, fund, perf, _f(last_close), plan)
     except Exception:
-        ai_view = {"source": "rule", "bull": ["暂无"], "risk": ["暂无"], "catalyst": ["暂无"]}
+        ai_view = {"source": "rule", "bull": ["暂无"], "risk": ["暂无"], "catalyst": ["暂无"],
+                   "dual_logic": {}, "scenarios": []}
 
     try:
         news = stock_news(symbol, days=7, limit=10)
@@ -597,8 +659,7 @@ def build_stock_report(symbol: str) -> Dict[str, object]:
             "ma20": [None if pd.isna(v) else float(v) for v in ma20],
         }
 
-    # 可执行交易计划：现价为买点，止损=现价−2×ATR，止盈=现价+3×ATR（盈亏比 1.5）。
-    plan = trade_plan(_f(last_close), latest_atr(data) if has_data else 0.0)
+    # plan 已在上方（_ai_view 之前）算好。
     stop_loss = plan.get("stop_loss")
     target = plan.get("take_profit")
     entry_low = round(last_close * 0.99, 2) if last_close else None

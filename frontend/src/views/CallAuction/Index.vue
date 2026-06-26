@@ -46,6 +46,25 @@
 
       <div class="verdict">{{ data.overview.verdict }}</div>
 
+      <!-- 高开幅度分布（精确口径） -->
+      <section class="dist" v-if="data.overview.distribution?.length">
+        <div class="dist-head">
+          高开幅度分布
+          <span class="caliber" :class="{ live: data.overview.is_auction_window }">
+            成交额{{ data.overview.caliber }} · 总额 {{ fmtAmt(data.overview.total_amount_yi) }}
+          </span>
+        </div>
+        <div class="dist-bar">
+          <span v-for="b in data.overview.distribution" :key="b.label" v-show="b.count"
+            class="dist-seg" :class="distClass(b.label)" :style="{ flexGrow: b.count }" :title="`${b.label} ${b.count}`" />
+        </div>
+        <div class="dist-legend">
+          <span v-for="b in data.overview.distribution" :key="b.label" class="leg">
+            <i :class="distClass(b.label)" />{{ b.label }} <b>{{ b.count }}</b>
+          </span>
+        </div>
+      </section>
+
       <div class="cols">
         <!-- 竞价热门板块 -->
         <section class="panel">
@@ -74,7 +93,9 @@
             type="button" class="cand-card" @click="openStock(c.code)"
           >
             <div class="cc-l">
-              <div class="cc-name">{{ c.name }}<span class="cc-code">{{ c.code }}</span></div>
+              <div class="cc-name">{{ c.name }}<span class="cc-code">{{ c.code }}</span>
+                <span class="grab" :class="grabClass(c.grab)">{{ c.grab }}</span>
+              </div>
               <div class="cc-reasons">{{ c.reasons.join(' · ') }}</div>
             </div>
             <div class="cc-r">
@@ -106,6 +127,14 @@ const moodClass = (mood: string) => {
   if (mood === '弱' || mood === '偏弱') return 'mood-weak'
   return 'mood-neutral'
 }
+
+const DIST_CLASS: Record<string, string> = {
+  竞价涨停: 'd-limit', 大幅高开: 'd-hi2', 高开: 'd-hi1', 微高开: 'd-hi0',
+  平开: 'd-flat', 低开: 'd-lo1', 大幅低开: 'd-lo2',
+}
+const distClass = (label: string) => DIST_CLASS[label] || 'd-flat'
+const grabClass = (g: string) => (g === '强抢筹' ? 'g-strong' : g === '抢筹' ? 'g-mid' : 'g-soft')
+const fmtAmt = (yi: number) => (yi >= 10000 ? `${(yi / 10000).toFixed(2)} 万亿` : `${yi} 亿`)
 
 const openStock = (code: string) => {
   router.push({ name: 'stock-analysis', query: { symbol: code } })
@@ -158,6 +187,23 @@ onMounted(load)
   padding: 10px 14px; border-radius: 6px; font-size: 13px; color: var(--el-text-color-primary);
 }
 
+/* 高开分布 */
+.dist { background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 10px; padding: 14px 16px; }
+.dist-head { font-size: 14px; font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; gap: 10px; }
+.caliber { font-size: 11px; font-weight: 400; color: var(--el-text-color-secondary); padding: 2px 8px; border-radius: 4px; background: var(--el-fill-color); }
+.caliber.live { color: #fff; background: var(--el-color-success); }
+.dist-bar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; gap: 1px; }
+.dist-seg { min-width: 2px; }
+.dist-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 12px; color: var(--el-text-color-secondary);
+  .leg { display: inline-flex; align-items: center; gap: 4px; } i { width: 9px; height: 9px; border-radius: 2px; } b { color: var(--el-text-color-primary); } }
+.d-limit { background: #b71c1c; }
+.d-hi2 { background: #ef232a; }
+.d-hi1 { background: #f56c6c; }
+.d-hi0 { background: #fab6b6; }
+.d-flat { background: #c8c9cc; }
+.d-lo1 { background: #7ed0a0; }
+.d-lo2 { background: #14b143; }
+
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
 .panel { background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 10px; padding: 14px 16px; }
@@ -181,6 +227,10 @@ onMounted(load)
 .cand-card:hover { border-color: var(--el-color-primary); transform: translateX(2px); }
 .cc-name { font-size: 14px; font-weight: 600; }
 .cc-code { font-size: 11px; color: var(--el-text-color-secondary); margin-left: 6px; font-variant-numeric: tabular-nums; }
+.grab { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-left: 6px; color: #fff; }
+.g-strong { background: #b71c1c; }
+.g-mid { background: #ef232a; }
+.g-soft { background: #f0a020; }
 .cc-reasons { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 3px; }
 .cc-r { text-align: right; }
 .cc-price { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }

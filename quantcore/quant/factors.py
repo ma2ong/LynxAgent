@@ -268,6 +268,159 @@ def latest_adx(df: pd.DataFrame) -> float:
         return 0.0
 
 
+def swing_short_score(df: pd.DataFrame) -> Dict[str, object]:
+    """短线波段 6 维共振评分（1-3 日持仓）。复用 enrich_indicators 的指标，纯本地 K 线可算。
+
+    维度（满分 100）：RSI 超卖 20 / KDJ 金叉 20 / MACD 金叉 15 / 布林下轨 15 /
+    放量上涨 15 / 资金代理(CMF) 15。返回 {score, signals, dims}。
+    偏好"超卖+金叉+放量"的低吸共振，与追涨形态/动量档形成互补。
+    """
+    try:
+        data = enrich_indicators(df)
+    except Exception:
+        return {"score": 0.0, "signals": [], "dims": {}}
+    if len(data) < 20:
+        return {"score": 0.0, "signals": [], "dims": {}}
+
+    close = data["close"]
+    score = 0.0
+    signals: list = []
+    dims: Dict[str, float] = {}
+
+    # 1) RSI 超卖反弹 (20)
+    rsi = _last(data["rsi14"], 50.0)
+    if rsi < 30:
+        s = 20.0; signals.append(f"RSI超卖({rsi:.0f})")
+    elif rsi < 40:
+        s = 12.0
+    elif rsi <= 60:
+        s = 6.0
+    else:
+        s = 0.0
+    score += s; dims["rsi"] = round(s, 1)
+
+    # 2) KDJ 金叉 (20)
+    k = _last(data["kdj_k"], 50.0); j = _last(data["kdj_j"], 50.0)
+    k_prev = _last(data["kdj_k"].shift(1), k); d_prev = _last(data["kdj_d"].shift(1), _last(data["kdj_d"], 50.0))
+    golden = k_prev <= d_prev and k > _last(data["kdj_d"], 50.0)
+    if golden and j < 50:
+        s = 20.0; signals.append(f"KDJ金叉(J={j:.0f})")
+    elif j < 20:
+        s = 15.0; signals.append(f"KDJ超卖(J={j:.0f})")
+    elif golden:
+        s = 12.0; signals.append("KDJ金叉")
+    else:
+        s = 0.0
+    score += s; dims["kdj"] = round(s, 1)
+
+    # 3) MACD 金叉 (15)
+    macd = _last(data["macd_line"]); macd_sig = _last(data["macd_signal"])
+    macd_prev = _last(data["macd_line"].shift(1), macd); sig_prev = _last(data["macd_signal"].shift(1), macd_sig)
+    if macd_prev <= sig_prev and macd > macd_sig:
+        s = 15.0; signals.append("MACD金叉")
+    elif macd > macd_sig:
+        s = 8.0
+    else:
+        s = 0.0
+    score += s; dims["macd"] = round(s, 1)
+
+    # 4) 布林下轨支撑 (15)
+    bb_u = _last(data["bb_upper"]); bb_l = _last(data["bb_lower"]); c = _last(close)
+    width = bb_u - bb_l
+    pos = (c - bb_l) / width if width > 0 else 0.5
+    if pos < 0.2:
+        s = 15.0; signals.append("布林下轨支撑")
+    elif pos < 0.4:
+        s = 10.0
+    elif pos < 0.6:
+        s = 6.0
+    else:
+        s = 0.0
+    score += s; dims["bollinger"] = round(s, 1)
+
+    # 5) 放量上涨 (15)
+    vol_last = _last(data.get("volume", pd.Series(dtype=float)), 0.0)
+    vol_ma = _last(data["volume_ma20"], 0.0)
+    ret = _last(data["ret"], 0.0)
+    vr = vol_last / vol_ma if vol_ma > 0 else 0.0
+    if vr >= 1.5 and ret > 0:
+        s = 15.0; signals.append(f"放量上涨(量比{vr:.1f})")
+    elif vr >= 1.2 and ret > 0:
+        s = 10.0
+    elif ret > 0:
+        s = 5.0
+    else:
+        s = 0.0
+    score += s; dims["volume"] = round(s, 1)
+
+    # 6) 资金代理 CMF (15)：无逐股实时资金流时，用 Chaikin Money Flow 当代理
+    cmf = _last(data["cmf20"], 0.0)
+    if cmf > 0.1:
+        s = 15.0; signals.append("资金净流入(CMF)")
+    elif cmf > 0:
+        s = 8.0
+    else:
+        s = 0.0
+    score += s; dims["capital"] = round(s, 1)
+
+    return {"score": round(min(score, 100.0), 1), "signals": signals, "dims": dims, "rsi": round(rsi, 1)}
+
+
+def latest_atr(df: pd.DataFrame) -> float:
+    """Latest ATR(14, Wilder) value; 0.0 on any failure. Used to size trade-plan stops."""
+    try:
+        prev_close = df["close"].shift(1)
+        tr = pd.concat([
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        return float(_last(tr.ewm(alpha=1 / 14, adjust=False).mean()))
+    except Exception:
+        return 0.0
+
+
+def trade_plan(
+    price: float,
+    atr: float = 0.0,
+    *,
+    stop_mult: float = 2.0,
+    profit_mult: float = 3.0,
+    fallback_stop_pct: float = 0.05,
+) -> Dict[str, object]:
+    """把现价 + ATR 组装成可执行交易计划：买点 / 止损 / 止盈 / 盈亏比。
+
+    止损 = 现价 − stop_mult×ATR，止盈 = 现价 + profit_mult×ATR（默认 2×/3× → 盈亏比 1.5）。
+    无 ATR 时退回固定百分比（同样保持 1.5 盈亏比），basis 字段标明依据。
+    price 无效返回空 dict，调用方据此判断是否展示。
+    """
+    price = float(price or 0)
+    if price <= 0:
+        return {}
+    atr = float(atr or 0)
+    if atr > 0:
+        stop = price - stop_mult * atr
+        target = price + profit_mult * atr
+        basis = "atr"
+    else:
+        stop = price * (1 - fallback_stop_pct)
+        target = price * (1 + fallback_stop_pct * profit_mult / stop_mult)
+        basis = "pct"
+    stop = max(stop, 0.01)
+    downside = price - stop
+    upside = target - price
+    return {
+        "buy_price": round(price, 2),
+        "stop_loss": round(stop, 2),
+        "take_profit": round(target, 2),
+        "stop_loss_pct": round((stop / price - 1) * 100, 2),
+        "take_profit_pct": round((target / price - 1) * 100, 2),
+        "risk_reward_ratio": round(upside / downside, 2) if downside > 0 else None,
+        "atr": round(atr, 4) if atr > 0 else None,
+        "basis": basis,
+    }
+
+
 def ml_feature_snapshot(df: pd.DataFrame) -> Dict[str, float]:
     """Lightweight ML-style feature summary for downstream agent reasoning.
 

@@ -51,6 +51,17 @@ export interface QuantScreenResult {
   errors: Record<string, string>
 }
 
+export interface TradePlan {
+  buy_price: number
+  stop_loss: number
+  take_profit: number
+  stop_loss_pct: number
+  take_profit_pct: number
+  risk_reward_ratio: number | null
+  atr: number | null
+  basis: 'atr' | 'pct'
+}
+
 export interface QuantSmartPoolItem {
   symbol: string
   code: string
@@ -72,6 +83,7 @@ export interface QuantSmartPoolItem {
   reasons: string[]
   patterns?: PatternRecognitionResult['patterns']
   forecast?: ForecastResult
+  trade_plan?: TradePlan
 }
 
 export interface QuantSmartPoolResult {

@@ -23,8 +23,10 @@ from .factors import (
     composite_score,
     compute_factor_scores,
     enrich_indicators,
+    latest_atr,
     risk_metrics,
     signal_from_score,
+    trade_plan,
 )
 from .fundamentals import fundamentals as fetch_fundamentals
 from .fundamentals import profile as fetch_profile
@@ -485,6 +487,33 @@ def _investor_profile(
     }
 
 
+def valuation_peg(pe: object, growth: object) -> Dict[str, object]:
+    """PEG 估值分档：peg = PE / 净利润同比增速(%)。
+
+    <0.8 低估 / <1.2 合理 / <2 偏高 / ≥2 高估。
+    PE 或增速缺失/非正（亏损、负增长）→ 不适用，PEG 无意义。
+    growth 字段始终回填，便于上层用实时 PE 二次重算。
+    """
+    pe_f = _f(pe, 0.0)
+    g = _f(growth, 0.0)
+    growth_out = round(g, 2) if g else None
+    if pe_f <= 0 or g <= 0:
+        return {"available": False, "pe": round(pe_f, 2) if pe_f else None,
+                "growth": growth_out, "peg": None, "tier": "不适用",
+                "note": "亏损或负增长，PEG 不适用"}
+    peg = pe_f / g
+    if peg < 0.8:
+        tier, note = "低估", "PEG<0.8，增速较充分消化估值"
+    elif peg < 1.2:
+        tier, note = "合理", "PEG 接近 1，估值与增速匹配"
+    elif peg < 2.0:
+        tier, note = "偏高", "PEG 1.2–2，估值领先增速"
+    else:
+        tier, note = "高估", "PEG≥2，估值显著透支增速"
+    return {"available": True, "pe": round(pe_f, 2), "growth": growth_out,
+            "peg": round(peg, 2), "tier": tier, "note": note}
+
+
 # --- 主入口 -------------------------------------------------------------
 
 def build_stock_report(symbol: str) -> Dict[str, object]:
@@ -568,13 +597,15 @@ def build_stock_report(symbol: str) -> Dict[str, object]:
             "ma20": [None if pd.isna(v) else float(v) for v in ma20],
         }
 
-    # 价格观察位（基于历史波动率估算）
-    vol = _f(risk.get("volatility"), 0.0) if has_data else 0.0
-    stop_loss = round(last_close * (1 - vol * 0.5), 2) if vol and last_close else None
-    target = round(last_close * (1 + vol * 1.5), 2) if vol and last_close and signal in ("buy", "strong_buy") else None
-    entry_low = round(last_close * 0.98, 2) if last_close else None
-    entry_high = round(last_close * 1.02, 2) if last_close else None
+    # 可执行交易计划：现价为买点，止损=现价−2×ATR，止盈=现价+3×ATR（盈亏比 1.5）。
+    plan = trade_plan(_f(last_close), latest_atr(data) if has_data else 0.0)
+    stop_loss = plan.get("stop_loss")
+    target = plan.get("take_profit")
+    entry_low = round(last_close * 0.99, 2) if last_close else None
+    entry_high = round(last_close * 1.01, 2) if last_close else None
     capital_flow = _capital_flow_panel(data, factors) if has_data else {"available": False, "state": "暂无资金数据", "score": 0, "metrics": [], "notes": []}
+    # PEG 估值分档：研报阶段多无实时 PE（endpoint 会用实时 PE 二次重算），growth 用净利同比。
+    peg_valuation = valuation_peg(header.get("pe") or prof.get("pe"), fund.get("net_profit_yoy"))
     red_flags = _red_flags(header, fund, factors, risk, perf)
     investor_profile = _investor_profile(header, tech_score, fund_score, factors, risk, perf, red_flags)
 
@@ -593,10 +624,13 @@ def build_stock_report(symbol: str) -> Dict[str, object]:
             "target": target,
             "entry_low": entry_low,
             "entry_high": entry_high,
+            "risk_reward_ratio": plan.get("risk_reward_ratio"),
         },
+        "trade_plan": plan,
         "core_summary": _core_summary(header, tech_score, fund_score, signal, perf),
         "kline": kline,
         "valuation_forest": valuation,
+        "peg_valuation": peg_valuation,
         "key_indicators": _key_indicators(data) if has_data else [],
         "scores": {
             "technical": tech_score,

@@ -215,12 +215,16 @@
               <span class="av">{{ fmt(data.rating.entry_low) }} – {{ fmt(data.rating.entry_high) }}</span>
             </div>
             <div class="action-row" v-if="data.rating?.stop_loss">
-              <span class="ak">风险观察线</span>
-              <span class="av loss">{{ fmt(data.rating.stop_loss) }}</span>
+              <span class="ak">止损位</span>
+              <span class="av loss">{{ fmt(data.rating.stop_loss) }}<small v-if="data.trade_plan?.stop_loss_pct">（{{ data.trade_plan.stop_loss_pct }}%）</small></span>
             </div>
             <div class="action-row" v-if="data.rating?.target">
-              <span class="ak">弹性上沿</span>
-              <span class="av gain">{{ fmt(data.rating.target) }}</span>
+              <span class="ak">止盈位</span>
+              <span class="av gain">{{ fmt(data.rating.target) }}<small v-if="data.trade_plan?.take_profit_pct">（+{{ data.trade_plan.take_profit_pct }}%）</small></span>
+            </div>
+            <div class="action-row" v-if="data.rating?.risk_reward_ratio">
+              <span class="ak">盈亏比</span>
+              <span class="av">{{ data.rating.risk_reward_ratio }}:1<small>（{{ data.trade_plan?.basis === 'pct' ? '比例估算' : 'ATR 动态' }}）</small></span>
             </div>
             <div class="action-row" v-if="data.rating?.tracking_note">
               <span class="ak">跟踪备注</span>
@@ -257,6 +261,17 @@
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- PEG 估值分档 -->
+      <div class="card" v-if="data.peg_valuation">
+        <div class="card-title">PEG 估值</div>
+        <div class="peg-row">
+          <span class="peg-tier" :class="'peg-' + (data.peg_valuation.tier || '')">{{ data.peg_valuation.tier || '-' }}</span>
+          <span class="peg-val" v-if="data.peg_valuation.available">PEG {{ data.peg_valuation.peg }}</span>
+          <span class="peg-meta" v-if="data.peg_valuation.available">PE {{ data.peg_valuation.pe }} / 净利增速 {{ data.peg_valuation.growth }}%</span>
+        </div>
+        <div class="peg-note">{{ data.peg_valuation.note }}</div>
       </div>
 
       <!-- 市场表现 -->
@@ -925,6 +940,17 @@ onUnmounted(() => {
 .fi-name { font-size: 11px; color: var(--el-text-color-secondary); }
 .fi-val { font-size: 16px; font-weight: 700; margin: 4px 0 2px; }
 .fi-yoy { font-size: 12px; }
+
+/* PEG */
+.peg-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.peg-tier { font-size: 15px; font-weight: 700; padding: 2px 10px; border-radius: 4px; background: var(--el-fill-color); }
+.peg-tier.peg-低估 { color: #fff; background: var(--el-color-danger); }
+.peg-tier.peg-合理 { color: #fff; background: var(--el-color-primary); }
+.peg-tier.peg-偏高 { color: #fff; background: var(--el-color-warning); }
+.peg-tier.peg-高估 { color: #fff; background: var(--el-color-info); }
+.peg-val { font-size: 16px; font-weight: 700; }
+.peg-meta { font-size: 12px; color: var(--el-text-color-secondary); }
+.peg-note { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 6px; }
 
 /* Perf */
 .perf-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }

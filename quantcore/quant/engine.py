@@ -16,7 +16,7 @@ from .datalake import AKShareDataLake
 from .local_store import get_local_store
 from .screening import REASON_LABELS, exclusion_reason
 from .factor_agent import FactorResearchAgent
-from .factors import composite_score, compute_factor_scores, indicator_snapshot, latest_adx, ml_feature_snapshot, risk_metrics, signal_from_score
+from .factors import composite_score, compute_factor_scores, indicator_snapshot, latest_adx, latest_atr, ml_feature_snapshot, risk_metrics, signal_from_score, swing_short_score, trade_plan
 from .hmm import multi_asset_hmm
 from .integrations import integration_capabilities, kronos_style_forecast, recognize_patterns, run_akquant_backtest_adapter
 from .models import BacktestResult, ForecastResult, PatternRecognitionResult, QuantAnalysisResult, QuantPick
@@ -196,6 +196,7 @@ def _pattern_scan_one(payload: Dict[str, object]) -> Optional[Dict[str, object]]
             "signal": signal_from_score(score), "close": price, "pct_chg": pct_chg, "amount": amount,
             "factors": factors, "risk": risk, "patterns": matched, "matched_patterns": matched,
             "wyckoff": wyckoff,
+            "trade_plan": trade_plan(price, latest_atr(data)),
             "reasons": list(dict.fromkeys(reasons))[:8],
         }
     except Exception:
@@ -251,6 +252,11 @@ class QuantEngine:
         # Attach ATR / KDJ / ADX / chandelier stop for downstream trade plans & UI.
         try:
             latest.update(indicator_snapshot(data))
+        except Exception:
+            pass
+        # 组装可执行交易计划（买点/止损/止盈/盈亏比），复用上面算好的 ATR。
+        try:
+            latest["trade_plan"] = trade_plan(latest_close, latest.get("atr") or 0.0)
         except Exception:
             pass
         return QuantAnalysisResult(
@@ -449,11 +455,23 @@ class QuantEngine:
         except Exception:
             pass  # pipeline 不可用时静默降级，不影响结果
 
+        # 仅为最终展示的标的附交易计划：优先本地 K 线算 ATR，无本地数据则按比例兜底。
+        final_items = items[:safe_limit]
+        for it in final_items:
+            atr = 0.0
+            try:
+                kdata = load_local_kline(str(it.get("symbol") or ""), days=120)
+                if kdata is not None and not kdata.empty:
+                    atr = latest_atr(kdata)
+            except Exception:
+                atr = 0.0
+            it["trade_plan"] = trade_plan(_safe_float(it.get("close"), 0), atr)
+
         return _json_safe({
             "source": f"quant-engine-smart-pool:{pool_source}",
             "universe_size": len(pool),
             "analyzed": len(items),
-            "items": items[:safe_limit],
+            "items": final_items,
             "errors": errors,
         })
 
@@ -603,6 +621,7 @@ class QuantEngine:
                 "signal": signal_from_score(score), "close": price, "pct_chg": pct_chg, "amount": amount,
                 "factors": factors, "risk": risk, "patterns": matched, "matched_patterns": matched,
                 "wyckoff": wyckoff,
+                "trade_plan": trade_plan(price, latest_atr(data)),
                 "reasons": list(dict.fromkeys(reasons))[:8],
             }
 
@@ -655,6 +674,109 @@ class QuantEngine:
                 "均线粘合后向上发散", "地量洗盘后放量阳线", "挖坑后快速收复",
                 "压力位试盘后突破", "MACD底背离/空中加油", "小步快跑", "压盘不跌后放量突破代理",
             ],
+        })
+
+    def swing_pool(self, limit: int = 20, universe_limit: int = 5000, min_score: float = 60.0,
+                   exclude_fundamental: bool = True) -> Dict[str, object]:
+        """短线波段池（1-3 日持仓）：RSI 超卖 + KDJ/MACD 金叉 + 布林下轨 + 放量 + 资金代理的 6 维共振低吸选股。
+
+        与 smart_pool（实时动量）/ pattern_pool（拉升前形态）互补，偏好"超卖反弹"机会。
+        依赖本地 K 线计算指标；本地数据不足时返回提示。每只票附 ATR 买卖点。
+        """
+        safe_limit = max(1, min(limit, 50))
+        safe_universe_limit = max(safe_limit, min(universe_limit, 5000))
+        pool, pool_source = self._scan_pool(safe_universe_limit)
+        local_kline_count = get_local_store().kline_symbol_count()
+        if local_kline_count < 500:
+            return _json_safe({
+                "source": "local-not-ready", "pool_source": pool_source,
+                "local_kline_symbols": local_kline_count, "universe_size": len(pool),
+                "matched": 0, "items": [],
+                "note": "短线波段档需要本地日线（先在数据中心同步全市场 K 线）。",
+            })
+
+        symbols = [str(meta.get("symbol") or "").strip().zfill(6) for meta in pool if meta.get("symbol")]
+        snapshot = get_local_store().latest_snapshots()
+        quote_map = _fetch_tencent_quotes(symbols)
+
+        bad_fundamentals: set = set()
+        if exclude_fundamental:
+            try:
+                bad_fundamentals = get_local_store().load_bad_forecast_symbols()
+            except Exception:
+                bad_fundamentals = set()
+
+        # 第一层排除：名称 + 实时行情 + 基本面利空
+        excluded_reasons: Dict[str, int] = {}
+        candidates: List[Dict[str, object]] = []
+        for meta in pool:
+            symbol = str(meta.get("symbol") or "").strip().zfill(6)
+            if not symbol:
+                continue
+            quote = quote_map.get(symbol, {})
+            name = str(quote.get("name") or meta.get("name") or symbol)
+            reason = exclusion_reason(name, _safe_float(quote.get("price"), 0), _safe_float(quote.get("amount"), 0))
+            if not reason and symbol in bad_fundamentals:
+                reason = "fundamental_loss"
+            if reason:
+                excluded_reasons[reason] = excluded_reasons.get(reason, 0) + 1
+                continue
+            candidates.append(meta)
+
+        errors: Dict[str, str] = {}
+        items: List[Dict[str, object]] = []
+
+        def _swing_one(meta: Dict[str, object]) -> Optional[Dict[str, object]]:
+            symbol = str(meta.get("symbol") or "").strip().zfill(6)
+            data = load_local_kline(symbol, days=120)
+            if data is None or data.empty or len(data) < self.min_bars:
+                return None
+            swing = swing_short_score(data)
+            score = float(swing.get("score") or 0)
+            if score < min_score:
+                return None
+            quote = quote_map.get(symbol, {})
+            latest = data.iloc[-1]
+            price = _safe_float(quote.get("price"), _safe_float(latest.get("close"), 0))
+            pct_chg = _safe_float(quote.get("pct_chg"), 0)
+            amount = _safe_float(quote.get("amount"), _safe_float(latest.get("amount"), 0))
+            reasons = list(swing.get("signals") or [])
+            if pct_chg:
+                reasons.append(f"实时涨跌幅 {pct_chg:+.2f}%")
+            if amount:
+                reasons.append(f"成交额 {amount / 100000000:.2f}亿")
+            industry = str(meta.get("industry") or meta.get("board") or meta.get("sector") or "")
+            return {
+                "symbol": symbol, "code": symbol,
+                "name": quote.get("name") or meta.get("name") or symbol,
+                "market": meta.get("market") or "A股", "industry": industry, "board": industry,
+                "score": round(score, 1), "quant_score": round(score, 1), "swing_score": round(score, 1),
+                "swing_dims": swing.get("dims") or {},
+                "signal": signal_from_score(score), "close": price, "pct_chg": pct_chg, "amount": amount,
+                "hold_hint": "1-3 日",
+                "trade_plan": trade_plan(price, latest_atr(data)),
+                "reasons": list(dict.fromkeys(reasons))[:8],
+            }
+
+        with ThreadPoolExecutor(max_workers=max(8, min(24, (os.cpu_count() or 8) * 2))) as executor:
+            futures = {executor.submit(_swing_one, meta): str(meta.get("symbol") or "") for meta in candidates}
+            for future in as_completed(futures):
+                try:
+                    item = future.result()
+                    if item:
+                        items.append(item)
+                except Exception as exc:
+                    errors[futures[future]] = str(exc)
+
+        items.sort(key=lambda item: float(item.get("score") or 0), reverse=True)
+        return _json_safe({
+            "source": "local-swing-scan", "pool_source": pool_source,
+            "local_kline_symbols": local_kline_count, "universe_size": len(pool),
+            "excluded": sum(excluded_reasons.values()),
+            "excluded_reasons": {REASON_LABELS.get(k, k): v for k, v in excluded_reasons.items()},
+            "scanned": len(candidates), "analyzed": len(candidates) - len(errors),
+            "matched": len(items), "items": items[:safe_limit], "errors": errors,
+            "dimensions": ["RSI超卖", "KDJ金叉", "MACD金叉", "布林下轨", "放量上涨", "资金代理"],
         })
 
     def backtest(

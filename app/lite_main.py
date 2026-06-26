@@ -2143,6 +2143,14 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
         symbol = str(item.get("symbol") or item.get("code") or "").zfill(6)
         quote = quotes.get(symbol)
         _apply_realtime_quote(item, quote)
+        # 实时价刷新后按同一 ATR 重算交易计划，保持买点贴合现价。
+        tp = item.get("trade_plan")
+        if isinstance(tp, dict) and tp.get("buy_price") and item.get("close"):
+            try:
+                from quantcore.quant.factors import trade_plan as _trade_plan
+                item["trade_plan"] = _trade_plan(float(item["close"]), float(tp.get("atr") or 0.0))
+            except Exception:
+                pass
         if quote and quote.get("change_percent") is not None and item.get("reasons"):
             item["reasons"] = [
                 f"实时涨跌幅 {quote['change_percent']:+.2f}%" if str(reason).startswith("实时涨跌幅 ") else reason
@@ -2182,6 +2190,74 @@ def _smart_pool_task_cleanup(max_items: int = 20) -> None:
             lite_smart_pool_tasks.pop(task_id, None)
 
 
+async def _compute_lite_swing_pool(
+    limit: int,
+    universe: int,
+    cache_key: str,
+    task_id: str | None = None,
+) -> dict[str, Any]:
+    """短线波段档：调用量化引擎 6 维共振扫描，映射为智能推荐池响应（带 ATR 买卖点）。"""
+    _smart_pool_task_update(task_id, progress=30, phase="swing", message="扫描短线波段共振信号")
+    swing = await asyncio.to_thread(
+        lite_quant_engine.swing_pool, limit=limit, universe_limit=universe
+    )
+    items: list[dict[str, Any]] = []
+    for raw in swing.get("items") or []:
+        if not isinstance(raw, dict):
+            continue
+        symbol = str(raw.get("symbol") or raw.get("code") or "").strip().zfill(6)
+        if not re.fullmatch(r"\d{6}", symbol):
+            continue
+        score = float(raw.get("score") or 0)
+        items.append({
+            "symbol": symbol,
+            "code": symbol,
+            "name": raw.get("name") or symbol,
+            "market": raw.get("market") or "A股",
+            "industry": raw.get("industry") or raw.get("board") or "",
+            "close": float(raw.get("close") or 0),
+            "pct_chg": float(raw.get("pct_chg") or 0),
+            "amount": float(raw.get("amount") or 0),
+            "score": score,
+            "smart_score": score,
+            "quant_score": score,
+            "swing_score": float(raw.get("swing_score") or score),
+            "swing_dims": raw.get("swing_dims") or {},
+            "hold_hint": raw.get("hold_hint") or "1-3 日",
+            "grade": "短线波段",
+            "signal": raw.get("signal") or "",
+            "reasons": [str(r) for r in (raw.get("reasons") or []) if r][:8],
+            "trade_plan": raw.get("trade_plan") or {},
+        })
+    items = await _enrich_smart_pool_industries(items[:limit])
+    try:
+        from quantcore.quant import industry as _industry
+        await asyncio.to_thread(_industry.enrich_industries, items)
+    except Exception:
+        pass
+    response = {
+        "strategy": "swing_short",
+        "preset": {
+            "name": "短线波段共振",
+            "description": "RSI 超卖 + KDJ/MACD 金叉 + 布林下轨 + 放量 + 资金代理 6 维共振，偏好 1-3 日低吸反弹，附 ATR 买卖点。",
+        },
+        "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+        "universe_size": swing.get("universe_size") or len(items),
+        "analyzed": swing.get("analyzed") or len(items),
+        "matched": swing.get("matched") or len(items),
+        "items": items,
+        "note": swing.get("note"),
+        "dimensions": swing.get("dimensions") or [],
+        "source_note": "短线波段共振模型，研究与模拟使用，不构成投资建议。",
+    }
+    wrapped = {"success": True, "data": response, "message": "ok"}
+    if items:
+        _persistent_cache_set(cache_key, wrapped)
+        _cache_set(cache_key, wrapped)
+    _smart_pool_task_update(task_id, progress=95, phase="realtime", message="模型完成，刷新实时价格")
+    return await _enrich_smart_pool_realtime(wrapped)
+
+
 async def _compute_lite_smart_pool(
     strategy: str = "balanced",
     limit: int = 30,
@@ -2192,7 +2268,7 @@ async def _compute_lite_smart_pool(
     safe_limit = max(5, min(limit, 50))
     # Keep the interactive scan responsive; full-universe data sync is handled separately.
     safe_universe = max(safe_limit * 2, min(universe_limit, 1200))
-    cache_key = f"smart-pool:attack-v17-ai-factor:{strategy}:{safe_limit}:{safe_universe}"
+    cache_key = f"smart-pool:attack-v18-tradeplan:{strategy}:{safe_limit}:{safe_universe}"
     _smart_pool_task_update(task_id, progress=5, phase="cache", message="检查最近智能推荐缓存")
     cached = _cache_get(cache_key, 900)
     if cached:
@@ -2203,6 +2279,10 @@ async def _compute_lite_smart_pool(
         _cache_set(cache_key, persistent_cached)
         _smart_pool_task_update(task_id, progress=95, phase="realtime", message="历史缓存命中，刷新实时价格")
         return await _enrich_smart_pool_realtime(persistent_cached)
+
+    # 短线波段档：6 维共振低吸选股，独立于动量/AI 因子路径。
+    if strategy == "swing_short":
+        return await _compute_lite_swing_pool(safe_limit, safe_universe, cache_key, task_id)
 
     _smart_pool_task_update(task_id, progress=14, phase="ai_factor", message="读取 AI 因子候选池")
     ai_factor_pool = await asyncio.to_thread(_load_ai_factor_pool, safe_limit, safe_universe)
@@ -2276,6 +2356,7 @@ async def _compute_lite_smart_pool(
                 "latest_events": raw.get("latest_events") or [],
                 "forecast": raw.get("forecast") or {},
                 "patterns": raw.get("patterns") or [],
+                "trade_plan": raw.get("trade_plan") or {},
             }
             items.append(item)
 
@@ -5704,6 +5785,11 @@ async def stock_analysis(symbol: str, current_user=Depends(get_current_lite_user
             for key in ("pe", "pb", "total_mv", "circ_mv"):
                 if quote.get(key) is not None:
                     header[key] = quote[key]
+            # PEG 用实时 PE 二次重算（研报阶段拿不到实时 PE），growth 沿用研报里的净利同比。
+            if quote.get("pe") is not None:
+                from quantcore.quant.report_service import valuation_peg
+                pv = report.get("peg_valuation") or {}
+                report["peg_valuation"] = valuation_peg(quote.get("pe"), pv.get("growth"))
             if quote.get("total_mv"):
                 total_mv = float(quote["total_mv"])
                 header["market_cap_yi"] = round(total_mv / 1e8 if total_mv > 1_000_000 else total_mv, 2)
@@ -5724,12 +5810,18 @@ async def stock_analysis(symbol: str, current_user=Depends(get_current_lite_user
             rating = dict(report.get("rating") or {})
             if price:
                 price_f = float(price)
-                rating["entry_low"] = round(price_f * 0.98, 2)
-                rating["entry_high"] = round(price_f * 1.02, 2)
-                if rating.get("stop_loss"):
-                    rating["stop_loss"] = round(price_f * 0.90, 2)
-                if rating.get("target"):
-                    rating["target"] = round(price_f * 1.15, 2)
+                # 用实时价重算交易计划：复用研报里已算好的 ATR（盈亏比与依据不变），
+                # 而不是粗暴套固定 ±10%/+15%。
+                from quantcore.quant.factors import trade_plan as _trade_plan
+                prev_plan = report.get("trade_plan") or {}
+                plan = _trade_plan(price_f, float(prev_plan.get("atr") or 0.0))
+                if plan:
+                    rating["entry_low"] = round(price_f * 0.99, 2)
+                    rating["entry_high"] = round(price_f * 1.01, 2)
+                    rating["stop_loss"] = plan.get("stop_loss")
+                    rating["target"] = plan.get("take_profit")
+                    rating["risk_reward_ratio"] = plan.get("risk_reward_ratio")
+                    report["trade_plan"] = plan
                 report["rating"] = rating
     except Exception:
         pass

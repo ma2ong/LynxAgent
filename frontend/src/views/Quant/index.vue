@@ -48,6 +48,13 @@
               <p>系统自动综合量化分、趋势、动量、RSI、均线结构、突破信号、成交活跃度、预测因子和风险控制，直接生成当前更值得跟踪的候选股票。</p>
             </div>
             <div class="smart-inline-settings">
+              <label class="strategy-pick">
+                <span>选股模式</span>
+                <el-radio-group v-model="smartPoolForm.strategy" size="default">
+                  <el-radio-button label="balanced">全市场动量优选</el-radio-button>
+                  <el-radio-button label="swing_short">短线波段(1-3日)</el-radio-button>
+                </el-radio-group>
+              </label>
               <label>
                 <span>候选</span>
                 <el-input-number v-model="smartPoolForm.universe_limit" :min="50" :max="5000" :step="50" controls-position="right" />
@@ -138,6 +145,17 @@
               <el-table-column label="涨跌幅" width="90" align="right">
                 <template #default="{ row }">
                   <span :class="changeClass(row.pct_chg)">{{ signedPercent(row.pct_chg) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="买卖计划" width="156">
+                <template #default="{ row }">
+                  <div v-if="row.trade_plan && row.trade_plan.buy_price" class="trade-plan-cell">
+                    <span>买 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
+                    <span class="tp-stop">止损 {{ formatNumber(row.trade_plan.stop_loss) }}（{{ row.trade_plan.stop_loss_pct }}%）</span>
+                    <span class="tp-target">止盈 {{ formatNumber(row.trade_plan.take_profit) }}（+{{ row.trade_plan.take_profit_pct }}%）</span>
+                    <em>盈亏比 {{ row.trade_plan.risk_reward_ratio ?? '-' }}:1 · {{ row.trade_plan.basis === 'atr' ? 'ATR' : '比例' }}</em>
+                  </div>
+                  <span v-else>-</span>
                 </template>
               </el-table-column>
               <el-table-column label="入选理由" min-width="460">
@@ -279,6 +297,17 @@
               <el-table-column label="涨跌幅" width="90" align="right">
                 <template #default="{ row }">
                   <span :class="changeClass(row.pct_chg)">{{ signedPercent(row.pct_chg) }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="买卖计划" width="156">
+                <template #default="{ row }">
+                  <div v-if="row.trade_plan && row.trade_plan.buy_price" class="trade-plan-cell">
+                    <span>买 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
+                    <span class="tp-stop">止损 {{ formatNumber(row.trade_plan.stop_loss) }}（{{ row.trade_plan.stop_loss_pct }}%）</span>
+                    <span class="tp-target">止盈 {{ formatNumber(row.trade_plan.take_profit) }}（+{{ row.trade_plan.take_profit_pct }}%）</span>
+                    <em>盈亏比 {{ row.trade_plan.risk_reward_ratio ?? '-' }}:1 · {{ row.trade_plan.basis === 'atr' ? 'ATR' : '比例' }}</em>
+                  </div>
+                  <span v-else>-</span>
                 </template>
               </el-table-column>
               <el-table-column label="命中形态" min-width="320">
@@ -673,7 +702,7 @@ const screenSymbolsText = ref('600519\n000001\n300750')
 const screenForm = ref({ limit: 30 })
 const screenLoading = ref(false)
 const screenResult = ref<QuantScreenResult | null>(null)
-const smartPoolForm = ref({ limit: 20, universe_limit: 5000 })
+const smartPoolForm = ref({ limit: 20, universe_limit: 5000, strategy: 'balanced' })
 const smartPoolLoading = ref(false)
 const smartPoolResult = ref<QuantSmartPoolResult | null>(null)
 const smartPoolTask = ref<QuantSmartPoolTask | null>(null)
@@ -1045,7 +1074,7 @@ const loadSmartPool = async () => {
       finishSmartPoolTask()
       return
     }
-    const task = await quantApi.startSmartPoolTask(smartPoolForm.value.limit, smartPoolForm.value.universe_limit)
+    const task = await quantApi.startSmartPoolTask(smartPoolForm.value.limit, smartPoolForm.value.universe_limit, smartPoolForm.value.strategy)
     smartPoolTask.value = task
     screenResult.value = null
     selectedSmartRows.value = []
@@ -1399,6 +1428,8 @@ const openChart = async (row: any) => {
   display: flex;
   gap: 10px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
 
   label {
     display: flex;
@@ -1648,6 +1679,23 @@ const openChart = async (row: any) => {
 
 .capability-tag {
   margin: 0 6px 6px 0;
+}
+
+.trade-plan-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12px;
+  line-height: 1.5;
+
+  b { font-weight: 700; }
+  .tp-stop { color: var(--el-color-success); }
+  .tp-target { color: var(--el-color-danger); }
+  em {
+    font-style: normal;
+    color: var(--el-text-color-secondary);
+    font-size: 11px;
+  }
 }
 
 .mini-summary {

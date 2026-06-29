@@ -28,6 +28,11 @@ def test_norm_weibo_search_uses_title_and_zero_likes():
     assert it["url"] == "http://wb/1"
 
 
+def test_norm_prefers_text_over_title():
+    raw = {"text": "正文一二三四五", "title": "标题不该用", "author": "a", "url": "u"}
+    assert bkd._norm("微博", raw)["text"] == "正文一二三四五"
+
+
 def test_norm_twitter_carries_text_and_likes():
     raw = {"text": "X 财经观点一二三四", "author": "x1", "url": "http://x/1", "likes": "12"}
     it = bkd._norm("X", raw)
@@ -72,7 +77,8 @@ def test_collect_merges_three_sources_deduped(monkeypatch):
     assert len(out) == 3   # 多关键词重复抓同一 url 被去重
 
 
-def test_opencli_json_parses_subprocess_output(monkeypatch):
+def test_opencli_json_parses_subprocess_output(monkeypatch, tmp_path):
+    monkeypatch.setattr(bkd, "ROOT", tmp_path)   # 写临时目录，不碰真实 runtime/
     def fake_run(cmd, stdout, **kw):
         stdout.write('[{"author":"a","text":"hello world test","url":"u","likes":3}]')
         return None
@@ -81,7 +87,8 @@ def test_opencli_json_parses_subprocess_output(monkeypatch):
     assert out and out[0]["author"] == "a"
 
 
-def test_opencli_json_returns_empty_on_bad_json(monkeypatch):
+def test_opencli_json_returns_empty_on_bad_json(monkeypatch, tmp_path):
+    monkeypatch.setattr(bkd, "ROOT", tmp_path)
     def fake_run(cmd, stdout, **kw):
         stdout.write("not json")
         return None

@@ -29,7 +29,7 @@ SEARCH_TERMS = [
     "中际旭创", "寒武纪 算力", "宁德时代", "贵州茅台", "比亚迪",
     "A股 复盘", "A股 龙头 涨停",
 ]
-FINANCE_KEYWORDS = SEARCH_TERMS          # 微博 search 用，默认复用
+FINANCE_KEYWORDS = SEARCH_TERMS          # 微博 search 用，默认复用（测试 monkeypatch SEARCH_TERMS 后需同时 patch 本名）
 X_KOLS: list[str] = []                   # 推特 handle（twitter tweets <handle>）
 WEIBO_KOLS: list[str] = []               # 微博 @博主（weibo user-posts <id>）
 SEARCH_LIMIT = 12
@@ -99,7 +99,7 @@ def _norm(platform: str, raw: dict) -> dict:
 
 
 def _dedup_rank(items: list[dict], max_items: int) -> list[dict]:
-    """跨源去重（platform + url/id/文本哈希），丢弃过短文本，按 likes 粗排取前 max_items。"""
+    """同源去重（platform + url/id/文本哈希）；跨平台同链接不合并。丢弃过短文本，按 likes 粗排取前 max_items。"""
     seen: set = set()
     out: list[dict] = []
     for it in items:
@@ -123,6 +123,8 @@ def _sources(idxs, items: list[dict]) -> list[dict]:
         if not isinstance(i, int) or i < 0 or i >= len(items):
             continue
         it = items[i]
+        if not it.get("author"):
+            continue  # 丢弃空作者的垃圾条目（避免 handles 出现 "@"）
         key = it.get("url") or it.get("author")
         if key in seen:
             continue
@@ -267,7 +269,7 @@ def _agg_prompt(items: list[dict]) -> str:
         "}\n"
         "约束：最多 6 只个股，每只最多 2 个 blocks，other_topics 最多 3 条。"
         "summary≤40字、content≤30字。name 必须是真实存在的 A 股公司中文全称；找不到明确个股的不要编造。\n\n"
-        "推文：\n" + "\n".join(lines)
+        "内容：\n" + "\n".join(lines)
     )
 
 
@@ -283,7 +285,7 @@ def aggregate(items: list[dict]) -> dict | None:
     raw = llm.chat(_agg_prompt(items), sys_json, deep=True, max_tokens=4000)
     agg = llm._extract_json(raw) if raw else None
     if not isinstance(agg, dict):
-        print(f"  [error] LLM 聚合返回非 JSON（raw {len(raw)} 字）: {raw[:160]!r}", flush=True)
+        print(f"  [error] LLM 聚合返回非 JSON（raw {len(raw or '')} 字）: {(raw or '')[:160]!r}", flush=True)
         return None
     digest = _assemble(agg, items, resolve_beneficiaries)
     if not digest:

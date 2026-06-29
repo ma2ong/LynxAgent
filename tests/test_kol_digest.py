@@ -35,6 +35,23 @@ def test_norm_twitter_carries_text_and_likes():
     assert it["text"] == "X 财经观点一二三四" and it["likes"] == 12
 
 
+def test_opencli_json_parses_subprocess_output(monkeypatch):
+    def fake_run(cmd, stdout, **kw):
+        stdout.write('[{"author":"a","text":"hello world test","url":"u","likes":3}]')
+        return None
+    monkeypatch.setattr(bkd.subprocess, "run", fake_run)
+    out = bkd._opencli_json(["twitter", "search", "x"])
+    assert out and out[0]["author"] == "a"
+
+
+def test_opencli_json_returns_empty_on_bad_json(monkeypatch):
+    def fake_run(cmd, stdout, **kw):
+        stdout.write("not json")
+        return None
+    monkeypatch.setattr(bkd.subprocess, "run", fake_run)
+    assert bkd._opencli_json(["weibo", "search", "x"]) == []
+
+
 def test_assemble_matches_get_digest_contract():
     items = [
         {"platform": "X", "author": "x1", "url": "http://x/1", "text": "看多光模块一二三"},

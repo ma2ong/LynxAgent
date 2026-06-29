@@ -53,6 +53,26 @@ def _opencli_path() -> str:
     return "opencli"
 
 
+def _opencli_json(args: list[str]) -> list[dict]:
+    """跑 `opencli <args> -f json`，返回解析后的 list（任何失败返回 []）。
+    写临时文件再读，避免 stdin/管道破坏 JSON。"""
+    tmp = ROOT / "runtime" / "_kol_fetch.json"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            subprocess.run(
+                [_opencli_path(), *args, "-f", "json"],
+                stdout=f, stderr=subprocess.DEVNULL, timeout=90, check=False,
+            )
+        data = json.loads(tmp.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception as exc:
+        print(f"  [warn] opencli {' '.join(args)} failed: {exc}", flush=True)
+        return []
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def _as_int(v) -> int:
     try:
         return int(v)
@@ -177,25 +197,6 @@ def _assemble(agg: dict, items: list[dict], resolve) -> dict | None:
         "other_topics": other_topics,
         "sources_platform": platforms,
     }
-
-
-def _search(term: str, limit: int) -> list[dict]:
-    """opencli twitter search → list[tweet]。写文件再读，避免 stdin 管道破坏 JSON。"""
-    tmp = ROOT / "runtime" / "_kol_fetch.json"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            subprocess.run(
-                [_opencli_path(), "twitter", "search", term, "--filter", "live",
-                 "--limit", str(limit), "-f", "json"],
-                stdout=f, stderr=subprocess.DEVNULL, timeout=60, check=False,
-            )
-        data = json.loads(tmp.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except Exception as exc:
-        print(f"  [warn] search '{term}' failed: {exc}", flush=True)
-        return []
-    finally:
-        tmp.unlink(missing_ok=True)
 
 
 def collect() -> list[dict]:

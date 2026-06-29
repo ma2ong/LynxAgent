@@ -92,6 +92,26 @@ def _dedup_rank(items: list[dict], max_items: int) -> list[dict]:
     return out[:max_items]
 
 
+def _sources(idxs, items: list[dict]) -> list[dict]:
+    """把 LLM 输出的条目索引还原成真实来源；platform 取每条 item 真实平台（修硬编码 X bug）。"""
+    out, seen = [], set()
+    for i in idxs or []:
+        if not isinstance(i, int) or i < 0 or i >= len(items):
+            continue
+        it = items[i]
+        key = it.get("url") or it.get("author")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "platform": it.get("platform") or "未知",
+            "author": it.get("author") or "",
+            "url": it.get("url") or "",
+            "is_placeholder": not it.get("url"),
+        })
+    return out
+
+
 def _search(term: str, limit: int) -> list[dict]:
     """opencli twitter search → list[tweet]。写文件再读，避免 stdin 管道破坏 JSON。"""
     tmp = ROOT / "runtime" / "_kol_fetch.json"
@@ -174,19 +194,6 @@ def aggregate(tweets: list[dict]) -> dict | None:
     if not isinstance(agg, dict):
         print(f"  [error] LLM 聚合返回非 JSON（raw {len(raw)} 字）: {raw[:160]!r}", flush=True)
         return None
-
-    def _sources(idxs) -> list[dict]:
-        out, seen = [], set()
-        for i in idxs or []:
-            if not isinstance(i, int) or i < 0 or i >= len(tweets):
-                continue
-            t = tweets[i]
-            key = t["url"] or t["author"]
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append({"platform": "X", "author": t["author"], "url": t["url"], "is_placeholder": False})
-        return out
 
     stocks: list[dict] = []
     for s in agg.get("stocks") or []:

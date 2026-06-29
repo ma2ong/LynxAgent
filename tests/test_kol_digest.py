@@ -35,6 +35,19 @@ def test_norm_twitter_carries_text_and_likes():
     assert it["text"] == "X 财经观点一二三四" and it["likes"] == 12
 
 
+def test_sources_carries_real_platform_not_hardcoded_x():
+    items = [
+        {"platform": "X", "author": "x1", "url": "http://x/1"},
+        {"platform": "雪球", "author": "xq1", "url": "http://xq/1"},
+        {"platform": "微博", "author": "wb1", "url": ""},   # 无 url → is_placeholder
+    ]
+    srcs = bkd._sources([0, 1, 2], items)
+    plats = [s["platform"] for s in srcs]
+    assert plats == ["X", "雪球", "微博"]            # 不再全部 "X"
+    assert srcs[2]["is_placeholder"] is True        # 无 url 标占位
+    assert srcs[0]["is_placeholder"] is False
+
+
 def test_dedup_rank_cross_platform_kept_same_platform_deduped():
     items = [
         {"platform": "X", "author": "a", "text": "同链接不同平台一二三", "url": "u1", "likes": 1},

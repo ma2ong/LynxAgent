@@ -53,6 +53,27 @@ def _opencli_path() -> str:
     return "opencli"
 
 
+def _as_int(v) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _norm(platform: str, raw: dict) -> dict:
+    """把任一站点的一条原始记录归一为统一结构。
+    text 优先取 text，缺则取 title（微博 search 用 title）；likes 缺则 0；url 缺则空。"""
+    text = str(raw.get("text") or raw.get("title") or "").strip()
+    return {
+        "platform": platform,
+        "author": str(raw.get("author") or "").strip(),
+        "text": text[:180],
+        "url": str(raw.get("url") or ""),
+        "id": str(raw.get("id") or ""),
+        "likes": _as_int(raw.get("likes")),
+    }
+
+
 def _search(term: str, limit: int) -> list[dict]:
     """opencli twitter search → list[tweet]。写文件再读，避免 stdin 管道破坏 JSON。"""
     tmp = ROOT / "runtime" / "_kol_fetch.json"

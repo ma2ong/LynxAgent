@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""KOL 日报真实采集器：用 opencli 读 X(推特) → DeepSeek 按个股聚合 → 写 runtime/kol_digest.json。
+"""KOL 日报真实采集器：opencli 读 X(推特)/雪球/微博 → DeepSeek 按个股聚合 → 写 runtime/kol_digest.json。
 
-架构：本脚本在本地跑（opencli 复用 Chrome 的 x.com 登录会话），把当日推文聚合成
-digest JSON 落盘；后端 quantcore.quant.kol_rooms.get_digest() 读该文件（新鲜则用真实数据，
-否则降级占位）。X 优先，雪球/微博后续可在 collect() 里加来源。
+X 优先 + 雪球/微博补充；混合策略=热门兜底(search/hot)+名单增强(X_KOLS/WEIBO_KOLS/雪球feed)。
+后端 quantcore.quant.kol_rooms.get_digest() 读该文件（新鲜则用真实数据，否则降级占位）。
 
-用法（本地，需 Chrome 已登录 x.com + Browser Bridge 扩展）：
-    python scripts/build_kol_digest.py
-可在 SEARCH_TERMS / KOL_HANDLES 里增删跟踪对象。
+前置：Chrome 已登录 x.com / weibo.com / xueqiu.com + Browser Bridge 扩展（未登录的源静默返回空，由兜底/降级吸收）。
+用法（本地）：
+    python scripts/build_kol_digest.py            # 三源采集 → 生成 digest
+    python scripts/build_kol_digest.py --discover # 只列候选 KOL，挑 handle 填进 X_KOLS/WEIBO_KOLS
 """
 from __future__ import annotations
 
@@ -250,10 +250,10 @@ def collect() -> list[dict]:
 _AGG_SYS = "你是严谨的 A 股投研编辑，只基于给定推文，不编造个股，不夸大。只输出合法 JSON。"
 
 
-def _agg_prompt(tweets: list[dict]) -> str:
-    lines = [f"[{i}] @{t['author']}: {t['text']}" for i, t in enumerate(tweets)]
+def _agg_prompt(items: list[dict]) -> str:
+    lines = [f"[{i}] @{t['author']}: {t['text']}" for i, t in enumerate(items)]
     return (
-        "下面是从推特(X)采集的中文财经推文（已编号）。请：\n"
+        "下面是从 X / 雪球 / 微博 采集的中文财经内容（已编号）。请：\n"
         "1. 只保留与【A股个股】观点相关的，剔除加密货币/美股/广告/纯转发/无观点内容。\n"
         "2. 按个股聚合：每只被讨论的 A 股个股给出 综述 + 观点分类，每条引用支持它的推文编号。\n"
         "3. 给每只个股判断 stance(看多/看空/分歧/中性) 与 tag(热议/分歧/短线)。\n"
@@ -319,22 +319,36 @@ def discover() -> list[dict]:
 
     print(f"\n候选 KOL（共 {len(cands)}，已写 {CAND_PATH.name}）：", flush=True)
     print(f"{'平台':<5}{'作者':<22}{'次数':>5}{'累计赞':>8}  样例")
+    enc = sys.stdout.encoding or "utf-8"
     for c in cands[:30]:
-        print(f"{c['platform']:<5}{c['author']:<22}{c['count']:>5}{c['likes']:>8}  {c['sample']}")
+        try:
+            print(f"{c['platform']:<5}{c['author']:<22}{c['count']:>5}{c['likes']:>8}  {c['sample']}")
+        except UnicodeEncodeError:
+            safe = c["sample"].encode(enc, errors="replace").decode(enc)
+            print(f"{c['platform']:<5}{c['author']:<22}{c['count']:>5}{c['likes']:>8}  {safe}")
     return cands
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description="KOL 日报采集器（X 优先 + 雪球/微博补充）")
+    ap.add_argument("--discover", action="store_true", help="只列候选 KOL（不生成 digest）")
+    args = ap.parse_args()
+
     _load_env()
     sys.path.insert(0, str(ROOT))
-    print("采集推特 KOL 内容…", flush=True)
-    tweets = collect()
-    print(f"采集到 {len(tweets)} 条去重推文", flush=True)
-    if len(tweets) < 5:
-        print("推文太少，放弃生成（保留上次/占位）。", flush=True)
+
+    if args.discover:
+        discover()
+        return 0
+
+    print("采集 X / 雪球 / 微博 KOL 内容…", flush=True)
+    items = collect()
+    print(f"采集到 {len(items)} 条去重内容", flush=True)
+    if len(items) < 5:
+        print("内容太少，放弃生成（保留上次/占位）。", flush=True)
         return 1
     print("DeepSeek 聚合中…", flush=True)
-    digest = aggregate(tweets)
+    digest = aggregate(items)
     if not digest:
         return 1
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)

@@ -22,14 +22,16 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT_PATH = ROOT / "runtime" / "kol_digest.json"
 
 # ── 跟踪对象（可编辑）────────────────────────────────────────────────
-# 按个股名搜索信号最高；KOL_HANDLES 填入你偏好的 A 股博主 @handle（抓其发帖）。
+# 按个股名/关键词搜索是免名单兜底；X_KOLS/WEIBO_KOLS 填 handle 做名单增强。
 SEARCH_TERMS = [
     "中际旭创", "寒武纪 算力", "宁德时代", "贵州茅台", "比亚迪",
     "A股 复盘", "A股 龙头 涨停",
 ]
-KOL_HANDLES: list[str] = []  # 例：["caifui", "analyst_hk"] —— 会额外抓 from:<handle>
+FINANCE_KEYWORDS = SEARCH_TERMS          # 微博 search 用，默认复用
+X_KOLS: list[str] = []                   # 推特 handle（twitter tweets <handle>）
+WEIBO_KOLS: list[str] = []               # 微博 @博主（weibo user-posts <id>）
 SEARCH_LIMIT = 12
-MAX_TWEETS = 36
+MAX_ITEMS = 36                           # 跨源去重后保留上限
 
 
 def _load_env() -> None:
@@ -199,29 +201,48 @@ def _assemble(agg: dict, items: list[dict], resolve) -> dict | None:
     }
 
 
+def _collect_x() -> list[dict]:
+    items = []
+    for term in SEARCH_TERMS:
+        for raw in _opencli_json(["twitter", "search", term, "--filter", "live", "--limit", str(SEARCH_LIMIT)]):
+            items.append(_norm("X", raw))
+    for h in X_KOLS:
+        for raw in _opencli_json(["twitter", "tweets", h, "--limit", str(SEARCH_LIMIT)]):
+            items.append(_norm("X", raw))
+    return items
+
+
+def _collect_xueqiu() -> list[dict]:
+    items = []
+    for raw in _opencli_json(["xueqiu", "hot", "--limit", str(SEARCH_LIMIT)]):
+        items.append(_norm("雪球", raw))
+    for raw in _opencli_json(["xueqiu", "feed", "--page", "1", "--limit", str(SEARCH_LIMIT)]):
+        items.append(_norm("雪球", raw))
+    return items
+
+
+def _collect_weibo() -> list[dict]:
+    items = []
+    for term in FINANCE_KEYWORDS:
+        for raw in _opencli_json(["weibo", "search", term, "--limit", str(SEARCH_LIMIT)]):
+            items.append(_norm("微博", raw))
+    for h in WEIBO_KOLS:
+        for raw in _opencli_json(["weibo", "user-posts", h, "--limit", str(SEARCH_LIMIT)]):
+            items.append(_norm("微博", raw))
+    return items
+
+
 def collect() -> list[dict]:
-    """采集并按 id 去重，截断正文，取最近 MAX_TWEETS 条。"""
-    seen: dict[str, dict] = {}
-    queries = list(SEARCH_TERMS) + [f"from:{h}" for h in KOL_HANDLES]
-    for q in queries:
-        print(f"  搜索 {q} …", flush=True)
-        for t in _search(q, SEARCH_LIMIT):
-            tid = str(t.get("id") or "")
-            if not tid or tid in seen:
-                continue
-            text = str(t.get("text") or "").strip()
-            if len(text) < 8:
-                continue
-            seen[tid] = {
-                "author": str(t.get("author") or ""),
-                "text": text[:180],
-                "url": str(t.get("url") or ""),
-                "likes": t.get("likes") or 0,
-            }
-    tweets = list(seen.values())
-    # 按点赞粗排，取前 MAX_TWEETS（高互动信号更强）
-    tweets.sort(key=lambda x: int(x.get("likes") or 0), reverse=True)
-    return tweets[:MAX_TWEETS]
+    """三源采集 → 跨源去重粗排。每源独立 try/except，一个挂不影响其他。"""
+    items: list[dict] = []
+    for name, fn in (("X", _collect_x), ("雪球", _collect_xueqiu), ("微博", _collect_weibo)):
+        try:
+            got = fn()
+            print(f"  {name}: {len(got)} 条", flush=True)
+            items.extend(got)
+        except Exception as exc:
+            print(f"  [warn] {name} 采集失败: {exc}", flush=True)
+    return _dedup_rank(items, MAX_ITEMS)
 
 
 _AGG_SYS = "你是严谨的 A 股投研编辑，只基于给定推文，不编造个股，不夸大。只输出合法 JSON。"

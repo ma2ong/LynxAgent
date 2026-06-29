@@ -35,6 +35,23 @@ def test_norm_twitter_carries_text_and_likes():
     assert it["text"] == "X 财经观点一二三四" and it["likes"] == 12
 
 
+def test_collect_merges_three_sources_deduped(monkeypatch):
+    def fake_oj(args):
+        if args[:2] == ["twitter", "search"]:
+            return [{"author": "x1", "text": "X 财经观点一二三四", "url": "http://x/1", "likes": 10}]
+        if args[:2] == ["xueqiu", "hot"]:
+            return [{"author": "xq1", "text": "雪球热门观点一二三", "url": "http://xq/1", "likes": 5}]
+        if args[:2] == ["weibo", "search"]:
+            return [{"author": "wb1", "title": "微博财经标题一二三", "url": "http://wb/1"}]
+        return []  # feed / tweets / user-posts 空（无名单）
+    monkeypatch.setattr(bkd, "_opencli_json", fake_oj)
+    monkeypatch.setattr(bkd, "X_KOLS", [])
+    monkeypatch.setattr(bkd, "WEIBO_KOLS", [])
+    out = bkd.collect()
+    assert {it["platform"] for it in out} == {"X", "雪球", "微博"}
+    assert len(out) == 3   # 多关键词重复抓同一 url 被去重
+
+
 def test_opencli_json_parses_subprocess_output(monkeypatch):
     def fake_run(cmd, stdout, **kw):
         stdout.write('[{"author":"a","text":"hello world test","url":"u","likes":3}]')

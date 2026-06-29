@@ -11,6 +11,7 @@ digest JSON 落盘；后端 quantcore.quant.kol_rooms.get_digest() 读该文件�
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -20,6 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_PATH = ROOT / "runtime" / "kol_digest.json"
+CAND_PATH = ROOT / "runtime" / "kol_candidates.json"   # --discover 候选输出
 
 # ── 跟踪对象（可编辑）────────────────────────────────────────────────
 # 按个股名/关键词搜索是免名单兜底；X_KOLS/WEIBO_KOLS 填 handle 做名单增强。
@@ -287,6 +289,39 @@ def aggregate(items: list[dict]) -> dict | None:
     if not digest:
         print("  [error] 聚合后无可用个股（信号不足）", flush=True)
     return digest
+
+
+def discover() -> list[dict]:
+    """按关键词搜 X/微博，按作者聚合候选 KOL（不调 LLM、不写 digest）。供人工挑 handle。"""
+    from collections import defaultdict
+    agg: dict = defaultdict(lambda: {"count": 0, "likes": 0, "sample": ""})
+
+    def _tally(platform: str, raws: list[dict]) -> None:
+        for raw in raws:
+            it = _norm(platform, raw)
+            if not it["author"]:
+                continue
+            slot = agg[(platform, it["author"])]
+            slot["count"] += 1
+            slot["likes"] += it["likes"]
+            if not slot["sample"]:
+                slot["sample"] = it["text"][:60]
+
+    for term in SEARCH_TERMS:
+        _tally("X", _opencli_json(["twitter", "search", term, "--filter", "live", "--limit", str(SEARCH_LIMIT)]))
+    for term in FINANCE_KEYWORDS:
+        _tally("微博", _opencli_json(["weibo", "search", term, "--limit", str(SEARCH_LIMIT)]))
+
+    cands = [{"platform": p, "author": a, **v} for (p, a), v in agg.items()]
+    cands.sort(key=lambda x: (x["count"], x["likes"]), reverse=True)
+    CAND_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CAND_PATH.write_text(json.dumps(cands, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"\n候选 KOL（共 {len(cands)}，已写 {CAND_PATH.name}）：", flush=True)
+    print(f"{'平台':<5}{'作者':<22}{'次数':>5}{'累计赞':>8}  样例")
+    for c in cands[:30]:
+        print(f"{c['platform']:<5}{c['author']:<22}{c['count']:>5}{c['likes']:>8}  {c['sample']}")
+    return cands
 
 
 def main() -> int:

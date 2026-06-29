@@ -35,6 +35,26 @@ def test_norm_twitter_carries_text_and_likes():
     assert it["text"] == "X 财经观点一二三四" and it["likes"] == 12
 
 
+def test_discover_groups_authors_and_writes_file(monkeypatch, tmp_path):
+    def fake_oj(args):
+        if args[:2] == ["twitter", "search"]:
+            return [{"author": "tw_kol", "text": "财经观点一二三四五", "url": "http://x/1", "likes": 7}]
+        if args[:2] == ["weibo", "search"]:
+            return [{"author": "wb_kol", "title": "微博财经一二三四", "url": "http://wb/1"}]
+        return []
+    monkeypatch.setattr(bkd, "_opencli_json", fake_oj)
+    monkeypatch.setattr(bkd, "SEARCH_TERMS", ["t1", "t2"])
+    monkeypatch.setattr(bkd, "FINANCE_KEYWORDS", ["t1"])
+    monkeypatch.setattr(bkd, "CAND_PATH", tmp_path / "kol_candidates.json")
+    cands = bkd.discover()
+    by_author = {c["author"]: c for c in cands}
+    assert by_author["tw_kol"]["platform"] == "X"
+    assert by_author["tw_kol"]["count"] == 2      # 两个关键词各命中一次
+    assert by_author["tw_kol"]["likes"] == 14
+    assert by_author["wb_kol"]["count"] == 1
+    assert (tmp_path / "kol_candidates.json").exists()
+
+
 def test_collect_merges_three_sources_deduped(monkeypatch):
     def fake_oj(args):
         if args[:2] == ["twitter", "search"]:

@@ -33,3 +33,15 @@ def test_norm_twitter_carries_text_and_likes():
     it = bkd._norm("X", raw)
     assert it["platform"] == "X" and it["author"] == "x1"
     assert it["text"] == "X 财经观点一二三四" and it["likes"] == 12
+
+
+def test_dedup_rank_cross_platform_kept_same_platform_deduped():
+    items = [
+        {"platform": "X", "author": "a", "text": "同链接不同平台一二三", "url": "u1", "likes": 1},
+        {"platform": "微博", "author": "b", "text": "同链接不同平台一二三", "url": "u1", "likes": 9},
+        {"platform": "X", "author": "a", "text": "同链接不同平台一二三", "url": "u1", "likes": 1},  # 与第1条重复
+        {"platform": "X", "author": "c", "text": "短", "url": "u2", "likes": 99},  # 文本太短被丢
+    ]
+    out = bkd._dedup_rank(items, 10)
+    assert len(out) == 2                      # 跨平台保留、同平台同链接去重、短文本丢弃
+    assert out[0]["platform"] == "微博"        # likes 高在前

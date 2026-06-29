@@ -74,6 +74,24 @@ def _norm(platform: str, raw: dict) -> dict:
     }
 
 
+def _dedup_rank(items: list[dict], max_items: int) -> list[dict]:
+    """跨源去重（platform + url/id/文本哈希），丢弃过短文本，按 likes 粗排取前 max_items。"""
+    seen: set = set()
+    out: list[dict] = []
+    for it in items:
+        if len(it.get("text") or "") < 8:
+            continue
+        key = (it.get("platform"),
+               it.get("url") or it.get("id")
+               or hash((it.get("author"), (it.get("text") or "")[:40])))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    out.sort(key=lambda x: _as_int(x.get("likes")), reverse=True)
+    return out[:max_items]
+
+
 def _search(term: str, limit: int) -> list[dict]:
     """opencli twitter search → list[tweet]。写文件再读，避免 stdin 管道破坏 JSON。"""
     tmp = ROOT / "runtime" / "_kol_fetch.json"

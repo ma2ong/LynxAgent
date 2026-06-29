@@ -112,6 +112,73 @@ def _sources(idxs, items: list[dict]) -> list[dict]:
     return out
 
 
+def _assemble(agg: dict, items: list[dict], resolve) -> dict | None:
+    """把 LLM 解析出的 agg(dict) + 采集 items 组装成 digest；resolve 为名称→代码解析器（注入便于测试）。"""
+    stocks: list[dict] = []
+    for s in agg.get("stocks") or []:
+        name = str(s.get("name") or "").strip()
+        resolved = resolve([name])
+        if not resolved:
+            continue  # 解析不到真实代码的丢弃，绝不编造
+        code, full = resolved[0]["symbol"], resolved[0]["name"]
+        view_blocks, authors, tids = [], set(), set()
+        for b in s.get("blocks") or []:
+            srcs = _sources(b.get("tweets"), items)
+            if not srcs:
+                continue
+            for src in srcs:
+                authors.add(src["author"])
+            tids.update(b.get("tweets") or [])
+            view_blocks.append({
+                "kind": str(b.get("kind") or "多空综合分析"),
+                "count": len(b.get("tweets") or []),
+                "handles": [f"@{a}" for a in {src['author'] for src in srcs}][:4],
+                "content": str(b.get("content") or "").strip(),
+                "sources": srcs,
+            })
+        if not view_blocks:
+            continue
+        stocks.append({
+            "code": code, "name": full,
+            "group": str(s.get("group") or "热议"),
+            "tag": str(s.get("tag") or "热议"),
+            "stance": str(s.get("stance") or "中性"),
+            "kol_count": len(authors), "post_count": len(tids),
+            "summary": str(s.get("summary") or "").strip(),
+            "view_blocks": view_blocks,
+        })
+
+    if not stocks:
+        return None
+
+    other_topics = []
+    for t in agg.get("other_topics") or []:
+        other_topics.append({
+            "title": str(t.get("title") or "").strip(),
+            "tag": str(t.get("tag") or "宏观"),
+            "content": str(t.get("content") or "").strip(),
+            "sources": _sources(t.get("tweets"), items),
+        })
+
+    stocks.sort(key=lambda x: (x["kol_count"], x["post_count"]), reverse=True)
+    attention = [{"code": s["code"], "name": s["name"],
+                  "kol_count": s["kol_count"], "post_count": s["post_count"]} for s in stocks[:6]]
+    all_authors = {src["author"] for s in stocks for b in s["view_blocks"] for src in b["sources"]}
+    platforms = sorted({src["platform"] for s in stocks for b in s["view_blocks"] for src in b["sources"]})
+    hottest = attention[0] if attention else None
+    return {
+        "is_mock": False,
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "generated_at": datetime.now().strftime("%Y/%m/%d %H:%M"),
+        "stats": {"kol_total": len(all_authors), "post_total": len(items), "hours": 24},
+        "hottest": hottest,
+        "attention_rank": attention,
+        "stocks": stocks,
+        "other_topics": other_topics,
+        "sources_platform": platforms,
+    }
+
+
 def _search(term: str, limit: int) -> list[dict]:
     """opencli twitter search → list[tweet]。写文件再读，避免 stdin 管道破坏 JSON。"""
     tmp = ROOT / "runtime" / "_kol_fetch.json"
@@ -180,8 +247,8 @@ def _agg_prompt(tweets: list[dict]) -> str:
     )
 
 
-def aggregate(tweets: list[dict]) -> dict | None:
-    """调 DeepSeek 聚合，再把个股名解析成代码、把推文编号还原成真实来源。"""
+def aggregate(items: list[dict]) -> dict | None:
+    """调 DeepSeek 聚合，再把个股名解析成代码、把索引还原成真实来源。"""
     from quantcore.quant import llm
     from quantcore.quant.serenity_resolve import resolve_beneficiaries
 
@@ -189,77 +256,15 @@ def aggregate(tweets: list[dict]) -> dict | None:
         print("  [error] LLM 不可用（缺 DEEPSEEK_API_KEY）", flush=True)
         return None
     sys_json = _AGG_SYS + "\n你必须只输出合法 JSON，不要任何解释或 markdown 代码块标记。"
-    raw = llm.chat(_agg_prompt(tweets), sys_json, deep=True, max_tokens=4000)
+    raw = llm.chat(_agg_prompt(items), sys_json, deep=True, max_tokens=4000)
     agg = llm._extract_json(raw) if raw else None
     if not isinstance(agg, dict):
         print(f"  [error] LLM 聚合返回非 JSON（raw {len(raw)} 字）: {raw[:160]!r}", flush=True)
         return None
-
-    stocks: list[dict] = []
-    for s in agg.get("stocks") or []:
-        name = str(s.get("name") or "").strip()
-        resolved = resolve_beneficiaries([name])
-        if not resolved:
-            continue  # 解析不到真实代码的丢弃，绝不编造
-        code, full = resolved[0]["symbol"], resolved[0]["name"]
-        view_blocks, authors, tids = [], set(), set()
-        for b in s.get("blocks") or []:
-            srcs = _sources(b.get("tweets"))
-            if not srcs:
-                continue
-            for src in srcs:
-                authors.add(src["author"])
-            tids.update(b.get("tweets") or [])
-            view_blocks.append({
-                "kind": str(b.get("kind") or "多空综合分析"),
-                "count": len(b.get("tweets") or []),
-                "handles": [f"@{a}" for a in {src['author'] for src in srcs}][:4],
-                "content": str(b.get("content") or "").strip(),
-                "sources": srcs,
-            })
-        if not view_blocks:
-            continue
-        stocks.append({
-            "code": code, "name": full,
-            "group": str(s.get("group") or "热议"),
-            "tag": str(s.get("tag") or "热议"),
-            "stance": str(s.get("stance") or "中性"),
-            "kol_count": len(authors), "post_count": len(tids),
-            "summary": str(s.get("summary") or "").strip(),
-            "view_blocks": view_blocks,
-        })
-
-    if not stocks:
-        print("  [error] 聚合后无可用个股（推文信号不足）", flush=True)
-        return None
-
-    other_topics = []
-    for t in agg.get("other_topics") or []:
-        srcs = _sources(t.get("tweets"))
-        other_topics.append({
-            "title": str(t.get("title") or "").strip(),
-            "tag": str(t.get("tag") or "宏观"),
-            "content": str(t.get("content") or "").strip(),
-            "sources": srcs,
-        })
-
-    stocks.sort(key=lambda x: (x["kol_count"], x["post_count"]), reverse=True)
-    attention = [{"code": s["code"], "name": s["name"],
-                  "kol_count": s["kol_count"], "post_count": s["post_count"]} for s in stocks[:6]]
-    all_authors = {src["author"] for s in stocks for b in s["view_blocks"] for src in b["sources"]}
-    hottest = attention[0] if attention else None
-
-    return {
-        "is_mock": False,
-        "date": datetime.now().strftime("%Y-%m-%d"),
-        "generated_at": datetime.now().strftime("%Y/%m/%d %H:%M"),
-        "stats": {"kol_total": len(all_authors), "post_total": len(tweets), "hours": 24},
-        "hottest": hottest,
-        "attention_rank": attention,
-        "stocks": stocks,
-        "other_topics": other_topics,
-        "sources_platform": ["X"],
-    }
+    digest = _assemble(agg, items, resolve_beneficiaries)
+    if not digest:
+        print("  [error] 聚合后无可用个股（信号不足）", flush=True)
+    return digest
 
 
 def main() -> int:

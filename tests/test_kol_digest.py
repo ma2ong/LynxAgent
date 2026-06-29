@@ -35,6 +35,43 @@ def test_norm_twitter_carries_text_and_likes():
     assert it["text"] == "X 财经观点一二三四" and it["likes"] == 12
 
 
+def test_assemble_matches_get_digest_contract():
+    items = [
+        {"platform": "X", "author": "x1", "url": "http://x/1", "text": "看多光模块一二三"},
+        {"platform": "雪球", "author": "xq1", "url": "http://xq/1", "text": "估值偏高一二三"},
+    ]
+    agg = {
+        "stocks": [{
+            "name": "中际旭创", "group": "多头共识", "tag": "热议", "stance": "看多",
+            "summary": "需求未见顶",
+            "blocks": [
+                {"kind": "买入逻辑", "content": "1.6T 放量", "tweets": [0]},
+                {"kind": "卖出 / 风险逻辑", "content": "估值高", "tweets": [1]},
+            ],
+        }],
+        "other_topics": [{"title": "算力 capex", "tag": "赛道", "content": "偏乐观", "tweets": [0]}],
+    }
+
+    def fake_resolve(names):
+        return [{"symbol": "300308", "name": "中际旭创"}] if names and names[0] == "中际旭创" else []
+
+    d = bkd._assemble(agg, items, fake_resolve)
+    assert d["is_mock"] is False
+    assert {"stats", "hottest", "attention_rank", "stocks", "other_topics", "sources_platform"} <= set(d)
+    s = d["stocks"][0]
+    assert s["code"] == "300308" and s["name"] == "中际旭创"
+    plats = {src["platform"] for b in s["view_blocks"] for src in b["sources"]}
+    assert plats == {"X", "雪球"}                 # 两个平台来源都在
+    assert d["sources_platform"] == ["X", "雪球"]  # 并集（排序后）
+
+
+def test_assemble_returns_none_when_no_resolvable_stock():
+    items = [{"platform": "X", "author": "x1", "url": "u", "text": "随便一二三四五"}]
+    agg = {"stocks": [{"name": "查无此股", "blocks": [{"kind": "x", "content": "y", "tweets": [0]}]}],
+           "other_topics": []}
+    assert bkd._assemble(agg, items, lambda names: []) is None
+
+
 def test_sources_carries_real_platform_not_hardcoded_x():
     items = [
         {"platform": "X", "author": "x1", "url": "http://x/1"},

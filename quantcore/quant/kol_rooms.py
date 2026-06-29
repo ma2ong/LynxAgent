@@ -22,7 +22,14 @@ get_digest() 现返回占位数据。后续替换为真实采集：
 """
 from __future__ import annotations
 
+import json
+import time
+from pathlib import Path
 from typing import Dict
+
+# 真实采集结果落盘路径（由 scripts/build_kol_digest.py 生成）。
+_DIGEST_FILE = Path(__file__).resolve().parents[2] / "runtime" / "kol_digest.json"
+_DIGEST_MAX_AGE = 36 * 3600  # 超过 36 小时视为过期，降级占位
 
 
 def _src(platform: str, author: str, url: str = "") -> Dict:
@@ -131,5 +138,13 @@ _MOCK_DIGEST: Dict = {
 
 
 def get_digest(date: str = "") -> Dict:
-    """当日 KOL 日报。date 预留（真实接入后按日期取库）。TODO: 改为真实采集库读取。"""
+    """当日 KOL 日报：优先读真实采集结果(runtime/kol_digest.json，由 build_kol_digest.py 生成)，
+    无/过期则降级占位。date 预留（真实库按日期取）。"""
+    try:
+        if _DIGEST_FILE.exists() and (time.time() - _DIGEST_FILE.stat().st_mtime) < _DIGEST_MAX_AGE:
+            data = json.loads(_DIGEST_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("stocks"):
+                return data
+    except Exception:
+        pass
     return _MOCK_DIGEST

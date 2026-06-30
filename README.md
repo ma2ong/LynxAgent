@@ -47,24 +47,34 @@ flowchart TD
 
 ## 🚀 快速开始
 
-### 后端
+### 一键启动（推荐，Windows）
+
+```powershell
+.\scripts\start_lite.ps1
+```
+
+后端 `app.lite_main` 跑 **8001**、前端 vite 跑 **5173**，起完自动打开浏览器。端口已占用则跳过（幂等，可重复执行）。常用参数：`-NoOpen`（不弹浏览器）、`-NoBackend` / `-NoFrontend`（只起一边）、`-BackendPort` / `-FrontendPort`（改端口，前端代理自动跟随）。首次需先在 `frontend/` 执行过 `npm install`。
+
+### 手动启动
+
+#### 后端
 
 ```bash
 pip install -e .
 # 可选：.env 设置 JWT_SECRET；MONGO_URI（不设则关闭行业富集，不影响主流程）
-uvicorn app.lite_main:app --reload --port 8000
+uvicorn app.lite_main:app --reload --port 8001
 ```
 
-### 前端
+#### 前端
 
 ```bash
 cd frontend
 npm install
-npm run dev      # 开发
+npm run dev      # 开发（vite 5173，/api 代理至后端 8001）
 npm run build    # 生产构建
 ```
 
-前端通过 `VITE_API_BASE_URL` 指向后端（如 `http://localhost:8000`）。
+前端开发期 `/api` 经 vite 代理至后端（`VITE_DEV_API_TARGET`，默认 `http://127.0.0.1:8001`）。
 
 ## 📁 目录结构
 

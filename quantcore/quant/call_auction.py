@@ -305,6 +305,18 @@ def compute_call_auction(
         })
     candidates.sort(key=lambda c: (c["score"], c.get("resonance", 0)), reverse=True)
 
+    # 强弱排序可见化：名次(1=最强) + 综合强度(40~100，随名次递减) + 推荐档位。
+    top_candidates = candidates[:buy_limit]
+    if top_candidates:
+        scores = [c["score"] for c in top_candidates]
+        smax, smin = max(scores), min(scores)
+        span = (smax - smin) or 1.0
+        for idx, c in enumerate(top_candidates):
+            c["rank"] = idx + 1
+            c["strength"] = round(40 + (c["score"] - smin) / span * 60)
+            ratio = c["score"] / (smax or 1.0)
+            c["tier"] = "最强推荐" if ratio >= 0.9 else ("强推荐" if ratio >= 0.78 else "推荐")
+
     dynamic_hot = [
         {"name": name, "trend_pct": score}
         for name, score in sorted(hot.items(), key=lambda kv: kv[1], reverse=True)
@@ -313,7 +325,7 @@ def compute_call_auction(
         "available": True,
         "overview": overview,
         "hot_sectors": hot_sectors[:8],
-        "buy_candidates": candidates[:buy_limit],
+        "buy_candidates": top_candidates,
         "gated_by_hot_sector": gating,
         "gating_mode": "dynamic_trend" if use_dynamic else ("static_tech" if gating else "off"),
         "dynamic_hot_industries": dynamic_hot,

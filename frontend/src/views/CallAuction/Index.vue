@@ -87,18 +87,22 @@
 
         <!-- 竞价买入推荐 -->
         <section class="panel">
-          <div class="panel-title">竞价买入候选 <em>热门科技板块 · 健康高开 1.5%–7%，点击进深研</em></div>
-          <div v-if="!data.buy_candidates.length" class="empty">当日热门科技板块无符合条件的高开候选（弱势竞价）</div>
+          <div class="panel-title">竞价买入候选 <em>近段强势板块 · 由强到弱排序，点击进深研</em></div>
+          <div v-if="!data.buy_candidates.length" class="empty">当日近段强势板块无符合条件的高开候选（弱势竞价）</div>
           <button
             v-for="c in data.buy_candidates" :key="c.code"
-            type="button" class="cand-card" @click="openStock(c.code)"
+            type="button" class="cand-card" :class="{ top: c.rank === 1 }" @click="openStock(c.code)"
           >
+            <span class="cc-rank" :class="rankClass(c.rank)">{{ c.rank }}</span>
             <div class="cc-l">
               <div class="cc-name">{{ c.name }}<span class="cc-code">{{ c.code }}</span>
                 <span v-if="c.theme" class="theme-tag">{{ c.theme }}</span>
-                <span class="grab" :class="grabClass(c.grab)">{{ c.grab }}</span>
+                <span v-if="c.tier" class="tier" :class="tierClass(c.tier)">{{ c.tier }}</span>
               </div>
               <div class="cc-reasons">{{ c.reasons.join(' · ') }}</div>
+              <span v-if="c.strength != null" class="cc-bar" :title="`综合强度 ${c.strength}`">
+                <i :class="tierClass(c.tier)" :style="{ width: c.strength + '%' }" />
+              </span>
             </div>
             <div class="cc-r">
               <div class="cc-price">{{ c.price?.toFixed(2) }}</div>
@@ -135,7 +139,8 @@ const DIST_CLASS: Record<string, string> = {
   平开: 'd-flat', 低开: 'd-lo1', 大幅低开: 'd-lo2',
 }
 const distClass = (label: string) => DIST_CLASS[label] || 'd-flat'
-const grabClass = (g: string) => (g === '强抢筹' ? 'g-strong' : g === '抢筹' ? 'g-mid' : 'g-soft')
+const rankClass = (r: number) => (r === 1 ? 'r1' : r <= 3 ? 'r23' : 'rn')
+const tierClass = (t: string) => (t === '最强推荐' ? 't-top' : t === '强推荐' ? 't-strong' : 't-mid')
 const fmtAmt = (yi: number) => (yi >= 10000 ? `${(yi / 10000).toFixed(2)} 万亿` : `${yi} 亿`)
 
 const openStock = (code: string) => {
@@ -223,20 +228,32 @@ onMounted(load)
 .s-leader:hover { color: var(--el-color-primary); }
 
 .cand-card {
-  width: 100%; text-align: left; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+  width: 100%; text-align: left; cursor: pointer; display: flex; align-items: center;
   gap: 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--el-border-color-lighter);
   background: var(--el-fill-color-lighter); margin-bottom: 8px; transition: all .15s ease;
 }
 .cand-card:hover { border-color: var(--el-color-primary); transform: translateX(2px); }
+.cand-card.top { border-color: #b71c1c66; background: linear-gradient(90deg, rgba(183,28,28,.06), transparent 55%); }
+.cc-rank {
+  flex: none; width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center;
+  font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums;
+  background: var(--el-fill-color); color: var(--el-text-color-secondary);
+}
+.cc-rank.r1 { background: #b71c1c; color: #fff; }
+.cc-rank.r23 { background: rgba(239,35,42,.14); color: #ef232a; }
+.cc-l { flex: 1; min-width: 0; }
 .cc-name { font-size: 14px; font-weight: 600; }
 .cc-code { font-size: 11px; color: var(--el-text-color-secondary); margin-left: 6px; font-variant-numeric: tabular-nums; }
 .theme-tag { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px; margin-left: 6px; color: var(--el-color-primary); background: var(--el-color-primary-light-9); border: 1px solid var(--el-color-primary-light-7); }
-.grab { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-left: 6px; color: #fff; }
-.g-strong { background: #b71c1c; }
-.g-mid { background: #ef232a; }
-.g-soft { background: #f0a020; }
-.cc-reasons { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 3px; }
-.cc-r { text-align: right; }
+.tier { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-left: 6px; color: #fff; }
+.t-top { background: #b71c1c; }
+.t-strong { background: #ef232a; }
+.t-mid { background: #f0a020; }
+.cc-reasons { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-bar { display: block; height: 3px; border-radius: 2px; background: var(--el-fill-color); margin-top: 6px; overflow: hidden;
+  i { display: block; height: 100%; border-radius: 2px; }
+}
+.cc-r { flex: none; text-align: right; }
 .cc-price { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .cc-pct { font-size: 13px; font-weight: 600; }
 

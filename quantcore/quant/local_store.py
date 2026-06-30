@@ -261,6 +261,31 @@ class LocalQuantStore:
             }
         return out
 
+    def recent_returns(self, window: int = 5) -> Dict[str, float]:
+        """每只股票最近 window 个交易日的涨跌幅%（最新完整 bar vs window 根前的 bar）。
+
+        只用 amount>0 的真实 bar（跳过盘中占位 bar），供"近段趋势热门板块"动态识别。
+        """
+        sql = """
+        WITH ranked AS (
+            SELECT symbol, close,
+                   ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+            FROM daily_kline
+            WHERE amount > 0
+        )
+        SELECT cur.symbol, cur.close, base.close
+        FROM ranked cur
+        JOIN ranked base ON base.symbol = cur.symbol AND base.rn = ?
+        WHERE cur.rn = 1
+        """
+        out: Dict[str, float] = {}
+        for symbol, cur_close, base_close in self._conn().execute(sql, (window + 1,)).fetchall():
+            c = _f(cur_close)
+            b = _f(base_close)
+            if b > 0:
+                out[str(symbol).zfill(6)] = (c / b - 1) * 100
+        return out
+
     # ---- 状态 ----
     def set_state(self, key: str, value: str) -> None:
         conn = self._conn()

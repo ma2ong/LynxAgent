@@ -63,13 +63,25 @@ def compute_call_auction(
     *,
     buy_limit: int = 15,
     industry_map: Dict[str, str] | None = None,
+    hot_industries: Dict[str, float] | None = None,
+    exclude_symbols: set | None = None,
 ) -> Dict[str, object]:
     """把全市场快照算成：竞价情绪概览 + 竞价热门板块 + 竞价买入推荐。
 
-    industry_map（代码->东财行业名）用于把买入候选限定在科技成长热门行业；缺省时退化为
-    旧的全市场打分（不做行业过滤），保证行业源不可用时功能仍可用。
+    买入候选的行业门槛优先级：
+    1. hot_industries（近段趋势动态热门板块，{行业:近N日涨幅%}）—— 不写死赛道，跟随轮动；
+    2. 缺失时退回静态科技成长白名单 HOT_TECH_INDUSTRY_KEYWORDS（兜底）；
+    3. 连 industry_map 都没有时不做行业过滤（保证功能可用）。
     """
     imap = industry_map or {}
+    hot = hot_industries or {}
+    use_dynamic = bool(hot)
+    exclude_set = {str(s).zfill(6) for s in (exclude_symbols or set())}
+
+    def _industry_ok(industry: str) -> bool:
+        if use_dynamic:
+            return industry in hot       # 动态：近段趋势居前的板块
+        return _is_hot_tech(industry)    # 兜底：静态科技白名单
     rows: List[dict] = []
     for v in snapshot.values():
         code = str(v.get("code") or v.get("symbol") or "").zfill(6)
@@ -194,36 +206,40 @@ def compute_call_auction(
         })
     hot_sectors.sort(key=lambda s: (s["avg_open_pct"], s["high_count"]), reverse=True)
 
-    # 板块共振强度：每个热门科技行业里"高开抢筹(≥1%)"的家数。共振越强，说明资金在该
-    # 热门方向集体抢筹，个股当日走强的概率越高——这是"在最近热门板块里重点选股"的量化抓手。
+    # 板块共振强度：每个热门板块里"高开抢筹(≥1%)"的家数。共振越强，说明资金在该热门方向
+    # 集体抢筹，个股当日走强概率越高——这是"在最近热门板块里重点选股"的量化抓手。
     gating = bool(imap)
     hot_open_by_industry: Dict[str, int] = {}
     if gating:
         for r in rows:
             ind = r.get("industry") or ""
-            if not r["is_st"] and _is_hot_tech(ind) and r["open_pct"] >= 1.0:
+            if not r["is_st"] and _industry_ok(ind) and r["open_pct"] >= 1.0:
                 hot_open_by_industry[ind] = hot_open_by_industry.get(ind, 0) + 1
 
-    # 竞价买入推荐：① 只在科技成长热门行业里选（白酒/食品/银行/保险/能源等老登整体排除，
-    #   竞价开得再好也不入选）② 健康高开 1.5%~7%（非一字板、可买入）③ 非 ST、价格不仙
-    #   ④ 评分叠加板块共振——同热门行业高开家数越多越优先。
+    # 竞价买入推荐：① 只在"近段趋势热门板块"里选（动态跟随轮动；缺数据时退回科技白名单；
+    #   白酒/银行等不在近期热门就排除，但哪天它们趋势起来也会自动入选）② 健康高开 1.5%~7%
+    #   （非一字板、可买入）③ 非 ST、价格不仙 ④ 评分叠加板块共振 + 板块近段涨幅。
     candidates = []
     for r in rows:
         if r["is_st"] or r["price"] < 3:
             continue
+        if r["code"] in exclude_set:
+            continue  # 业绩暴雷/基本面利空 —— 不是"好股票"，剔除
         if not (1.5 <= r["open_pct"] <= 7.0):
             continue
         industry = r.get("industry") or ""
-        if gating and not _is_hot_tech(industry):
-            continue  # 不在热门科技行业 —— 竞价开得再好也不入选
+        if gating and not _industry_ok(industry):
+            continue  # 不在近段趋势热门板块 —— 竞价开得再好也不入选
         vr = r["volume_ratio"]
         vr_eff = vr if vr > 0 else 1.0
         resonance = hot_open_by_industry.get(industry, 0)
-        # 评分：高开强度 + 量比配合 + 板块共振加权
+        trend = hot.get(industry)  # 该板块近 N 日涨幅%（动态门槛下可得）
+        # 评分：高开强度 + 量比配合 + 板块共振 + 板块近段趋势强度
         score = round(
             min(r["open_pct"], 7.0) * 6
             + min(vr_eff, 4.0) * 8
-            + min(resonance, 12) * 1.8,
+            + min(resonance, 12) * 1.8
+            + (min(max(trend, 0.0), 30.0) * 0.6 if trend is not None else 0.0),
             1,
         )
         if r["open_pct"] >= 5:
@@ -234,7 +250,12 @@ def compute_call_auction(
             grab = "温和高开"
         reasons = [f"竞价高开 +{r['open_pct']:.2f}%"]
         if industry:
-            reasons.append(f"{industry}·板块{resonance}股共振" if resonance >= 3 else industry)
+            tag = industry
+            if trend is not None:
+                tag = f"{industry}·近段+{trend:.1f}%"
+            if resonance >= 3:
+                tag = f"{tag}·{resonance}股共振"
+            reasons.append(tag)
         if vr_eff >= 1.5:
             reasons.append(f"量比 {vr_eff:.1f}")
         if r["amount"]:
@@ -250,21 +271,31 @@ def compute_call_auction(
             "score": score,
             "industry": industry,
             "theme": industry,
+            "industry_trend": trend,
             "resonance": resonance,
             "reasons": reasons,
         })
     candidates.sort(key=lambda c: (c["score"], c.get("resonance", 0)), reverse=True)
 
+    dynamic_hot = [
+        {"name": name, "trend_pct": score}
+        for name, score in sorted(hot.items(), key=lambda kv: kv[1], reverse=True)
+    ] if use_dynamic else []
     return {
         "available": True,
         "overview": overview,
         "hot_sectors": hot_sectors[:8],
         "buy_candidates": candidates[:buy_limit],
         "gated_by_hot_sector": gating,
+        "gating_mode": "dynamic_trend" if use_dynamic else ("static_tech" if gating else "off"),
+        "dynamic_hot_industries": dynamic_hot,
         "note": (
-            "买入候选只在科技成长热门行业（半导体/光模块/PCB/存储/消费电子/通信/计算机/软件/机器人等）"
-            "中筛选，白酒/食品/银行/保险/能源等行业整体排除。竞价高开=今开/昨收；评分=高开强度+量比+板块共振。"
+            ("买入候选只在『近段趋势热门板块』中筛选——按各行业最近数日平均涨幅动态排名，跟随市场轮动、不写死赛道，"
+             "哪个方向(含白酒/银行)趋势起来都会自动纳入。"
+             if use_dynamic else
+             "买入候选在科技成长行业白名单中筛选（动态趋势数据暂不可用，用兜底白名单）。")
+            + "再叠加竞价健康高开(1.5%~7%)、板块共振与板块近段涨幅打分。"
             + ("" if gating else "（行业数据暂不可用，本次未做行业过滤）")
-            + "成交额口径：竞价时段(09:15-09:25)为真实撮合额，盘后为全日累计(仅参考)。研究用途，不构成投资建议。"
+            + "竞价高开=今开/昨收；成交额口径：竞价时段(09:15-09:25)为真实撮合额，盘后为全日累计(仅参考)。研究用途，不构成投资建议。"
         ),
     }

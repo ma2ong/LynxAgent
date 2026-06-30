@@ -970,6 +970,49 @@ def _load_industry_map(ttl_hours: int = 24) -> dict[str, str]:
     return _industry_map_cache[1] if _industry_map_cache else {}
 
 
+_hot_industries_cache: tuple[datetime, dict[str, float]] | None = None
+
+
+def _compute_hot_industries(
+    industry_map: dict[str, str],
+    *, window: int = 5, top_k: int = 15, min_members: int = 4, ttl_minutes: int = 30,
+) -> dict[str, float]:
+    """近段趋势热门板块：按行业内成分股最近 window 个交易日的平均涨幅排序，取居前且为正的 top_k 个。
+
+    动态识别"最近什么板块在走强"，不写死赛道——白酒/银行/食品等只要近期趋势起来，同样会入选。
+    返回 {行业名: 平均近 window 日涨幅%}。无数据时返回空，调用方据此退回静态兜底白名单。
+    """
+    global _hot_industries_cache
+    now = datetime.now()
+    if _hot_industries_cache and (now - _hot_industries_cache[0]).total_seconds() < ttl_minutes * 60:
+        return _hot_industries_cache[1]
+    if not industry_map:
+        return _hot_industries_cache[1] if _hot_industries_cache else {}
+    try:
+        from quantcore.quant.local_store import get_local_store
+        returns = get_local_store().recent_returns(window=window)
+    except Exception:
+        return _hot_industries_cache[1] if _hot_industries_cache else {}
+    by_industry: dict[str, list[float]] = {}
+    for symbol, ret in returns.items():
+        industry = industry_map.get(symbol)
+        if industry:
+            by_industry.setdefault(industry, []).append(ret)
+    scored = {
+        industry: round(sum(rets) / len(rets), 2)
+        for industry, rets in by_industry.items()
+        if len(rets) >= min_members
+    }
+    hot = {
+        industry: score
+        for industry, score in sorted(scored.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
+        if score > 0
+    }
+    if hot:
+        _hot_industries_cache = (now, hot)
+    return _hot_industries_cache[1] if _hot_industries_cache else {}
+
+
 def _load_realtime_quotes_snapshot(ttl_seconds: int = 3) -> dict[str, dict[str, Any]]:
     global lite_realtime_quotes_cache, _quotes_loading, _akshare_last_failure
     now = datetime.now(timezone.utc)
@@ -2988,14 +3031,27 @@ async def lite_call_auction():
     from quantcore.quant.call_auction import compute_call_auction
     from quantcore.quant.sector_leaders import SECTOR_LEADERS
 
-    cache_key = "call-auction:v2-hotsector"
+    cache_key = "call-auction:v4-quality"
     cached = _cache_get(cache_key, 60)
     if cached:
         return cached
 
     snapshot = await asyncio.to_thread(_load_realtime_quotes_snapshot, 60)
     industry_map = await asyncio.to_thread(_load_industry_map)
-    result = await asyncio.to_thread(compute_call_auction, snapshot, SECTOR_LEADERS, industry_map=industry_map)
+    hot_industries = await asyncio.to_thread(_compute_hot_industries, industry_map)
+
+    def _bad_forecast() -> set:
+        try:
+            from quantcore.quant.local_store import get_local_store
+            return get_local_store().load_bad_forecast_symbols()
+        except Exception:
+            return set()
+
+    bad_symbols = await asyncio.to_thread(_bad_forecast)
+    result = await asyncio.to_thread(
+        compute_call_auction, snapshot, SECTOR_LEADERS,
+        industry_map=industry_map, hot_industries=hot_industries, exclude_symbols=bad_symbols,
+    )
     payload = {
         "success": True,
         "data": {**result, "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S")},

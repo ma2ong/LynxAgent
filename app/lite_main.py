@@ -970,29 +970,33 @@ def _load_industry_map(ttl_hours: int = 24) -> dict[str, str]:
     return _industry_map_cache[1] if _industry_map_cache else {}
 
 
-_hot_industries_cache: tuple[datetime, dict[str, float]] | None = None
+_hot_industries_cache: tuple[datetime, tuple, dict[str, float]] | None = None
 
 
 def _compute_hot_industries(
     industry_map: dict[str, str],
-    *, window: int = 5, top_k: int = 15, min_members: int = 4, ttl_minutes: int = 30,
+    *, window: int = 5, top_k: int = 10, min_members: int = 4, ttl_minutes: int = 30,
 ) -> dict[str, float]:
     """近段趋势热门板块：按行业内成分股最近 window 个交易日的平均涨幅排序，取居前且为正的 top_k 个。
 
     动态识别"最近什么板块在走强"，不写死赛道——白酒/银行/食品等只要近期趋势起来，同样会入选。
     返回 {行业名: 平均近 window 日涨幅%}。无数据时返回空，调用方据此退回静态兜底白名单。
+    缓存随参数(window/top_k/min_members)变化，调参后立即重算。
     """
     global _hot_industries_cache
     now = datetime.now()
-    if _hot_industries_cache and (now - _hot_industries_cache[0]).total_seconds() < ttl_minutes * 60:
-        return _hot_industries_cache[1]
+    params = (window, top_k, min_members)
+    if (_hot_industries_cache and _hot_industries_cache[1] == params
+            and (now - _hot_industries_cache[0]).total_seconds() < ttl_minutes * 60):
+        return _hot_industries_cache[2]
+    fallback = _hot_industries_cache[2] if _hot_industries_cache else {}
     if not industry_map:
-        return _hot_industries_cache[1] if _hot_industries_cache else {}
+        return fallback
     try:
         from quantcore.quant.local_store import get_local_store
         returns = get_local_store().recent_returns(window=window)
     except Exception:
-        return _hot_industries_cache[1] if _hot_industries_cache else {}
+        return fallback
     by_industry: dict[str, list[float]] = {}
     for symbol, ret in returns.items():
         industry = industry_map.get(symbol)
@@ -1009,8 +1013,8 @@ def _compute_hot_industries(
         if score > 0
     }
     if hot:
-        _hot_industries_cache = (now, hot)
-    return _hot_industries_cache[1] if _hot_industries_cache else {}
+        _hot_industries_cache = (now, params, hot)
+    return _hot_industries_cache[2] if _hot_industries_cache else {}
 
 
 def _load_realtime_quotes_snapshot(ttl_seconds: int = 3) -> dict[str, dict[str, Any]]:
@@ -3026,19 +3030,32 @@ async def lite_sector_leaders():
 
 
 @app.get("/api/lite/call-auction")
-async def lite_call_auction():
-    """集合竞价板块：从全市场快照的今开/昨收推导竞价情绪、热门板块、买入推荐。"""
+async def lite_call_auction(
+    window: int = 5,
+    top_k: int = 10,
+    open_min: float = 1.5,
+    open_max_ratio: float = 0.6,
+):
+    """集合竞价板块：从全市场快照的今开/昨收推导竞价情绪、热门板块、买入推荐。
+
+    可调参数：window 近段趋势窗口(交易日)、top_k 动态热门板块数、open_min 高开下限%、
+    open_max_ratio 高开上限占板块涨停限的比例(自适应 10/20/30% 板)。
+    """
     from quantcore.quant.call_auction import compute_call_auction
     from quantcore.quant.sector_leaders import SECTOR_LEADERS
 
-    cache_key = "call-auction:v4-quality"
+    window = max(2, min(window, 30))
+    top_k = max(3, min(top_k, 30))
+    open_min = max(0.0, min(open_min, 10.0))
+    open_max_ratio = max(0.2, min(open_max_ratio, 0.95))
+    cache_key = f"call-auction:v5:{window}:{top_k}:{open_min}:{open_max_ratio}"
     cached = _cache_get(cache_key, 60)
     if cached:
         return cached
 
     snapshot = await asyncio.to_thread(_load_realtime_quotes_snapshot, 60)
     industry_map = await asyncio.to_thread(_load_industry_map)
-    hot_industries = await asyncio.to_thread(_compute_hot_industries, industry_map)
+    hot_industries = await asyncio.to_thread(_compute_hot_industries, industry_map, window=window, top_k=top_k)
 
     def _bad_forecast() -> set:
         try:
@@ -3051,6 +3068,7 @@ async def lite_call_auction():
     result = await asyncio.to_thread(
         compute_call_auction, snapshot, SECTOR_LEADERS,
         industry_map=industry_map, hot_industries=hot_industries, exclude_symbols=bad_symbols,
+        open_min=open_min, open_max_ratio=open_max_ratio,
     )
     payload = {
         "success": True,

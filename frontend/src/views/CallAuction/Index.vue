@@ -68,13 +68,14 @@
       <div class="cols">
         <!-- 竞价热门板块 -->
         <section class="panel">
-          <div class="panel-title">竞价热门板块</div>
+          <div class="panel-title">热门板块 <em>近段趋势排名 · 今日竞价强度</em></div>
           <div v-if="!data.hot_sectors.length" class="empty">暂无板块高开数据</div>
           <div v-for="(s, i) in data.hot_sectors" :key="s.key" class="sector-row">
             <span class="rank">{{ i + 1 }}</span>
             <span class="s-name">{{ s.name }}</span>
+            <span v-if="s.trend_pct != null" class="s-trend">近段 +{{ s.trend_pct }}%</span>
             <span class="s-pct" :class="s.avg_open_pct >= 0 ? 'up' : 'down'">
-              {{ s.avg_open_pct >= 0 ? '+' : '' }}{{ s.avg_open_pct }}%
+              今开{{ s.avg_open_pct >= 0 ? '+' : '' }}{{ s.avg_open_pct }}%
             </span>
             <span class="s-meta">高开 {{ s.high_count }}/{{ s.member_count }}</span>
             <span class="s-leader" @click="openStock(s.leader.code)">
@@ -214,8 +215,9 @@ onMounted(load)
 .sector-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--el-border-color-lighter); font-size: 13px; }
 .sector-row:last-child { border-bottom: none; }
 .rank { width: 20px; height: 20px; border-radius: 5px; background: var(--el-fill-color); text-align: center; line-height: 20px; font-size: 12px; font-weight: 700; }
-.s-name { font-weight: 600; min-width: 120px; }
-.s-pct { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 56px; }
+.s-name { font-weight: 600; min-width: 90px; }
+.s-trend { font-size: 11px; font-weight: 700; color: var(--el-color-danger); background: var(--el-color-danger-light-9); padding: 1px 6px; border-radius: 3px; font-variant-numeric: tabular-nums; }
+.s-pct { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 64px; color: var(--el-text-color-secondary); }
 .s-meta { color: var(--el-text-color-secondary); font-size: 12px; }
 .s-leader { margin-left: auto; cursor: pointer; color: var(--el-text-color-secondary); font-size: 12px; i { font-style: normal; margin-left: 4px; } }
 .s-leader:hover { color: var(--el-color-primary); }

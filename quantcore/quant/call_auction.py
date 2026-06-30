@@ -65,6 +65,8 @@ def compute_call_auction(
     industry_map: Dict[str, str] | None = None,
     hot_industries: Dict[str, float] | None = None,
     exclude_symbols: set | None = None,
+    open_min: float = 1.5,
+    open_max_ratio: float = 0.6,
 ) -> Dict[str, object]:
     """把全市场快照算成：竞价情绪概览 + 竞价热门板块 + 竞价买入推荐。
 
@@ -182,29 +184,53 @@ def compute_call_auction(
         "is_auction_window": in_window,
     }
 
-    # 竞价热门板块：按策划赛道，算成分股平均竞价高开 + 高开家数，排序
+    # 竞价热门板块：动态口径——与买入候选同源，用"近段趋势热门板块"(按近 N 日涨幅排名)，
+    # 再叠加今日竞价强度；缺动态数据时退回 SECTOR_LEADERS 策划赛道（兜底）。全页口径一致。
     hot_sectors: List[dict] = []
-    row_by_code = {r["code"]: r for r in rows}
-    for sector in sectors_config:
-        members = []
-        for code, _name in sector["leaders"]:
-            r = row_by_code.get(str(code).zfill(6))
-            if r:
-                members.append(r)
-        if not members:
-            continue
-        avg = round(sum(m["open_pct"] for m in members) / len(members), 2)
-        hi_cnt = sum(1 for m in members if m["open_pct"] > 0.05)
-        top = max(members, key=lambda m: m["open_pct"])
-        hot_sectors.append({
-            "key": sector["key"],
-            "name": sector["name"],
-            "avg_open_pct": avg,
-            "high_count": hi_cnt,
-            "member_count": len(members),
-            "leader": {"code": top["code"], "name": top["name"], "open_pct": top["open_pct"]},
-        })
-    hot_sectors.sort(key=lambda s: (s["avg_open_pct"], s["high_count"]), reverse=True)
+    if use_dynamic:
+        rows_by_ind: Dict[str, List[dict]] = {}
+        for r in rows:
+            ind = r.get("industry") or ""
+            if ind:
+                rows_by_ind.setdefault(ind, []).append(r)
+        for ind, trend in sorted(hot.items(), key=lambda kv: kv[1], reverse=True):
+            members = rows_by_ind.get(ind, [])
+            if not members:
+                continue
+            avg = round(sum(m["open_pct"] for m in members) / len(members), 2)
+            hi_cnt = sum(1 for m in members if m["open_pct"] > 0.05)
+            top = max(members, key=lambda m: m["open_pct"])
+            hot_sectors.append({
+                "key": ind,
+                "name": ind,
+                "trend_pct": trend,
+                "avg_open_pct": avg,
+                "high_count": hi_cnt,
+                "member_count": len(members),
+                "leader": {"code": top["code"], "name": top["name"], "open_pct": top["open_pct"]},
+            })
+    else:
+        row_by_code = {r["code"]: r for r in rows}
+        for sector in sectors_config:
+            members = []
+            for code, _name in sector["leaders"]:
+                r = row_by_code.get(str(code).zfill(6))
+                if r:
+                    members.append(r)
+            if not members:
+                continue
+            avg = round(sum(m["open_pct"] for m in members) / len(members), 2)
+            hi_cnt = sum(1 for m in members if m["open_pct"] > 0.05)
+            top = max(members, key=lambda m: m["open_pct"])
+            hot_sectors.append({
+                "key": sector["key"],
+                "name": sector["name"],
+                "avg_open_pct": avg,
+                "high_count": hi_cnt,
+                "member_count": len(members),
+                "leader": {"code": top["code"], "name": top["name"], "open_pct": top["open_pct"]},
+            })
+        hot_sectors.sort(key=lambda s: (s["avg_open_pct"], s["high_count"]), reverse=True)
 
     # 板块共振强度：每个热门板块里"高开抢筹(≥1%)"的家数。共振越强，说明资金在该热门方向
     # 集体抢筹，个股当日走强概率越高——这是"在最近热门板块里重点选股"的量化抓手。
@@ -217,15 +243,17 @@ def compute_call_auction(
                 hot_open_by_industry[ind] = hot_open_by_industry.get(ind, 0) + 1
 
     # 竞价买入推荐：① 只在"近段趋势热门板块"里选（动态跟随轮动；缺数据时退回科技白名单；
-    #   白酒/银行等不在近期热门就排除，但哪天它们趋势起来也会自动入选）② 健康高开 1.5%~7%
-    #   （非一字板、可买入）③ 非 ST、价格不仙 ④ 评分叠加板块共振 + 板块近段涨幅。
+    #   白酒/银行等不在近期热门就排除，但哪天它们趋势起来也会自动入选）② 健康高开（下限 open_min%，
+    #   上限按板块涨停限自适应=板限×open_max_ratio，避开一字板、又给 20% 板的科技股留足空间）
+    #   ③ 非 ST、非业绩暴雷、价格不仙 ④ 评分叠加板块共振 + 板块近段涨幅。
     candidates = []
     for r in rows:
         if r["is_st"] or r["price"] < 3:
             continue
         if r["code"] in exclude_set:
             continue  # 业绩暴雷/基本面利空 —— 不是"好股票"，剔除
-        if not (1.5 <= r["open_pct"] <= 7.0):
+        open_max = r["board_limit"] * open_max_ratio  # 10%板→6, 20%板→12, 30%板→18
+        if not (open_min <= r["open_pct"] <= open_max):
             continue
         industry = r.get("industry") or ""
         if gating and not _industry_ok(industry):
@@ -294,7 +322,7 @@ def compute_call_auction(
              "哪个方向(含白酒/银行)趋势起来都会自动纳入。"
              if use_dynamic else
              "买入候选在科技成长行业白名单中筛选（动态趋势数据暂不可用，用兜底白名单）。")
-            + "再叠加竞价健康高开(1.5%~7%)、板块共振与板块近段涨幅打分。"
+            + f"再叠加竞价健康高开(下限{open_min:g}%、上限按板块涨停×{open_max_ratio:g}自适应)、板块共振与板块近段涨幅打分。"
             + ("" if gating else "（行业数据暂不可用，本次未做行业过滤）")
             + "竞价高开=今开/昨收；成交额口径：竞价时段(09:15-09:25)为真实撮合额，盘后为全日累计(仅参考)。研究用途，不构成投资建议。"
         ),

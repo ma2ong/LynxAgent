@@ -1,21 +1,5 @@
 import { ApiClient } from './request'
 
-export interface HotNewsItem {
-  id: string
-  rank: number
-  title: string
-  sector: string
-  sentiment: string
-  score: number
-  importance: string
-  source: string
-  publish_time: string
-  tags: string[]
-  symbols?: string[]
-  stock_names?: string[]
-  url?: string
-}
-
 export interface CatalystItem {
   symbol: string
   name: string
@@ -36,10 +20,6 @@ export interface CatalystItem {
 }
 
 export const liteInsightsApi = {
-  getHotNews(limit = 30) {
-    return ApiClient.get('/api/lite/hot-news', { limit })
-  },
-
   getCatalysts(params: { window?: string; threshold?: number; limit?: number } = {}) {
     return ApiClient.get('/api/lite/catalysts', {
       window: params.window || '24h',

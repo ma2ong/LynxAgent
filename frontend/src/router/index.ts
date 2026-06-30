@@ -16,7 +16,6 @@ const routes: RouteRecordRaw[] = [
       { path: 'call-auction', name: 'call-auction', component: () => import('@/views/CallAuction/Index.vue') },
       { path: 'quant', name: 'quant', component: () => import('@/views/Quant/index.vue') },
       { path: 'stock-analysis', name: 'stock-analysis', component: () => import('@/views/StockAnalysis/index.vue') },
-      { path: 'insights/hot-news', name: 'hot-news', component: () => import('@/views/Insights/HotNews.vue') },
       { path: 'insights/kol', name: 'kol-rooms', component: () => import('@/views/Insights/KolRooms.vue') },
       { path: 'insights/catalyst', name: 'catalyst', component: () => import('@/views/Insights/CatalystMonitor.vue') },
       { path: 'insights/capital', name: 'capital', component: () => import('@/views/Insights/CapitalPanel.vue') },

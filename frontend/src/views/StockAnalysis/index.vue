@@ -1,5 +1,12 @@
 <template>
   <div class="stock-analysis">
+    <div class="page-head">
+      <div>
+        <h1>个股深研</h1>
+        <p>深度研究单只个股，或按赛道浏览龙头股，点击进入研报。</p>
+      </div>
+    </div>
+
     <!-- 搜索栏 -->
     <div class="search-bar">
       <el-input
@@ -51,24 +58,22 @@
       >{{ item.name ? item.name + ' ' : '' }}{{ item.code }}</el-tag>
     </div>
 
-    <!-- 赛道龙头入口（无选中标的时展示）：按赛道浏览龙头股，实时行情一目了然 -->
+    <!-- 赛道龙头入口（无选中标的时展示） -->
     <div v-if="!loading && !data" class="sector-home">
-      <div class="sector-intro">
-        <div>
-          <h2>按赛道浏览龙头股</h2>
-          <p>实时行情一目了然，点击任意个股进入深度研究报告。</p>
-        </div>
-        <span v-if="sectorsUpdatedAt" class="sector-updated">行情更新于 {{ sectorsUpdatedAt }}</span>
+      <div class="browse-head">
+        <div class="bh-title"><span class="bh-bar" />按赛道浏览龙头股</div>
+        <span v-if="sectorsUpdatedAt" class="updated">行情更新于 {{ sectorsUpdatedAt }}</span>
       </div>
 
-      <div v-if="sectorsLoading && !sectors.length" class="sector-loading">正在加载赛道行情…</div>
+      <div v-if="sectorsLoading && !sectors.length" class="loading-hint">正在加载赛道行情…</div>
 
       <div v-for="sector in sectors" :key="sector.key" class="sector-block">
         <div class="sector-head">
-          <span class="dot" />
+          <span class="sec-accent" />
           <b>{{ sector.name }}</b>
           <em>{{ sector.en }}</em>
           <span class="sector-sub">{{ sector.subtitle }}</span>
+          <span class="sector-count">{{ sector.items.length }} 只</span>
         </div>
         <div class="leader-grid">
           <button
@@ -79,12 +84,12 @@
             @click="analyze(stk.code)"
           >
             <div class="lc-top">
-              <span class="lc-code">{{ stk.code }}</span>
               <span class="lc-name">{{ stk.name }}</span>
+              <span class="lc-code">{{ stk.code }}</span>
             </div>
             <div class="lc-bottom">
               <span class="lc-price">{{ stk.price != null ? stk.price.toFixed(2) : '—' }}</span>
-              <span class="lc-pct" :class="stk.pct_chg == null ? '' : (stk.pct_chg >= 0 ? 'up' : 'down')">
+              <span class="lc-pct" :class="stk.pct_chg == null ? 'flat' : (stk.pct_chg >= 0 ? 'up' : 'down')">
                 {{ stk.pct_chg == null ? '—' : (stk.pct_chg >= 0 ? '+' : '') + stk.pct_chg.toFixed(2) + '%' }}
               </span>
             </div>
@@ -834,36 +839,42 @@ onUnmounted(() => {
 .search-bar { display: flex; gap: 10px; align-items: center; }
 .loading-hint { color: var(--el-text-color-secondary); font-size: 13px; }
 
-/* 赛道龙头入口 */
-.sector-home { display: flex; flex-direction: column; gap: 18px; }
-.sector-intro { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 8px;
-  h2 { margin: 0 0 4px; font-size: 22px; }
+/* 页头（与其他页一致） */
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  h1 { margin: 0 0 4px; font-size: 24px; }
   p { margin: 0; color: var(--el-text-color-secondary); font-size: 13px; }
 }
-.sector-updated { font-size: 12px; color: var(--el-text-color-secondary); }
-.sector-loading { color: var(--el-text-color-secondary); font-size: 13px; padding: 20px 0; }
+
+/* 赛道龙头入口 */
+.sector-home { display: flex; flex-direction: column; gap: 18px; }
+.browse-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.bh-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; }
+.bh-bar { width: 3px; height: 15px; border-radius: 2px; background: var(--el-color-primary); }
+.updated { font-size: 12px; color: var(--el-text-color-secondary); }
 .sector-block { display: flex; flex-direction: column; gap: 10px; }
-.sector-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--el-color-warning); align-self: center; }
+.sector-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  .sec-accent { width: 6px; height: 6px; border-radius: 50%; background: var(--el-color-warning); }
   b { font-size: 15px; }
   em { font-style: normal; font-size: 12px; color: var(--el-text-color-secondary); }
-  .sector-sub { font-size: 12px; color: var(--el-text-color-placeholder); margin-left: 4px; }
+  .sector-sub { font-size: 12px; color: var(--el-text-color-placeholder); }
+  .sector-count { margin-left: auto; font-size: 12px; color: var(--el-text-color-secondary); background: var(--el-fill-color); border-radius: 10px; padding: 1px 9px; }
 }
-.leader-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+.leader-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 10px; }
 .leader-card {
   text-align: left; cursor: pointer; padding: 12px 14px; border-radius: 10px;
-  background: var(--el-fill-color-lighter); border: 1px solid var(--el-border-color-lighter);
-  transition: all .15s ease; display: flex; flex-direction: column; gap: 10px;
+  background: var(--el-bg-color); border: 1px solid var(--el-border-color-light);
+  transition: all .15s ease; display: flex; flex-direction: column; gap: 12px;
 }
-.leader-card:hover { border-color: var(--el-color-primary); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.08); }
-.lc-top { display: flex; align-items: baseline; gap: 8px; }
-.lc-code { font-size: 12px; color: var(--el-text-color-secondary); font-variant-numeric: tabular-nums; }
-.lc-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lc-bottom { display: flex; align-items: baseline; justify-content: space-between; }
-.lc-price { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.lc-pct { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.lc-pct.up { color: #ef232a; }
-.lc-pct.down { color: #14b143; }
+.leader-card:hover { border-color: var(--el-color-primary); transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.07); }
+.lc-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.lc-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lc-code { font-size: 11px; color: var(--el-text-color-secondary); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.lc-bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.lc-price { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lc-pct { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; padding: 2px 8px; border-radius: 6px; }
+.lc-pct.up { color: #ef232a; background: #fdeced; }
+.lc-pct.down { color: #14b143; background: #eaf7ef; }
+.lc-pct.flat { color: var(--el-text-color-secondary); background: var(--el-fill-color); }
 
 /* 搜索历史 */
 .history-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

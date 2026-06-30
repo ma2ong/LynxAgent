@@ -25,13 +25,8 @@ _PROVIDER_ENV = {
 
 
 def _load_config() -> Dict[str, object]:
-    """读取仓库配置；失败则回退到默认 OpenAI 配置（不抛异常）。"""
-    try:
-        from tradingagents.dataflows.interface import get_config
-
-        return dict(get_config() or {})
-    except Exception:
-        return {}
+    """LLM 配置统一从环境变量读取（见 _client_and_model）。保留此钩子以便将来接本地配置源。"""
+    return {}
 
 
 def _resolve_api_key(provider: str) -> str:

@@ -44,7 +44,7 @@ from quantcore.shared.disclaimer import attach_disclaimer
 
 
 app = FastAPI(
-    title="TradingAgents SaaS Lite",
+    title="LynxAgent SaaS Lite",
     version="0.1.0",
     description="Local SaaS Lite runtime with SQLite auth and protected quant APIs.",
 )
@@ -568,7 +568,7 @@ except Exception as _init_err:
 @app.get("/")
 async def root():
     return {
-        "name": "TradingAgents SaaS Lite",
+        "name": "LynxAgent SaaS Lite",
         "status": "running",
         "docs_url": "/docs",
     }

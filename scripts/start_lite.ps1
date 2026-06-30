@@ -8,7 +8,7 @@
 
 # LynxAgent SaaS Lite 本地预览一键启动
 #   后端 app.lite_main (uvicorn) + 前端 vite，两个独立 detached 进程。
-#   后端默认 8001（避开 TradingAgents 常用的 8000），前端 5173。
+#   后端默认 8001（避开 8000，常被其他后端占用），前端 5173。
 #   幂等：端口已在监听则跳过，不重复拉起。
 
 $ErrorActionPreference = "Stop"

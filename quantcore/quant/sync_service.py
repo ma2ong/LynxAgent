@@ -1,7 +1,7 @@
 """Full-market daily K-line sync service: background thread + progress tracking.
 
-This intentionally mirrors the working TradingAgents sync flow: every manual
-incremental sync walks the whole local universe and upserts Tencent daily bars.
+Every manual incremental sync walks the whole local universe and upserts
+Tencent daily bars.
 It avoids slow per-symbol third-party fallbacks during batch sync.
 """
 from __future__ import annotations

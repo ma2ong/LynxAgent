@@ -43,20 +43,20 @@
     </el-alert>
 
     <el-tabs v-model="activeTab" class="news-tabs">
-      <el-tab-pane label="热榜" name="rank" />
-      <el-tab-pane label="独立" name="independent" />
-      <el-tab-pane label="AI分析" name="ai" />
+      <el-tab-pane :label="`全部 ${newsItems.length}`" name="all" />
+      <el-tab-pane :label="`个股 ${stockItems.length}`" name="stock" />
+      <el-tab-pane :label="`利好 ${bullishItems.length}`" name="bullish" />
     </el-tabs>
 
     <div class="content-grid">
       <section class="news-list">
         <el-empty
-          v-if="!newsItems.length && !loading"
-          description="暂无热点新闻，点右上角「刷新」获取最新榜单"
+          v-if="!displayedItems.length && !loading"
+          :description="emptyText"
           :image-size="60"
         />
         <div
-          v-for="item in newsItems"
+          v-for="item in displayedItems"
           :key="item.id"
           class="news-row"
           @click="openItem(item)"
@@ -120,15 +120,30 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { liteInsightsApi, type HotNewsItem } from '@/api/liteInsights'
 
 const loading = ref(false)
-const activeTab = ref('rank')
+const activeTab = ref('all')
 const summary = ref<Record<string, any>>({})
 const newsItems = ref<HotNewsItem[]>([])
+
+// 三个分页是对同一榜单的真实切片（个股=含股票代码的快讯，利好=利好情绪），不造数据
+const stockItems = computed(() => newsItems.value.filter((i) => (i.symbols?.length ?? 0) > 0))
+const bullishItems = computed(() => newsItems.value.filter((i) => i.sentiment === '利好'))
+const displayedItems = computed(() => {
+  if (activeTab.value === 'stock') return stockItems.value
+  if (activeTab.value === 'bullish') return bullishItems.value
+  return newsItems.value
+})
+const emptyText = computed(() => {
+  if (!newsItems.value.length) return '暂无热点新闻，点右上角「刷新」获取最新榜单'
+  if (activeTab.value === 'stock') return '当前榜单暂无含个股的快讯'
+  if (activeTab.value === 'bullish') return '当前榜单暂无利好快讯'
+  return '暂无数据'
+})
 const categories = ref<Array<{ name: string; count: number }>>([])
 const failedSources = ref<string[]>([])
 const sentimentAnalysis = ref<Record<string, any>>({})

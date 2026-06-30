@@ -1269,6 +1269,31 @@ def _store_news_events(events: list[dict[str, Any]]) -> int:
     return len(events)
 
 
+def _prune_news_events(keep_days: int = 3) -> None:
+    """清理新闻事件表：① 删除过期事件 ② 同源同标题去重（保留发布时间最新一条）。
+    防止 publish_time 不稳定的源重复累积、用入库时间挤占按时间排序的查询窗。"""
+    ensure_lite_news_table()
+    with store.connect() as conn:
+        conn.execute(
+            "DELETE FROM lite_news_events WHERE substr(publish_time, 1, 10) < date('now', ?)",
+            (f"-{keep_days} day",),
+        )
+        conn.execute(
+            """
+            DELETE FROM lite_news_events
+            WHERE id NOT IN (
+                SELECT id FROM (
+                    SELECT id, ROW_NUMBER() OVER (
+                        PARTITION BY source, title ORDER BY publish_time DESC, updated_at DESC
+                    ) AS rn
+                    FROM lite_news_events
+                ) WHERE rn = 1
+            )
+            """
+        )
+        conn.commit()
+
+
 def _row_to_event(row: Any) -> dict[str, Any]:
     return {
         "id": row["id"],
@@ -1372,14 +1397,40 @@ HOT_NEWS_ROUTINE_ANNOUNCEMENT_KEYWORDS = (
     "通知债权人", "减持", "回购注销", "限制性股票", "临时受托", "独立董事",
     "重大事项报告制度", "报告制度", "管理办法", "保荐总结报告书", "保荐总结",
     "年度保荐工作报告", "持续督导", "超额奖励", "奖励发放", "权益变动提示性公告",
-    "股东大会", "董事会决议", "监事会决议", "章程", "修订", "聘任", "辞职",
+    "股东大会", "股东会", "董事会决议", "监事会决议", "章程", "修订", "聘任", "辞职",
     "变更会计师", "担保进展", "诉讼进展", "上市公告书",
+    "招股说明书", "律师", "审计报告", "评估报告", "募集说明书", "保荐书",
 )
 
 HOT_NEWS_STRONG_ANNOUNCEMENT_KEYWORDS = (
-    "重大资产重组", "发行股份购买资产", "控制权变更", "中标", "合同", "订单",
+    "重大资产重组", "发行股份购买资产", "购买资产", "募集配套资金", "资产重组",
+    "控制权变更", "实际控制人变更", "中标", "合同", "订单", "定增", "要约收购",
     "增持", "回购股份", "股份回购", "同意注册", "审核通过", "收购", "资产注入",
 )
+
+
+def _recency_bonus(publish_time: Any) -> float:
+    """时效性加权：带时刻且越新越高；纯日期(公告，无时刻)记 0，体现"时效性"。"""
+    s = str(publish_time or "").strip()
+    if len(s) <= 10:  # 仅 "YYYY-MM-DD"，无时刻 —— 公告类，不给时效加权
+        return 0.0
+    try:
+        dt = datetime.strptime(s.replace("Z", "").replace("T", " ").strip()[:19], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            return 0.0
+    age_h = max(0.0, (datetime.now() - dt).total_seconds() / 3600.0)
+    if age_h <= 2:
+        return 1.6
+    if age_h <= 6:
+        return 1.1
+    if age_h <= 24:
+        return 0.6
+    if age_h <= 72:
+        return 0.2
+    return 0.0
 
 
 def _event_relevance_score(event: dict[str, Any]) -> float:
@@ -1389,9 +1440,13 @@ def _event_relevance_score(event: dict[str, Any]) -> float:
     symbols = event.get("symbols") or []
     score = 0.0
     if symbols:
-        score += 2.6
-    if event.get("source_type") in {"announcement", "research"}:
-        score += 1.4
+        score += 2.2
+    source_type = event.get("source_type")
+    if source_type in {"news", "sentiment"}:
+        score += 1.6  # 快讯是时效主力，给基础权重
+    elif source_type in {"announcement", "research"}:
+        score += 0.8
+    score += _recency_bonus(event.get("publish_time"))
     if event.get("importance") == "high":
         score += 1.0
     elif event.get("importance") == "medium":
@@ -1415,20 +1470,15 @@ def _is_actionable_hot_event(event: dict[str, Any]) -> bool:
     text = f"{title} {content}"
     if not title:
         return False
-    if any(word in text for word in HOT_NEWS_ROUTINE_ANNOUNCEMENT_KEYWORDS) and not any(word in text for word in HOT_NEWS_STRONG_ANNOUNCEMENT_KEYWORDS):
+    source_type = event.get("source_type")
+    # 公告/研报天然非"热点资讯"：仅当命中强事件词(重组/中标/回购/增持等)才进热榜，
+    # 例行件(股东会决议/招股说明书/审计报告…)一律降级，不再霸榜。
+    if source_type in {"announcement", "research"}:
+        return any(word in text for word in HOT_NEWS_STRONG_ANNOUNCEMENT_KEYWORDS)
+    # 财经快讯来自策划好的 A 股 7x24 实时源，默认视为市场相关；仅剔除明显纯海外/无关噪声。
+    if any(word in text for word in HOT_NEWS_NOISE_KEYWORDS) and not event.get("symbols"):
         return False
-    if event.get("symbols"):
-        return True
-    if any(word in text for word in HOT_NEWS_NOISE_KEYWORDS):
-        return False
-    has_market_scope = any(word in text for word in ("A股", "沪指", "深成指", "创业板指", "北交所"))
-    has_intraday_sector_move = (
-        any(word in text for word in ("板块", "概念", "盘中"))
-        and any(word in text for word in ("涨停", "涨超", "走高", "活跃", "爆发", "震荡走强"))
-    )
-    if not (has_market_scope or has_intraday_sector_move):
-        return False
-    return any(word in text for word in HOT_NEWS_RELEVANT_KEYWORDS)
+    return True
 
 
 def _is_secondary_hot_event(event: dict[str, Any]) -> bool:
@@ -1436,6 +1486,10 @@ def _is_secondary_hot_event(event: dict[str, Any]) -> bool:
     content = str(event.get("content") or "")
     text = f"{title} {content}"
     if not title:
+        return False
+    source_type = event.get("source_type")
+    # 公告/研报只有强事件才可作为补充，例行件不回填
+    if source_type in {"announcement", "research"} and not any(word in text for word in HOT_NEWS_STRONG_ANNOUNCEMENT_KEYWORDS):
         return False
     if any(word in text for word in HOT_NEWS_ROUTINE_ANNOUNCEMENT_KEYWORDS):
         return False
@@ -1505,12 +1559,15 @@ def _fetch_caixin_market_news(stock_lookup: dict[str, str], limit: int = 60) -> 
         summary = _clean_text(row.get("summary", ""))
         if not summary:
             continue
+        # 用财新自带的真实发布时间（稳定 id、真时效）；缺失则用当天日期，避免
+        # 入库时间(_now_cn)既不稳定(每刷一次生成新 id 重复累积)又伪装成"刚刚"霸榜。
+        pub_time = _clean_text(row.get("pub_time") or row.get("time") or row.get("date") or "")
         events.append(_build_event(
             title=summary[:90],
             content=summary,
             source="财新",
             source_type="news",
-            publish_time=_now_cn(),
+            publish_time=pub_time or datetime.now().strftime("%Y-%m-%d"),
             url=str(row.get("url", "")),
             stock_lookup=stock_lookup,
             raw=row.to_dict(),
@@ -1594,6 +1651,48 @@ def _fetch_eastmoney_research(stock_lookup: dict[str, str], symbols: list[str], 
     return events
 
 
+def _fetch_market_flash_news(stock_lookup: dict[str, str], limit: int = 80) -> list[dict[str, Any]]:
+    """东方财富 7x24 实时快讯（带秒级时刻、A 股为主）—— 热榜时效性主力来源。
+
+    直连 np-weblist 接口（与公告抓取同套路），避开 akshare 财联社/全球财经路径
+    在本环境的卡死与限流。失败返回空，调用方降级。
+    """
+    url = "https://np-weblist.eastmoney.com/comm/web/getFastNewsList"
+    params = {
+        "client": "web",
+        "biz": "web_724",
+        "fastColumn": "102",
+        "sortEnd": "",
+        "pageSize": str(min(max(limit, 20), 100)),
+        "req_trace": "1",
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        rows = (resp.json().get("data") or {}).get("fastNewsList") or []
+    except Exception:
+        return []
+
+    events: list[dict[str, Any]] = []
+    for item in rows[:limit]:
+        title = _clean_text(item.get("title") or "")
+        content = _clean_text(item.get("summary") or item.get("digest") or "")
+        if not title:
+            title = content[:90]
+        if not title:
+            continue
+        events.append(_build_event(
+            title=title,
+            content=content,
+            source="东方财富快讯",
+            source_type="news",
+            publish_time=str(item.get("showTime") or _now_cn()),
+            stock_lookup=stock_lookup,
+            raw=item,
+        ))
+    return events
+
+
 async def _stock_lookup(limit: int = 6000) -> dict[str, str]:
     lookup = {item["symbol"]: item["name"] for item in _watch_symbols()}
     try:
@@ -1622,11 +1721,15 @@ async def refresh_lite_news_events(limit: int = 180) -> dict[str, Any]:
             source_results.append({"source": name, "success": False, "count": 0, "error": str(exc)})
 
     await asyncio.gather(
+        collect("东方财富快讯", lambda: _fetch_market_flash_news(lookup, limit=80)),
         collect("财新市场新闻", lambda: _fetch_caixin_market_news(lookup, limit=60)),
         collect("东方财富公告", lambda: _fetch_eastmoney_announcements(lookup, days=2, limit=80)),
         collect("东方财富研报", lambda: _fetch_eastmoney_research(lookup, watch_symbols[:8], limit_per_symbol=4)),
     )
+    # 按发布时间倒序后截断：带时刻的快讯天然排在纯日期公告之前，保住最新资讯不被截掉
+    all_events.sort(key=lambda e: str(e.get("publish_time") or ""), reverse=True)
     saved = _store_news_events(all_events[:limit])
+    _prune_news_events(keep_days=3)  # 去重 + 清过期，防止源累积挤占查询窗
     lite_insights_cache.clear()
     _persistent_cache_delete_prefix("smart-pool:")
     return {
@@ -2831,7 +2934,10 @@ async def lite_hot_news(limit: int = 30):
     safe_limit = max(1, min(limit, 100))
     primary_events = sorted(
         [event for event in unique_events if _is_actionable_hot_event(event)],
-        key=lambda event: _event_relevance_score(event),
+        key=lambda event: (
+            1 if event.get("source_type") in {"news", "sentiment", "hot_rank"} else 0,
+            _event_relevance_score(event),
+        ),
         reverse=True,
     )
     events = primary_events[:safe_limit]
@@ -2853,15 +2959,7 @@ async def lite_hot_news(limit: int = 30):
                 events.append(event)
             if len(events) >= safe_limit:
                 break
-    if len(events) < safe_limit:
-        selected_titles = {re.sub(r"\s+", "", str(event.get("title") or "")) for event in events}
-        for item in _lite_news_items():
-            normalized_title = re.sub(r"\s+", "", str(item.get("title") or ""))
-            if normalized_title and normalized_title not in selected_titles:
-                selected_titles.add(normalized_title)
-                events.append(item)
-            if len(events) >= safe_limit:
-                break
+    # 不再用合成模板补位：宁可少几条真实快讯，也不拿模拟数据冒充（与 source_note 承诺一致）。
     if events:
         items = []
         for rank, event in enumerate(events, start=1):
@@ -2882,7 +2980,7 @@ async def lite_hot_news(limit: int = 30):
                 "url": event["url"],
             })
     else:
-        items = _lite_news_items()[: max(1, min(limit, 100))]
+        items = []
     category_counter: dict[str, int] = {}
     for item in items:
         for tag in item.get("tags", [])[:2]:
@@ -2914,7 +3012,7 @@ async def lite_hot_news(limit: int = 30):
         ][:160]),
         "items": items,
         "failed_sources": [],
-        "source_note": "真实源：东方财富公告、东方财富研报、财新市场新闻；不可用源不会用模拟数据冒充。",
+        "source_note": "实时源：东方财富 7x24 快讯（主）、财新市场新闻；强事件公告/研报作补充。不可用源不会用模拟数据冒充。",
     }
     return _cache_set(cache_key, {"success": True, "data": data, "message": "ok"})
 

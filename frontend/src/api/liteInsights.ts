@@ -11,6 +11,8 @@ export interface HotNewsItem {
   source: string
   publish_time: string
   tags: string[]
+  symbols?: string[]
+  stock_names?: string[]
   url?: string
 }
 

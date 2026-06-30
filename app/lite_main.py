@@ -869,6 +869,107 @@ def _fetch_eastmoney_realtime_snapshot() -> dict[str, dict[str, Any]]:
     return snapshot
 
 
+_industry_map_cache: tuple[datetime, dict[str, str]] | None = None
+
+
+def _fetch_industry_map() -> dict[str, str]:
+    """全市场 代码->行业 映射（东财 clist f100 字段）。复用快照同款 host 级联与并发分页。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from math import ceil
+
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"}
+    request_routes = (
+        ("82.push2.eastmoney.com", False),
+        ("88.push2.eastmoney.com", False),
+        ("push2.eastmoney.com", True),
+        ("70.push2.eastmoney.com", True),
+    )
+    base_params = {
+        "po": 1, "np": 1, "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+        "fltt": 2, "invt": 2, "fid": "f3",
+        "fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23", "fields": "f12,f100",
+    }
+
+    def fetch_page(page: int) -> tuple[int, list[dict[str, Any]]]:
+        params = {**base_params, "pn": page, "pz": 100}
+        for host, trust_env in request_routes:
+            try:
+                session = requests.Session()
+                session.trust_env = trust_env
+                resp = session.get(f"https://{host}/api/qt/clist/get", params=params, headers=headers, timeout=3)
+                resp.encoding = "utf-8"
+                resp.raise_for_status()
+                payload = resp.json().get("data") or {}
+                return int(payload.get("total") or 0), list(payload.get("diff") or [])
+            except Exception:
+                continue
+        return 0, []
+
+    total, first_rows = fetch_page(1)
+    pages = max(1, min(80, ceil(total / 100))) if total else 1
+    rows = list(first_rows)
+    if pages > 1:
+        with ThreadPoolExecutor(max_workers=28) as executor:
+            futures = [executor.submit(fetch_page, page) for page in range(2, pages + 1)]
+            for future in as_completed(futures):
+                try:
+                    _, page_rows = future.result()
+                    rows.extend(page_rows)
+                except Exception:
+                    continue
+    mapping: dict[str, str] = {}
+    for row in rows:
+        code = str(row.get("f12") or "").strip().zfill(6)
+        industry = str(row.get("f100") or "").strip()
+        if re.fullmatch(r"\d{6}", code) and industry and industry != "-":
+            mapping[code] = industry
+    return mapping
+
+
+_INDUSTRY_MAP_PATH = "runtime/industry_map.json"
+_industry_fetch_last_failure: datetime | None = None
+
+
+def _load_industry_map(ttl_hours: int = 24) -> dict[str, str]:
+    """代码->行业 映射。优先内存/磁盘缓存（离线、即时、不受东财限流影响）；过期且未近期失败
+    时才后台从东财拉一次并落盘。东财行业极少变，落盘缓存 24h 足够。"""
+    global _industry_map_cache, _industry_fetch_last_failure
+    now = datetime.now()
+    if _industry_map_cache and (now - _industry_map_cache[0]).total_seconds() < ttl_hours * 3600:
+        return _industry_map_cache[1]
+    # 内存空：尝试从磁盘加载
+    if _industry_map_cache is None and os.path.exists(_INDUSTRY_MAP_PATH):
+        try:
+            with open(_INDUSTRY_MAP_PATH, "r", encoding="utf-8") as fh:
+                disk = json.load(fh)
+            mtime = datetime.fromtimestamp(os.path.getmtime(_INDUSTRY_MAP_PATH))
+            if isinstance(disk, dict) and disk:
+                _industry_map_cache = (mtime, {str(k).zfill(6): str(v) for k, v in disk.items()})
+                if (now - mtime).total_seconds() < ttl_hours * 3600:
+                    return _industry_map_cache[1]
+        except Exception:
+            pass
+    # 缓存过期/缺失：限流退避（失败后 10 分钟内不再打东财），其余时间尝试刷新
+    if _industry_fetch_last_failure and (now - _industry_fetch_last_failure) < timedelta(minutes=10):
+        return _industry_map_cache[1] if _industry_map_cache else {}
+    try:
+        mapping = _fetch_industry_map()
+    except Exception:
+        mapping = {}
+    if mapping:
+        _industry_map_cache = (now, mapping)
+        _industry_fetch_last_failure = None
+        try:
+            os.makedirs(os.path.dirname(_INDUSTRY_MAP_PATH), exist_ok=True)
+            with open(_INDUSTRY_MAP_PATH, "w", encoding="utf-8") as fh:
+                json.dump(mapping, fh, ensure_ascii=False)
+        except Exception:
+            pass
+    else:
+        _industry_fetch_last_failure = now
+    return _industry_map_cache[1] if _industry_map_cache else {}
+
+
 def _load_realtime_quotes_snapshot(ttl_seconds: int = 3) -> dict[str, dict[str, Any]]:
     global lite_realtime_quotes_cache, _quotes_loading, _akshare_last_failure
     now = datetime.now(timezone.utc)
@@ -2887,13 +2988,14 @@ async def lite_call_auction():
     from quantcore.quant.call_auction import compute_call_auction
     from quantcore.quant.sector_leaders import SECTOR_LEADERS
 
-    cache_key = "call-auction:v1"
+    cache_key = "call-auction:v2-hotsector"
     cached = _cache_get(cache_key, 60)
     if cached:
         return cached
 
     snapshot = await asyncio.to_thread(_load_realtime_quotes_snapshot, 60)
-    result = await asyncio.to_thread(compute_call_auction, snapshot, SECTOR_LEADERS)
+    industry_map = await asyncio.to_thread(_load_industry_map)
+    result = await asyncio.to_thread(compute_call_auction, snapshot, SECTOR_LEADERS, industry_map=industry_map)
     payload = {
         "success": True,
         "data": {**result, "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S")},

@@ -86,14 +86,15 @@
 
         <!-- 竞价买入推荐 -->
         <section class="panel">
-          <div class="panel-title">竞价买入候选 <em>健康高开 1.5%–7%，点击进深研</em></div>
-          <div v-if="!data.buy_candidates.length" class="empty">当日无符合条件的高开候选（弱势竞价）</div>
+          <div class="panel-title">竞价买入候选 <em>热门科技板块 · 健康高开 1.5%–7%，点击进深研</em></div>
+          <div v-if="!data.buy_candidates.length" class="empty">当日热门科技板块无符合条件的高开候选（弱势竞价）</div>
           <button
             v-for="c in data.buy_candidates" :key="c.code"
             type="button" class="cand-card" @click="openStock(c.code)"
           >
             <div class="cc-l">
               <div class="cc-name">{{ c.name }}<span class="cc-code">{{ c.code }}</span>
+                <span v-if="c.theme" class="theme-tag">{{ c.theme }}</span>
                 <span class="grab" :class="grabClass(c.grab)">{{ c.grab }}</span>
               </div>
               <div class="cc-reasons">{{ c.reasons.join(' · ') }}</div>
@@ -227,6 +228,7 @@ onMounted(load)
 .cand-card:hover { border-color: var(--el-color-primary); transform: translateX(2px); }
 .cc-name { font-size: 14px; font-weight: 600; }
 .cc-code { font-size: 11px; color: var(--el-text-color-secondary); margin-left: 6px; font-variant-numeric: tabular-nums; }
+.theme-tag { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px; margin-left: 6px; color: var(--el-color-primary); background: var(--el-color-primary-light-9); border: 1px solid var(--el-color-primary-light-7); }
 .grab { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-left: 6px; color: #fff; }
 .g-strong { background: #b71c1c; }
 .g-mid { background: #ef232a; }

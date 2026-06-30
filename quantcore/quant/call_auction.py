@@ -41,13 +41,35 @@ def _num(value, default=0.0) -> float:
         return default
 
 
+# 科技成长热门行业白名单（东财行业名 f100 的子串匹配）。只在这些行业里选竞价买入股，
+# 把白酒/食品/银行/保险/能源/风电/纺织等"老登"行业整体排除——竞价开得再好也不入选。
+# 用户诉求：买入候选务必落在近期热门科技板块（光模块/PCB/存储/芯片/半导体/机器人/算力/AI）。
+HOT_TECH_INDUSTRY_KEYWORDS = (
+    "半导体", "光学光电", "元件", "电子化学", "其他电子", "消费电子",
+    "通信设备", "通信服务", "计算机", "软件", "IT服务", "互联网",
+    "自动化设备", "机器人", "电机",
+    "专用设备",  # 半导体设备龙头(北方华创/中微/拓荆/赛腾)的 EM 行业归在此，必须纳入
+)
+
+
+def _is_hot_tech(industry: str) -> bool:
+    industry = industry or ""
+    return any(kw in industry for kw in HOT_TECH_INDUSTRY_KEYWORDS)
+
+
 def compute_call_auction(
     snapshot: Dict[str, dict],
     sectors_config: List[dict],
     *,
     buy_limit: int = 15,
+    industry_map: Dict[str, str] | None = None,
 ) -> Dict[str, object]:
-    """把全市场快照算成：竞价情绪概览 + 竞价热门板块 + 竞价买入推荐。"""
+    """把全市场快照算成：竞价情绪概览 + 竞价热门板块 + 竞价买入推荐。
+
+    industry_map（代码->东财行业名）用于把买入候选限定在科技成长热门行业；缺省时退化为
+    旧的全市场打分（不做行业过滤），保证行业源不可用时功能仍可用。
+    """
+    imap = industry_map or {}
     rows: List[dict] = []
     for v in snapshot.values():
         code = str(v.get("code") or v.get("symbol") or "").zfill(6)
@@ -69,6 +91,7 @@ def compute_call_auction(
             "total_mv": _num(v.get("total_mv")),
             "is_st": "ST" in name.upper() or "退" in name,
             "board_limit": _board_limit(code),
+            "industry": imap.get(code, ""),
         })
 
     total = len(rows)
@@ -171,18 +194,38 @@ def compute_call_auction(
         })
     hot_sectors.sort(key=lambda s: (s["avg_open_pct"], s["high_count"]), reverse=True)
 
-    # 竞价买入推荐：健康高开(1.5%~7%，非一字板)、非 ST、有量、价格不仙
+    # 板块共振强度：每个热门科技行业里"高开抢筹(≥1%)"的家数。共振越强，说明资金在该
+    # 热门方向集体抢筹，个股当日走强的概率越高——这是"在最近热门板块里重点选股"的量化抓手。
+    gating = bool(imap)
+    hot_open_by_industry: Dict[str, int] = {}
+    if gating:
+        for r in rows:
+            ind = r.get("industry") or ""
+            if not r["is_st"] and _is_hot_tech(ind) and r["open_pct"] >= 1.0:
+                hot_open_by_industry[ind] = hot_open_by_industry.get(ind, 0) + 1
+
+    # 竞价买入推荐：① 只在科技成长热门行业里选（白酒/食品/银行/保险/能源等老登整体排除，
+    #   竞价开得再好也不入选）② 健康高开 1.5%~7%（非一字板、可买入）③ 非 ST、价格不仙
+    #   ④ 评分叠加板块共振——同热门行业高开家数越多越优先。
     candidates = []
     for r in rows:
         if r["is_st"] or r["price"] < 3:
             continue
         if not (1.5 <= r["open_pct"] <= 7.0):
             continue
+        industry = r.get("industry") or ""
+        if gating and not _is_hot_tech(industry):
+            continue  # 不在热门科技行业 —— 竞价开得再好也不入选
         vr = r["volume_ratio"]
-        # 评分：高开强度 + 量比配合（量比缺失给中性 1.0）
         vr_eff = vr if vr > 0 else 1.0
-        score = round(min(r["open_pct"], 7.0) * 6 + min(vr_eff, 4.0) * 8, 1)
-        # 抢筹强度：以竞价高开幅度为精确口径（始终可得），量比为辅助
+        resonance = hot_open_by_industry.get(industry, 0)
+        # 评分：高开强度 + 量比配合 + 板块共振加权
+        score = round(
+            min(r["open_pct"], 7.0) * 6
+            + min(vr_eff, 4.0) * 8
+            + min(resonance, 12) * 1.8,
+            1,
+        )
         if r["open_pct"] >= 5:
             grab = "强抢筹"
         elif r["open_pct"] >= 3:
@@ -190,6 +233,8 @@ def compute_call_auction(
         else:
             grab = "温和高开"
         reasons = [f"竞价高开 +{r['open_pct']:.2f}%"]
+        if industry:
+            reasons.append(f"{industry}·板块{resonance}股共振" if resonance >= 3 else industry)
         if vr_eff >= 1.5:
             reasons.append(f"量比 {vr_eff:.1f}")
         if r["amount"]:
@@ -203,18 +248,23 @@ def compute_call_auction(
             "amount": r["amount"],
             "grab": grab,
             "score": score,
+            "industry": industry,
+            "theme": industry,
+            "resonance": resonance,
             "reasons": reasons,
         })
-    candidates.sort(key=lambda c: c["score"], reverse=True)
+    candidates.sort(key=lambda c: (c["score"], c.get("resonance", 0)), reverse=True)
 
     return {
         "available": True,
         "overview": overview,
         "hot_sectors": hot_sectors[:8],
         "buy_candidates": candidates[:buy_limit],
+        "gated_by_hot_sector": gating,
         "note": (
-            "竞价高开=今开/昨收，高开分布与抢筹强度始终精确。"
-            "成交额口径：竞价时段(09:15-09:25)即真实竞价撮合额，盘后为全日累计(仅参考)；"
-            "因数据源限制，盘后无法单独还原 09:25 撮合量。研究用途，不构成投资建议。"
+            "买入候选只在科技成长热门行业（半导体/光模块/PCB/存储/消费电子/通信/计算机/软件/机器人等）"
+            "中筛选，白酒/食品/银行/保险/能源等行业整体排除。竞价高开=今开/昨收；评分=高开强度+量比+板块共振。"
+            + ("" if gating else "（行业数据暂不可用，本次未做行业过滤）")
+            + "成交额口径：竞价时段(09:15-09:25)为真实撮合额，盘后为全日累计(仅参考)。研究用途，不构成投资建议。"
         ),
     }

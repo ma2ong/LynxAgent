@@ -36,6 +36,7 @@ from app.lite_auth import get_current_lite_user, router as lite_auth_router, sto
 from app.lite_billing import PLANS, billing, effective_plan, require_quota, router as billing_router
 from app.lite_admin import router as admin_router
 from app.lite_notifications import notification_store
+from app.core.scan_gate import run_scan
 from app.routers.quant import router as quant_router
 from quantcore.quant import QuantEngine
 from quantcore.quant.sync_service import get_sync_service
@@ -2449,7 +2450,7 @@ async def _compute_lite_swing_pool(
 ) -> dict[str, Any]:
     """短线波段档：调用量化引擎 6 维共振扫描，映射为智能推荐池响应（带 ATR 买卖点）。"""
     _smart_pool_task_update(task_id, progress=30, phase="swing", message="扫描短线波段共振信号")
-    swing = await asyncio.to_thread(
+    swing = await run_scan(
         lite_quant_engine.swing_pool, limit=limit, universe_limit=universe
     )
     items: list[dict[str, Any]] = []
@@ -2550,7 +2551,7 @@ async def _compute_lite_smart_pool(
                 return default
 
         _smart_pool_task_update(task_id, progress=28, phase="quant_center", message="调用量化中心一键推荐模型")
-        quant_pool = await asyncio.to_thread(
+        quant_pool = await run_scan(
             lite_quant_engine.smart_pool,
             limit=safe_limit,
             universe_limit=safe_universe,
@@ -2952,6 +2953,15 @@ async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int, uni
 async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 30, universe_limit: int = 500):
     safe_limit = max(5, min(limit, 50))
     safe_universe = max(safe_limit * 2, min(universe_limit, 1200))
+    # 去重：同参数任务已在排队/运行则直接复用，避免连点堆叠多个全市场扫描把线程池占满。
+    for existing in lite_smart_pool_tasks.values():
+        if (
+            existing.get("status") in ("queued", "running")
+            and existing.get("strategy") == strategy
+            and existing.get("limit") == safe_limit
+            and existing.get("universe_limit") == safe_universe
+        ):
+            return {"success": True, "data": existing, "message": "reused"}
     _smart_pool_task_cleanup()
     task_id = "smart_" + secrets.token_hex(8)
     now = datetime.now().astimezone().isoformat()

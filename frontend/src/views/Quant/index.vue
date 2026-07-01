@@ -65,7 +65,7 @@
               </label>
             </div>
             <div class="smart-actions">
-              <el-button type="success" size="large" native-type="button" :loading="smartPoolLoading" @click="loadSmartPool">
+              <el-button type="success" size="large" native-type="button" :loading="smartPoolLoading" :disabled="patternPoolLoading" @click="loadSmartPool">
                 <el-icon><Search /></el-icon>
                 一键智能推荐
               </el-button>
@@ -83,6 +83,7 @@
                 <strong>{{ smartProgress }}%</strong>
               </div>
               <el-progress :percentage="smartProgress" :stroke-width="10" />
+              <p style="margin:8px 0 0;font-size:12px;color:#e6a23c;">全市场扫描约需 1~2 分钟，若已有扫描在跑会自动排队，请耐心等待、勿重复点击。</p>
               <div class="progress-steps">
                 <div v-for="step in smartProgressSteps" :key="step.name" :class="['progress-step', step.status]">
                   <span>{{ step.index }}</span>
@@ -231,7 +232,7 @@
               </label>
             </div>
             <div class="smart-actions">
-              <el-button type="success" size="large" native-type="button" :loading="patternPoolLoading" @click="loadPatternPool">
+              <el-button type="success" size="large" native-type="button" :loading="patternPoolLoading" :disabled="smartPoolLoading" @click="loadPatternPool">
                 <el-icon><Search /></el-icon>
                 一键扫描形态
               </el-button>
@@ -248,7 +249,8 @@
                 </div>
                 <strong>{{ smartElapsed }}s</strong>
               </div>
-              <el-progress :percentage="smartProgress" :stroke-width="10" />
+              <el-progress :percentage="100" :indeterminate="true" :duration="3" :stroke-width="10" :show-text="false" />
+              <p style="margin:8px 0 0;font-size:12px;color:#e6a23c;">全市场逐只扫描约需 1~2 分钟，系统正在计算，请耐心等待、勿重复点击。</p>
               <div class="progress-steps">
                 <div v-for="step in patternProgressSteps" :key="step.name" :class="['progress-step', step.status]">
                   <span>{{ step.index }}</span>

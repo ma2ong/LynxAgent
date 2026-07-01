@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.lite_auth import get_current_lite_user
 from app.lite_billing import require_quota
+from app.core.scan_gate import run_scan
 from quantcore.quant import QuantEngine
 from quantcore.quant.chart_service import build_chart_payload
 from quantcore.quant.data_sources import data_source_status
@@ -114,7 +115,7 @@ async def quant_data_sources():
 @router.get("/smart-pool")
 async def quant_smart_pool(limit: int = 20, universe_limit: int = 300):
     try:
-        return await asyncio.to_thread(engine.smart_pool, limit, universe_limit)
+        return await run_scan(engine.smart_pool, limit, universe_limit)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -123,7 +124,7 @@ async def quant_smart_pool(limit: int = 20, universe_limit: int = 300):
 async def quant_pattern_pool(limit: int = 20, universe_limit: int = 5000, min_strength: float = 70.0,
                             exclude_fundamental: bool = True):
     try:
-        result = await asyncio.to_thread(engine.pattern_pool, limit, universe_limit, min_strength, exclude_fundamental)
+        result = await run_scan(engine.pattern_pool, limit, universe_limit, min_strength, exclude_fundamental)
         # 补全「行业/板块」：stock_meta 行业常为空，按 cninfo 给返回项补行业（并行+整体超时，不拖死端点）。
         items = result.get("items") if isinstance(result, dict) else None
         if items:

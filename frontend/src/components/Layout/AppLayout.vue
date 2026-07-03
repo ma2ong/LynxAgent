@@ -31,6 +31,7 @@
         <el-menu-item index="/insights/kol"><el-icon><Bell /></el-icon><span>KOL日报</span></el-menu-item>
         <el-menu-item index="/insights/capital"><el-icon><Coin /></el-icon><span>资金面板</span></el-menu-item>
         <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
+        <el-menu-item index="/review"><el-icon><DataAnalysis /></el-icon><span>选股复盘</span></el-menu-item>
         <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
         <el-menu-item index="/favorites"><el-icon><Star /></el-icon><span>我的自选股</span></el-menu-item>
         <el-menu-item index="/account/membership"><el-icon><Medal /></el-icon><span>会员与用量</span></el-menu-item>
@@ -58,7 +59,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, TrendCharts, Star, SwitchButton,
   DocumentChecked, Coin, Calendar, Menu,
-  Bell, MagicStick, Medal, Setting, DataLine, Sunrise,
+  Bell, MagicStick, Medal, Setting, DataLine, Sunrise, DataAnalysis,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'

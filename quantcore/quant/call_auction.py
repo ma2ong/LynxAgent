@@ -317,6 +317,17 @@ def compute_call_auction(
             ratio = c["score"] / (smax or 1.0)
             c["tier"] = "最强推荐" if ratio >= 0.9 else ("强推荐" if ratio >= 0.78 else "推荐")
 
+    # 留痕当日竞价候选（首次快照），供复盘页统计真实 T+N 胜率。
+    if top_candidates:
+        try:
+            from .local_store import get_local_store
+            get_local_store().record_picks(
+                "auction",
+                [{**c, "close": c.get("price"), "symbol": c.get("code")} for c in top_candidates],
+            )
+        except Exception:
+            pass
+
     dynamic_hot = [
         {"name": name, "trend_pct": score}
         for name, score in sorted(hot.items(), key=lambda kv: kv[1], reverse=True)

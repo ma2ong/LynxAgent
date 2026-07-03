@@ -217,25 +217,30 @@ class BaoStockSource:
             bs.logout()
 
     def history(self, symbol: str, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
-        bs = self._login()
-        try:
-            fields = "date,code,open,high,low,close,volume,amount"
-            rs = bs.query_history_k_data_plus(
-                _baostock_code(symbol),
-                fields,
-                start_date=_iso_date(start_date),
-                end_date=_iso_date(end_date or date.today().strftime("%Y-%m-%d")),
-                frequency="d",
-                adjustflag="2",
-            )
-            if getattr(rs, "error_code", "0") != "0":
-                return pd.DataFrame()
-            rows: List[List[str]] = []
-            while rs.next():
-                rows.append(rs.get_row_data())
-            return pd.DataFrame(rows, columns=list(getattr(rs, "fields", []) or fields.split(",")))
-        finally:
-            bs.logout()
+        def fetch() -> pd.DataFrame:
+            bs = self._login()
+            try:
+                fields = "date,code,open,high,low,close,volume,amount"
+                rs = bs.query_history_k_data_plus(
+                    _baostock_code(symbol),
+                    fields,
+                    start_date=_iso_date(start_date),
+                    end_date=_iso_date(end_date or date.today().strftime("%Y-%m-%d")),
+                    frequency="d",
+                    adjustflag="2",
+                )
+                if getattr(rs, "error_code", "0") != "0":
+                    return pd.DataFrame()
+                rows: List[List[str]] = []
+                while rs.next():
+                    rows.append(rs.get_row_data())
+                return pd.DataFrame(rows, columns=list(getattr(rs, "fields", []) or fields.split(",")))
+            finally:
+                bs.logout()
+
+        # baostock 走原生 socket 且无自带超时，挂死会冻结整个同步线程池（增量同步卡死、
+        # 当晚自动同步无法启动）；与 akshare/efinance 一致加超时兜底。
+        return _call_with_timeout(fetch, 15, "baostock quote history")
 
 
 SOURCE_REGISTRY = {

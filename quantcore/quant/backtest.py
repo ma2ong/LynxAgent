@@ -7,6 +7,11 @@ import pandas as pd
 from .factors import enrich_indicators
 from .models import BacktestResult
 
+# A股交易成本：买入约 0.03%（佣金+过户费），卖出约 0.08%（佣金+印花税+过户费）。
+# 不计成本会让高换手策略的回测收益虚高，胜率/收益均按含成本口径计算。
+BUY_COST = 0.0003
+SELL_COST = 0.0008
+
 
 def run_long_only_backtest(
     symbol: str,
@@ -38,14 +43,18 @@ def run_long_only_backtest(
         position = pd.Series(held, index=data.index).shift(1).fillna(0)
     else:
         position = raw_signal.astype(int).shift(1).fillna(0)
-    returns = data["close"].pct_change().fillna(0)
-    strategy_returns = returns * position
-    equity = initial_cash * (1 + strategy_returns).cumprod()
-
     previous_position = position.shift(1).fillna(0)
     entries = (position == 1) & (previous_position == 0)
     exits = (position == 0) & (previous_position == 1)
     trades = int(entries.sum())
+
+    returns = data["close"].pct_change().fillna(0)
+    strategy_returns = (
+        returns * position
+        - entries.astype(float) * BUY_COST
+        - exits.astype(float) * SELL_COST
+    )
+    equity = initial_cash * (1 + strategy_returns).cumprod()
 
     trade_returns: List[float] = []
     entry_price: Optional[float] = None
@@ -53,11 +62,11 @@ def run_long_only_backtest(
         if bool(entries.iloc[idx]):
             entry_price = float(row["close"])
         if bool(exits.iloc[idx]) and entry_price:
-            trade_returns.append(float(row["close"]) / entry_price - 1)
+            trade_returns.append(float(row["close"]) / entry_price - 1 - BUY_COST - SELL_COST)
             entry_price = None
 
     if entry_price:
-        trade_returns.append(float(data["close"].iloc[-1]) / entry_price - 1)
+        trade_returns.append(float(data["close"].iloc[-1]) / entry_price - 1 - BUY_COST)
 
     win_rate = sum(1 for ret in trade_returns if ret > 0) / len(trade_returns) if trade_returns else 0.0
     running_peak = equity.cummax()

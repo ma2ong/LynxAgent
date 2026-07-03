@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS daily_kline (
     PRIMARY KEY (symbol, date)
 );
 CREATE INDEX IF NOT EXISTS idx_kline_symbol_date ON daily_kline(symbol, date);
+CREATE INDEX IF NOT EXISTS idx_kline_date ON daily_kline(date);
 CREATE TABLE IF NOT EXISTS sync_state (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS fundamental_flags (
     symbol TEXT PRIMARY KEY,
@@ -33,6 +34,17 @@ CREATE TABLE IF NOT EXISTS fundamental_flags (
     change TEXT,
     period TEXT,
     updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS picks_history (
+    pick_date TEXT,
+    pool TEXT,
+    symbol TEXT,
+    name TEXT,
+    score REAL,
+    close REAL,
+    rank INTEGER,
+    patterns TEXT,
+    PRIMARY KEY (pick_date, pool, symbol)
 );
 """
 
@@ -261,17 +273,26 @@ class LocalQuantStore:
             }
         return out
 
+    def latest_real_bar_date(self) -> str:
+        """最后一根真实日线（amount>0）的日期。盘中占位 bar 不算，与 recent_returns 口径一致。"""
+        row = self._conn().execute("SELECT MAX(date) FROM daily_kline WHERE amount > 0").fetchone()
+        return str(row[0]) if row and row[0] else ""
+
     def recent_returns(self, window: int = 5) -> Dict[str, float]:
         """每只股票最近 window 个交易日的涨跌幅%（最新完整 bar vs window 根前的 bar）。
 
         只用 amount>0 的真实 bar（跳过盘中占位 bar），供"近段趋势热门板块"动态识别。
+        只扫近 45 天窗口（idx_kline_date）：全表窗口函数要扫数百万行、冷查询 10-20s；
+        window≤6 根 bar 在 45 天内必然齐全，停牌超 45 天的股票本就不可交易，丢弃无害。
         """
+        from datetime import date as _date, timedelta as _td
+        cutoff = (_date.today() - _td(days=45)).strftime("%Y-%m-%d")
         sql = """
         WITH ranked AS (
             SELECT symbol, close,
                    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
             FROM daily_kline
-            WHERE amount > 0
+            WHERE amount > 0 AND date >= ?
         )
         SELECT cur.symbol, cur.close, base.close
         FROM ranked cur
@@ -279,12 +300,114 @@ class LocalQuantStore:
         WHERE cur.rn = 1
         """
         out: Dict[str, float] = {}
-        for symbol, cur_close, base_close in self._conn().execute(sql, (window + 1,)).fetchall():
+        for symbol, cur_close, base_close in self._conn().execute(sql, (cutoff, window + 1)).fetchall():
             c = _f(cur_close)
             b = _f(base_close)
             if b > 0:
                 out[str(symbol).zfill(6)] = (c / b - 1) * 100
         return out
+
+    # ---- 选股留痕与胜率复盘 ----
+    def record_picks(self, pool: str, items: List[Dict[str, object]]) -> int:
+        """记录一次选股结果。当日同池同股只保留首次快照（INSERT OR IGNORE），供 T+N 复盘。"""
+        if not items:
+            return 0
+        from datetime import date as _date
+        today = _date.today().strftime("%Y-%m-%d")
+        rows = []
+        for rank, it in enumerate(items, start=1):
+            raw = str(it.get("symbol") or it.get("code") or "").strip()
+            symbol = raw.zfill(6)
+            if not raw or not symbol.isdigit() or len(symbol) != 6:
+                continue
+            patterns = ",".join(
+                str(p.get("name") or "") for p in (it.get("patterns") or []) if isinstance(p, dict)
+            )[:200]
+            rows.append((today, pool, symbol, str(it.get("name") or ""),
+                         _f(it.get("score")), _f(it.get("close")), rank, patterns))
+        if not rows:
+            return 0
+        conn = self._conn()
+        conn.executemany(
+            "INSERT OR IGNORE INTO picks_history(pick_date,pool,symbol,name,score,close,rank,patterns) "
+            "VALUES(?,?,?,?,?,?,?,?)", rows)
+        conn.commit()
+        return len(rows)
+
+    def evaluate_picks(self, days: int = 30, pool: Optional[str] = None) -> Dict[str, object]:
+        """复盘最近 days 天的选股留痕：按池统计 T+1/T+3/T+5 胜率与平均收益。
+
+        基准价 = 留痕时的价格（扫描当时用户看到的价格）；缺失时退回 pick_date 当日
+        （或之前最近）的真实日线收盘。T+N = pick_date 之后第 N 根真实日线（amount>0）的收盘。
+        """
+        import bisect
+        from datetime import date as _date, timedelta as _td
+        since = (_date.today() - _td(days=max(1, days))).strftime("%Y-%m-%d")
+        conn = self._conn()
+        sql = ("SELECT pick_date,pool,symbol,name,score,close,rank FROM picks_history "
+               "WHERE pick_date >= ?")
+        params: List[object] = [since]
+        if pool:
+            sql += " AND pool = ?"
+            params.append(pool)
+        sql += " ORDER BY pick_date DESC, pool, rank"
+        picks = conn.execute(sql, params).fetchall()
+
+        kline_cache: Dict[str, List[tuple]] = {}
+
+        def _bars(sym: str) -> List[tuple]:
+            if sym not in kline_cache:
+                kline_cache[sym] = conn.execute(
+                    "SELECT date, close FROM daily_kline WHERE symbol=? AND amount>0 ORDER BY date",
+                    (sym,)).fetchall()
+            return kline_cache[sym]
+
+        horizons = (1, 3, 5)
+        detail: List[Dict[str, object]] = []
+        agg: Dict[str, Dict[int, List[float]]] = {}
+        for pick_date, pool_name, symbol, name, score, close, rank in picks:
+            bars = _bars(str(symbol))
+            dates = [b[0] for b in bars]
+            idx = bisect.bisect_right(dates, str(pick_date)) - 1
+            base = _f(close)
+            if base <= 0 and idx >= 0:
+                base = _f(bars[idx][1])
+            rets: Dict[str, Optional[float]] = {}
+            for h in horizons:
+                j = idx + h
+                if idx >= 0 and base > 0 and j < len(bars):
+                    rets[f"t{h}"] = round((_f(bars[j][1]) / base - 1) * 100, 2)
+                else:
+                    rets[f"t{h}"] = None
+            detail.append({
+                "pick_date": pick_date, "pool": pool_name, "symbol": symbol, "name": name,
+                "score": _f(score), "rank": int(rank or 0), "base_close": round(base, 2), **rets,
+            })
+            bucket = agg.setdefault(str(pool_name), {h: [] for h in horizons})
+            for h in horizons:
+                v = rets[f"t{h}"]
+                if v is not None:
+                    bucket[h].append(v)
+
+        pools_out: List[Dict[str, object]] = []
+        for pool_name in sorted(agg):
+            stats: Dict[str, object] = {}
+            for h in horizons:
+                vals = agg[pool_name][h]
+                stats[f"t{h}"] = {
+                    "samples": len(vals),
+                    "win_rate": round(sum(1 for v in vals if v > 0) / len(vals), 4) if vals else None,
+                    "avg_return": round(sum(vals) / len(vals), 2) if vals else None,
+                }
+            pools_out.append({
+                "pool": pool_name,
+                "picks": sum(1 for p in detail if p["pool"] == pool_name),
+                "horizons": stats,
+            })
+        return {
+            "days": days, "since": since, "total_picks": len(picks),
+            "pools": pools_out, "items": detail[:300],
+        }
 
     # ---- 状态 ----
     def set_state(self, key: str, value: str) -> None:

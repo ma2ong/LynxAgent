@@ -29,6 +29,12 @@
       </div>
     </section>
 
+    <section v-if="marketCtx?.state" class="market-context" :class="`ctx-${ctxTone}`">
+      <b>大盘环境：{{ marketCtx.state }}</b>
+      <span>近5日{{ marketCtx.as_of ? `(截至 ${marketCtx.as_of})` : '' }}全市场中位 {{ (marketCtx.median_5d_pct ?? 0) > 0 ? '+' : '' }}{{ marketCtx.median_5d_pct }}% · 上涨占比 {{ Math.round((marketCtx.breadth_up || 0) * 100) }}%</span>
+      <span class="ctx-advice">{{ marketCtx.advice }}</span>
+    </section>
+
     <el-alert
       v-if="isIntradayHealth"
       title="盘中使用实时行情，日 K 不需要现在补"
@@ -70,6 +76,7 @@
                 一键智能推荐
               </el-button>
               <span v-if="smartPoolResult?.items.length">已推荐 {{ smartPoolResult.items.length }} 只</span>
+              <button class="winrate-chip" type="button" @click="router.push('/review')">{{ poolWinText('smart') }}</button>
             </div>
           </section>
 
@@ -237,6 +244,7 @@
                 一键扫描形态
               </el-button>
               <span v-if="patternPoolResult?.items.length">已命中 {{ patternPoolResult.items.length }} 只</span>
+              <button class="winrate-chip" type="button" @click="router.push('/review')">{{ poolWinText('pattern') }}</button>
             </div>
           </section>
 
@@ -673,7 +681,8 @@ import {
   type QuantSmartPoolItem,
   type QuantSmartPoolResult,
   type QuantSmartPoolTask,
-  type QuantStockPoolResult
+  type QuantStockPoolResult,
+  type MarketContext
 } from '@/api/quant'
 
 const route = useRoute()
@@ -972,7 +981,30 @@ const ensureDataBeforeScan = async () => {
   return true
 }
 
+const marketCtx = ref<MarketContext | null>(null)
+const ctxTone = computed(() => {
+  const s = marketCtx.value?.state
+  return s === '偏暖' ? 'warm' : s === '偏冷' ? 'cold' : 'flat'
+})
+
+// 各池近30日 T+5 真实胜率（来自选股留痕），样本不足时提示积累中
+const poolStats = ref<Record<string, { win_rate: number | null; samples: number }>>({})
+const poolWinText = (pool: string) => {
+  const s = poolStats.value[pool]
+  if (!s || !s.samples || s.win_rate == null) return '真实胜率统计积累中 · 查看复盘'
+  return `近30日 T+5 胜率 ${(s.win_rate * 100).toFixed(0)}%（${s.samples} 样本）`
+}
+
 onMounted(async () => {
+  quantApi.marketContext().then((ctx) => { marketCtx.value = ctx || null }).catch(() => {})
+  quantApi.picksStats(30).then((res) => {
+    const map: Record<string, { win_rate: number | null; samples: number }> = {}
+    for (const p of res?.pools || []) {
+      const t5 = p.horizons?.t5
+      map[p.pool] = { win_rate: t5?.win_rate ?? null, samples: t5?.samples ?? 0 }
+    }
+    poolStats.value = map
+  }).catch(() => {})
   try {
     const s = await quantApi.syncStatus()
     syncStatus.value = s
@@ -1334,6 +1366,48 @@ const openChart = async (row: any) => {
     color: var(--el-text-color-secondary);
     font-size: 12px;
   }
+}
+
+.winrate-chip {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 999px;
+  background: var(--el-fill-color-extra-light);
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+
+  &:hover {
+    color: var(--el-color-primary);
+    border-color: var(--el-color-primary-light-5);
+  }
+}
+
+.market-context {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-fill-color-extra-light);
+
+  b { font-size: 14px; }
+  span { color: var(--el-text-color-secondary); font-size: 12px; }
+  .ctx-advice { color: var(--el-text-color-regular); }
+}
+
+.ctx-warm {
+  border-color: #ffb3a7;
+  background: #fff1f0;
+  b { color: #ef232a; }
+}
+
+.ctx-cold {
+  border-color: #a7d4b4;
+  background: #f0fff4;
+  b { color: #0e9f5a; }
 }
 
 .health-fresh,

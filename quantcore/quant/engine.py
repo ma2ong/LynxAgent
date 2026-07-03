@@ -57,8 +57,8 @@ def _json_safe(value):
     return value
 
 
-# MA20 仅用于评分里 ±6 的微调，按 (symbol, 当日) 缓存，避免全市场扫描重复抓取
-_MA20_CACHE: Dict[str, Tuple[str, Optional[float]]] = {}
+# 稳定性画像（MA20/波动/月内暴涨/乖离）按 (symbol, 当日) 缓存，避免全市场扫描重复抓取
+_STAB_CACHE: Dict[str, Tuple[str, Optional[Dict[str, float]]]] = {}
 
 # 历史 K 线按 (symbol, 天数, 当日) 缓存，让形态扫描的重复运行秒级返回（冷启动仍需逐只抓取）
 _HIST_CACHE: Dict[str, Tuple[str, "pd.DataFrame"]] = {}
@@ -81,25 +81,58 @@ def _hist_dataframe(symbol: str, days: int) -> "pd.DataFrame":
     return df
 
 
-def _get_ma20_for_symbol(symbol: str) -> Optional[float]:
-    """Fetch 20-day moving average. Returns None on failure."""
+def _stability_from_kline(df: "pd.DataFrame") -> Optional[Dict[str, float]]:
+    """近 20 根日线的稳定性画像：MA20、日收益率波动、月内最大单日涨幅、MA20 乖离。"""
+    try:
+        if df is None or df.empty or len(df) < 21:
+            return None
+        closes = df["close"].astype(float).tail(21).reset_index(drop=True)
+        rets = closes.pct_change().dropna() * 100
+        ma20 = float(closes.tail(20).mean())
+        close = float(closes.iloc[-1])
+        return {
+            "ma20": ma20,
+            "vol20": float(rets.std()),
+            "max_gain20": float(rets.max()),
+            "bias20": (close / ma20 - 1) * 100 if ma20 else 0.0,
+        }
+    except Exception:
+        return None
+
+
+def _anti_chase_score(stab: Optional[Dict[str, float]]) -> float:
+    """反追涨评分（0-100，无数据=50 中性）。
+
+    A 股横截面证据（券商研报复现口径）：低波动、月内最大单日涨幅低（反彩票）、
+    温和乖离的组合为正 IC；追当日涨幅方向相反。故低波动加分，月内暴涨与高乖离惩罚。
+    """
+    if not stab:
+        return 50.0
+    vol_comp = max(0.0, min(100.0, 90 - float(stab.get("vol20") or 0) * 14))
+    lottery_comp = max(0.0, min(100.0, 85 - float(stab.get("max_gain20") or 0) * 5.5))
+    bias = float(stab.get("bias20") or 0)
+    bias_comp = max(0.0, min(100.0, 80 - max(0.0, bias) * 4 - max(0.0, -bias) * 1.5))
+    return round(vol_comp * 0.4 + lottery_comp * 0.35 + bias_comp * 0.25, 1)
+
+
+def _get_stability_for_symbol(symbol: str) -> Optional[Dict[str, float]]:
+    """取稳定性画像（含 MA20）。失败返回 None，评分按中性处理。"""
     today = date.today().isoformat()
-    cached = _MA20_CACHE.get(symbol)
+    cached = _STAB_CACHE.get(symbol)
     if cached and cached[0] == today:
         return cached[1]
-    value: Optional[float] = None
+    value: Optional[Dict[str, float]] = None
     try:
-        # 只取约 40 天即可覆盖 20 个交易日；直连 akshare，失败即跳过，避免落入缓慢的 yfinance 回退
-        start = (date.today() - timedelta(days=40)).strftime("%Y-%m-%d")
+        # 60 天覆盖 21+ 个交易日；直连 akshare，失败即跳过，避免落入缓慢的 yfinance 回退
+        start = (date.today() - timedelta(days=60)).strftime("%Y-%m-%d")
         end = date.today().strftime("%Y-%m-%d")
-        df = load_local_kline(symbol, days=40)
+        df = load_local_kline(symbol, days=60)
         if df is None or df.empty:
             df = normalize_ohlcv(_fetch_from_akshare(symbol, start, end))
-        if df is not None and len(df) >= 20:
-            value = float(df["close"].tail(20).mean())
+        value = _stability_from_kline(df)
     except Exception:
         value = None
-    _MA20_CACHE[symbol] = (today, value)
+    _STAB_CACHE[symbol] = (today, value)
     return value
 
 
@@ -143,6 +176,56 @@ def _fetch_tencent_quotes(symbols: List[str]) -> Dict[str, Dict[str, object]]:
         for partial in executor.map(_fetch_tencent_quote_chunk, chunks):
             quotes.update(partial)
     return quotes
+
+
+# market_context 的全表窗口扫描冷查询可达 20s+，页面横幅等不起；10 分钟 TTL 足够（日线级数据）。
+_MARKET_CTX_CACHE: Optional[Tuple[float, Dict[str, object]]] = None
+
+
+def market_context() -> Dict[str, object]:
+    """全市场 5 日中位涨幅 + 上涨占比 → 大盘环境提示。
+
+    择时证据：普跌市里短线信号胜率系统性下降，池子输出应带环境标签让用户决定仓位。
+    本地数据不足时返回空 dict，不影响主流程。
+    """
+    global _MARKET_CTX_CACHE
+    import time as _time
+    now = _time.time()
+    if _MARKET_CTX_CACHE and now - _MARKET_CTX_CACHE[0] < 600:
+        return _MARKET_CTX_CACHE[1]
+    result: Dict[str, object] = {}
+    try:
+        rets = get_local_store().recent_returns(window=5)
+        vals = sorted(rets.values())
+        if len(vals) < 500:
+            _MARKET_CTX_CACHE = (now, result)
+            return result
+        median = vals[len(vals) // 2]
+        breadth = sum(1 for v in vals if v > 0) / len(vals)
+        if median >= 1.0 and breadth >= 0.55:
+            state, advice = "偏暖", "市场普涨，短线信号胜率通常较高。"
+        elif median <= -1.0 or breadth <= 0.40:
+            state, advice = "偏冷", "市场普跌，短线信号胜率系统性下降，建议降低仓位或观望。"
+        else:
+            state, advice = "中性", "市场分化，优先选强主线，控制单票仓位。"
+        # as_of=最后一根真实日线（amount>0），与中位数计算口径一致；本口径是「近段结构趋势」，
+        # 盘中实时情绪看市场雷达，两者可能背离（如普跌后盘中反弹），标注截止日避免互相矛盾。
+        as_of = ""
+        try:
+            as_of = get_local_store().latest_real_bar_date()
+        except Exception:
+            pass
+        result = {
+            "state": state,
+            "median_5d_pct": round(median, 2),
+            "breadth_up": round(breadth, 4),
+            "as_of": as_of,
+            "advice": advice,
+        }
+        _MARKET_CTX_CACHE = (now, result)
+        return result
+    except Exception:
+        return result
 
 
 def _pattern_scan_one(payload: Dict[str, object]) -> Optional[Dict[str, object]]:
@@ -329,7 +412,7 @@ class QuantEngine:
         symbols = [str(meta.get("symbol") or "").strip().zfill(6) for meta in pool]
         quote_map = _fetch_tencent_quotes(symbols)
 
-        def _score(meta: Dict[str, object], ma20: Optional[float]) -> Dict[str, object]:
+        def _score(meta: Dict[str, object], stab: Optional[Dict[str, float]]) -> Dict[str, object]:
             symbol = str(meta.get("symbol") or "").strip().zfill(6)
             quote = quote_map.get(symbol, {})
             pct_chg = _safe_float(quote.get("pct_chg"), 0)
@@ -337,20 +420,24 @@ class QuantEngine:
             turnover = _safe_float(quote.get("turnover_rate"), 0)
             volume_ratio = _safe_float(quote.get("volume_ratio"), 0)
             close_price = _safe_float(quote.get("price"), 0)
+            ma20 = stab.get("ma20") if stab else None
             ma20_adj = 0.0
-            if ma20 is not None and close_price > 0:
+            if ma20 and close_price > 0:
                 ma20_adj = 6.0 if close_price > ma20 else -6.0
             trend_score = max(0.0, min(100.0, 55 + pct_chg * 5.2 + min(amount / 100000000, 8) * 2.6 + ma20_adj))
             momentum_score = max(0.0, min(100.0, 50 + pct_chg * 6.0 + min(volume_ratio, 3) * 9.0))
             liquidity_score = max(0.0, min(100.0, 45 + min(amount / 100000000, 12) * 4.0))
             rsi_score = max(0.0, min(100.0, 50 + pct_chg * 3.0))
             risk_score = max(0.0, min(100.0, 78 - abs(pct_chg) * 2.8 + min(turnover, 8)))
+            anti_chase = _anti_chase_score(stab)
+            # v2 权重：降当日涨幅类权重，引入反追涨维度（低波动/反彩票/乖离），合计 1.0
             smart_score = round(
-                trend_score * 0.30
-                + momentum_score * 0.28
-                + liquidity_score * 0.18
-                + rsi_score * 0.12
-                + risk_score * 0.12,
+                trend_score * 0.26
+                + momentum_score * 0.22
+                + liquidity_score * 0.16
+                + rsi_score * 0.10
+                + risk_score * 0.10
+                + anti_chase * 0.16,
                 1,
             )
             factors = {
@@ -359,6 +446,7 @@ class QuantEngine:
                 "rsi": round(rsi_score, 1),
                 "risk_control": round(risk_score, 1),
                 "liquidity": round(liquidity_score, 1),
+                "anti_chase": round(anti_chase, 1),
             }
             patterns = []
             if trend_score >= 75:
@@ -372,6 +460,11 @@ class QuantEngine:
                 f"动量 {momentum_score:.0f}",
                 f"流动性 {liquidity_score:.0f}",
             ]
+            if stab is not None:
+                if anti_chase >= 65:
+                    reasons.append(f"低波动/反彩票加分 {anti_chase:.0f}")
+                elif anti_chase <= 40:
+                    reasons.append("月内暴涨或高乖离，降权")
             reasons.extend([str(item.get("name")) for item in patterns[:3] if item.get("name")])
             return {
                 "symbol": symbol,
@@ -418,14 +511,14 @@ class QuantEngine:
             metas.append(meta)
         items = [_score(meta, None) for meta in metas]
 
-        # 第二段：只对预筛 top 候选抓 MA20 精修（MA20 仅 ±6 微调，不会让落榜股逆袭进前列）
+        # 第二段：只对预筛 top 候选取稳定性画像精修（MA20 ±6 微调 + 反追涨维度替换中性 50 分）
         order = sorted(range(len(items)), key=lambda i: float(items[i]["score"]), reverse=True)
         refine_n = min(len(order), max(safe_limit * 4, 100))
         top_idx = order[:refine_n]
         with ThreadPoolExecutor(max_workers=24) as executor:
-            ma20_results = list(executor.map(lambda i: (i, _get_ma20_for_symbol(items[i]["symbol"])), top_idx))
-        for i, ma20 in ma20_results:
-            items[i] = _score(metas[i], ma20)
+            stab_results = list(executor.map(lambda i: (i, _get_stability_for_symbol(items[i]["symbol"])), top_idx))
+        for i, stab in stab_results:
+            items[i] = _score(metas[i], stab)
 
         items.sort(key=lambda item: float(item["score"]), reverse=True)
 
@@ -467,11 +560,18 @@ class QuantEngine:
                 atr = 0.0
             it["trade_plan"] = trade_plan(_safe_float(it.get("close"), 0), atr)
 
+        # 留痕当日推荐（首次快照），供复盘页统计真实 T+N 胜率。
+        try:
+            get_local_store().record_picks("smart", final_items)
+        except Exception:
+            pass
+
         return _json_safe({
-            "source": f"quant-engine-smart-pool:{pool_source}",
+            "source": f"quant-engine-smart-pool-v2-antichase:{pool_source}",
             "universe_size": len(pool),
             "analyzed": len(items),
             "items": final_items,
+            "market_context": market_context(),
             "errors": errors,
         })
 
@@ -657,6 +757,11 @@ class QuantEngine:
         items.sort(key=lambda item: (float(item.get("pattern_score") or 0), float(item.get("score") or 0)), reverse=True)
         excluded_total = sum(excluded_reasons.values())
         source = "local-full-scan" if local_ready else "live-fallback"
+        # 留痕当日推荐（首次快照），供复盘页统计真实 T+N 胜率。
+        try:
+            get_local_store().record_picks("pattern", items[:safe_limit])
+        except Exception:
+            pass
         return _json_safe({
             "source": source,
             "pool_source": pool_source,
@@ -669,6 +774,7 @@ class QuantEngine:
             "analyzed": len(candidates) - len(errors),
             "matched": len(items),
             "items": items[:safe_limit],
+            "market_context": market_context(),
             "errors": errors,
             "pattern_model": [
                 "均线粘合后向上发散", "地量洗盘后放量阳线", "挖坑后快速收复",
@@ -769,13 +875,19 @@ class QuantEngine:
                     errors[futures[future]] = str(exc)
 
         items.sort(key=lambda item: float(item.get("score") or 0), reverse=True)
+        # 留痕当日推荐（首次快照），供复盘页统计真实 T+N 胜率。
+        try:
+            get_local_store().record_picks("swing", items[:safe_limit])
+        except Exception:
+            pass
         return _json_safe({
             "source": "local-swing-scan", "pool_source": pool_source,
             "local_kline_symbols": local_kline_count, "universe_size": len(pool),
             "excluded": sum(excluded_reasons.values()),
             "excluded_reasons": {REASON_LABELS.get(k, k): v for k, v in excluded_reasons.items()},
             "scanned": len(candidates), "analyzed": len(candidates) - len(errors),
-            "matched": len(items), "items": items[:safe_limit], "errors": errors,
+            "matched": len(items), "items": items[:safe_limit],
+            "market_context": market_context(), "errors": errors,
             "dimensions": ["RSI超卖", "KDJ金叉", "MACD金叉", "布林下轨", "放量上涨", "资金代理"],
         })
 

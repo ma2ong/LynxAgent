@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from typing import List, Optional
 
@@ -31,6 +32,14 @@ from quantcore.quant.weighted_sentiment import (
 
 router = APIRouter(prefix="/api/quant", tags=["quant"])
 engine = QuantEngine()
+
+# 轻量本地读接口（market-context / picks-stats）专用线程池：
+# 默认执行器会被重扫描/数据同步占满导致这些秒级查询排队饿死，独立小池彻底隔离。
+_light_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="quant-light")
+
+
+async def _run_light(func, *args):
+    return await asyncio.get_running_loop().run_in_executor(_light_executor, lambda: func(*args))
 
 
 class QuantAnalyzeRequest(BaseModel):
@@ -335,6 +344,27 @@ async def pipeline_quick_critic(req: QuickCriticRequest,
 
 
 # ---- 资金面：资金流向 / 龙虎榜 / 财经日历（纯本地数据，不计费）----
+@router.get("/market-context")
+async def quant_market_context():
+    """大盘环境标签：全市场 5 日中位涨幅 + 上涨占比 → 偏暖/中性/偏冷 + 仓位建议。"""
+    try:
+        from quantcore.quant.engine import market_context
+        return await _run_light(market_context)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/picks/stats")
+async def quant_picks_stats(days: int = 30, pool: str = ""):
+    """选股留痕复盘：各池 T+1/T+3/T+5 真实胜率与平均收益（数据来自每日扫描自动留痕）。"""
+    try:
+        from quantcore.quant.local_store import get_local_store
+        safe_days = max(1, min(days, 120))
+        return await _run_light(get_local_store().evaluate_picks, safe_days, pool or None)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/capital/industry-flow")
 async def capital_industry_flow():
     return await asyncio.to_thread(industry_fund_flow_rank)

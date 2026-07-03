@@ -459,6 +459,53 @@ export const quantApi = {
 
   serenityDeep: async (payload: { theme: string; event?: string; beneficiaries?: any[] }) =>
     unwrap<any>(await ApiClient.post('/api/quant/serenity/deep', payload, { timeout: 180000 })),
+
+  picksStats: async (days = 30, pool = '') =>
+    unwrap<PicksStatsResult>(await ApiClient.get('/api/quant/picks/stats', { days, pool, _ts: nonce() }, { timeout: 120000 })),
+
+  marketContext: async () =>
+    unwrap<MarketContext>(await ApiClient.get('/api/quant/market-context', { _ts: nonce() }, { timeout: 30000 })),
+}
+
+export interface MarketContext {
+  state?: '偏暖' | '中性' | '偏冷'
+  median_5d_pct?: number
+  breadth_up?: number
+  as_of?: string
+  advice?: string
+}
+
+export interface PicksHorizonStat {
+  samples: number
+  win_rate: number | null
+  avg_return: number | null
+}
+
+export interface PicksPoolStat {
+  pool: string
+  picks: number
+  horizons: { t1: PicksHorizonStat; t3: PicksHorizonStat; t5: PicksHorizonStat }
+}
+
+export interface PicksStatsItem {
+  pick_date: string
+  pool: string
+  symbol: string
+  name: string
+  score: number
+  rank: number
+  base_close: number
+  t1: number | null
+  t3: number | null
+  t5: number | null
+}
+
+export interface PicksStatsResult {
+  days: number
+  since: string
+  total_picks: number
+  pools: PicksPoolStat[]
+  items: PicksStatsItem[]
 }
 
 export interface MLFactorPick {

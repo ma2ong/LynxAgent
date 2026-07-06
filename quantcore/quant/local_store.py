@@ -46,6 +46,13 @@ CREATE TABLE IF NOT EXISTS picks_history (
     patterns TEXT,
     PRIMARY KEY (pick_date, pool, symbol)
 );
+CREATE TABLE IF NOT EXISTS daily_reports (
+    date TEXT,
+    kind TEXT,
+    content_json TEXT,
+    created_at TEXT,
+    PRIMARY KEY (date, kind)
+);
 """
 
 _COLS = ["date", "open", "high", "low", "close", "volume", "amount"]
@@ -442,6 +449,38 @@ class LocalQuantStore:
 
     def fundamental_flag_count(self) -> int:
         return self._conn().execute("SELECT COUNT(*) FROM fundamental_flags WHERE bad_forecast=1").fetchone()[0]
+
+    # ---- 每日盘报 ----
+    def save_daily_report(self, date: str, kind: str, content: Dict[str, object]) -> None:
+        import json
+        from datetime import datetime
+        conn = self._conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO daily_reports(date, kind, content_json, created_at) VALUES (?,?,?,?)",
+            (date, kind, json.dumps(content, ensure_ascii=False),
+             datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+
+    def load_daily_report(self, date: str, kind: str) -> Optional[Dict[str, object]]:
+        import json
+        row = self._conn().execute(
+            "SELECT content_json FROM daily_reports WHERE date=? AND kind=?", (date, kind)
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def latest_daily_report(self, kind: str) -> Optional[Dict[str, object]]:
+        import json
+        row = self._conn().execute(
+            "SELECT content_json FROM daily_reports WHERE kind=? ORDER BY date DESC LIMIT 1", (kind,)
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def list_report_dates(self, limit: int = 30) -> List[Dict[str, str]]:
+        rows = self._conn().execute(
+            "SELECT date, kind FROM daily_reports ORDER BY date DESC, kind LIMIT ?", (limit,)
+        ).fetchall()
+        return [{"date": r[0], "kind": r[1]} for r in rows]
 
 
 def _f(v) -> float:

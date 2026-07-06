@@ -48,6 +48,7 @@
       </div>
     </el-aside>
     <el-main class="content">
+      <MacroBar />
       <router-view />
     </el-main>
   </el-container>
@@ -63,6 +64,7 @@ import {
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'
+import MacroBar from '@/components/MacroBar.vue'
 
 const route = useRoute()
 const router = useRouter()

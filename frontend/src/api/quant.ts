@@ -568,3 +568,25 @@ export interface SerenityEventsResult {
   age_sec?: number
   elapsed_sec?: number
 }
+
+export interface MacroIndexQuote {
+  code: string
+  name: string
+  price: number
+  change: number | null
+  change_percent: number | null
+  amount_wan: number | null
+}
+
+export interface MacroBarData {
+  indices: MacroIndexQuote[]
+  breadth: { up: number; down: number; flat: number; amount_yi: number } | null
+  updated_at: string
+}
+
+export const macroBarApi = {
+  fetch: async () => {
+    const raw = await ApiClient.get<{ success: boolean; data: MacroBarData }>('/api/lite/macro-bar', undefined, { timeout: 15000 })
+    return (raw as any)?.data as MacroBarData | null
+  },
+}

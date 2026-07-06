@@ -590,3 +590,31 @@ export const macroBarApi = {
     return (raw as any)?.data as MacroBarData | null
   },
 }
+
+export interface DailyReportSection { title: string; body: string }
+export interface DailyReport {
+  kind: 'premarket' | 'close'
+  date: string
+  generated_at: string
+  llm: boolean
+  sections: DailyReportSection[]
+}
+
+export const reportsApi = {
+  latest: async (kind: 'premarket' | 'close') => {
+    const raw = await ApiClient.get<any>('/api/lite/reports/latest', { kind })
+    return (raw as any)?.data as DailyReport | null
+  },
+  byDate: async (date: string, kind: 'premarket' | 'close') => {
+    const raw = await ApiClient.get<any>('/api/lite/reports', { date, kind })
+    return (raw as any)?.data as DailyReport | null
+  },
+  available: async () => {
+    const raw = await ApiClient.get<any>('/api/lite/reports')
+    return ((raw as any)?.data?.available ?? []) as { date: string; kind: string }[]
+  },
+  generate: async (kind: 'premarket' | 'close') => {
+    const raw = await ApiClient.post<any>(`/api/lite/reports/generate?kind=${kind}`, undefined, { timeout: 180000 })
+    return (raw as any)?.data as DailyReport | null
+  },
+}

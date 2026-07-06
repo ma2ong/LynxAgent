@@ -11,6 +11,7 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: '', redirect: '/today' },
       { path: 'today', name: 'today', component: () => import('@/views/Today/Index.vue') },
+      { path: 'reports', name: 'daily-reports', component: () => import('@/views/Reports/Index.vue') },
       { path: 'market/sentiment', name: 'market-sentiment', component: () => import('@/views/Market/Sentiment.vue') },
       { path: 'limit-up', name: 'limit-up', component: () => import('@/views/LimitUp/Index.vue') },
       { path: 'call-auction', name: 'call-auction', component: () => import('@/views/CallAuction/Index.vue') },

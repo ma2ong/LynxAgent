@@ -41,7 +41,7 @@ from quantcore.quant import report_daily
 
 def _stub_facts(monkeypatch, store):
     """隔离外部数据：facts 收集全部打桩，测试只验证组装/降级/落库逻辑。"""
-    monkeypatch.setattr(report_daily, "_gather_close_facts", lambda: {
+    monkeypatch.setattr(report_daily, "_gather_close_facts", lambda extra=None: {
         "date": "2026-07-06",
         "market_context": {"state": "偏冷", "advice": "建议降低仓位", "as_of": "2026-07-06"},
         "limit_up": {"total": 35},

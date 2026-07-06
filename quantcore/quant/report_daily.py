@@ -34,8 +34,11 @@ def _trim(value, max_list: int = 8, depth: int = 0):
     return value
 
 
-def _gather_close_facts() -> Dict[str, object]:
+def _gather_close_facts(extra: Optional[Dict[str, object]] = None) -> Dict[str, object]:
     from .engine import market_context
+    # 15:35 生成时本地日线尚未同步（18:00 才同步），当天涨停/情绪必须用 app 层传入的
+    # 实时快照兜底，否则收盘报告永远缺当日数据。快照只作输入，不进 facts/LLM/落库。
+    realtime_quotes = (extra or {}).get("realtime_quotes") or None
     today = datetime.now().strftime("%Y-%m-%d")
     facts: Dict[str, object] = {"date": today}
     try:
@@ -45,12 +48,12 @@ def _gather_close_facts() -> Dict[str, object]:
     try:
         from .market_sentiment import compute_market_sentiment
         start = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%d")
-        facts["sentiment"] = _trim(compute_market_sentiment(start, today, 24, None))
+        facts["sentiment"] = _trim(compute_market_sentiment(start, today, 24, realtime_quotes))
     except Exception:
         facts["sentiment"] = {}
     try:
         from .limit_up import compute_limit_up_distribution
-        facts["limit_up"] = _trim(compute_limit_up_distribution(today, None))
+        facts["limit_up"] = _trim(compute_limit_up_distribution(today, realtime_quotes))
     except Exception:
         facts["limit_up"] = {}
     try:
@@ -119,7 +122,7 @@ def generate_report(kind: str, extra: Optional[Dict[str, object]] = None) -> Dic
     """生成并落库一份盘报，返回 content dict。kind: premarket | close。"""
     if kind not in ("premarket", "close"):
         raise ValueError(f"unknown report kind: {kind}")
-    facts = _gather_close_facts() if kind == "close" else _gather_premarket_facts(extra)
+    facts = _gather_close_facts(extra) if kind == "close" else _gather_premarket_facts(extra)
     sections = _llm_sections(kind, facts)
     used_llm = sections is not None
     if sections is None:

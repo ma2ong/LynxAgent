@@ -3548,9 +3548,17 @@ async def lite_limit_up_distribution(date: str | None = None):
 
 # ---- 每日盘报 + 宏观条 ----
 async def _generate_daily_report(kind: str) -> dict[str, Any]:
-    """组装 app 层数据（竞价/催化剂）后调用生成器。收盘版无需 extra。"""
+    """组装 app 层数据后调用生成器：盘前传竞价/催化剂；收盘传实时快照
+    （15:35 生成时本地日线尚未同步，无快照则当天涨停/情绪缺数据）。"""
     from quantcore.quant.report_daily import generate_report
     extra: dict[str, Any] = {}
+    if kind == "close":
+        try:
+            snapshot = await _run_data_task(_load_realtime_quotes_snapshot, 60, timeout=8.0)
+            if snapshot:
+                extra["realtime_quotes"] = snapshot
+        except Exception:
+            pass
     if kind == "premarket":
         try:
             auction = await lite_call_auction()

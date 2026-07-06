@@ -116,6 +116,33 @@ async def _start_ml_factor_scheduler() -> None:
         replace_existing=True,
         misfire_grace_time=3600,
     )
+    # 每日盘报：盘前版 9:26（竞价结束后）、收盘版 15:35
+    async def _job_daily_report_premarket() -> None:
+        try:
+            await _generate_daily_report("premarket")
+        except Exception as exc:  # noqa: BLE001
+            import warnings
+            warnings.warn(f"premarket report failed: {exc}", RuntimeWarning, stacklevel=1)
+
+    async def _job_daily_report_close() -> None:
+        try:
+            await _generate_daily_report("close")
+        except Exception as exc:  # noqa: BLE001
+            import warnings
+            warnings.warn(f"close report failed: {exc}", RuntimeWarning, stacklevel=1)
+
+    _ml_factor_scheduler.add_job(
+        _job_daily_report_premarket,
+        CronTrigger.from_crontab(os.getenv("REPORT_PREMARKET_CRON", "26 9 * * 1-5"), timezone=tz),
+        id="daily_report_premarket", name="盘前盘报生成",
+        replace_existing=True, misfire_grace_time=1800,
+    )
+    _ml_factor_scheduler.add_job(
+        _job_daily_report_close,
+        CronTrigger.from_crontab(os.getenv("REPORT_CLOSE_CRON", "35 15 * * 1-5"), timezone=tz),
+        id="daily_report_close", name="收盘盘报生成",
+        replace_existing=True, misfire_grace_time=3600,
+    )
     _ml_factor_scheduler.start()
 
 
@@ -3517,6 +3544,100 @@ async def lite_limit_up_distribution(date: str | None = None):
         return {"success": False, "data": None, "message": "涨停热点计算超时，请稍后重试"}
     except Exception as exc:
         return {"success": False, "data": None, "message": str(exc)}
+
+
+# ---- 每日盘报 + 宏观条 ----
+async def _generate_daily_report(kind: str) -> dict[str, Any]:
+    """组装 app 层数据（竞价/催化剂）后调用生成器。收盘版无需 extra。"""
+    from quantcore.quant.report_daily import generate_report
+    extra: dict[str, Any] = {}
+    if kind == "premarket":
+        try:
+            auction = await lite_call_auction()
+            if isinstance(auction, dict) and auction.get("success"):
+                extra["auction"] = auction.get("data")
+        except Exception:
+            pass
+        try:
+            cats = await lite_catalysts()
+            if isinstance(cats, dict) and cats.get("success"):
+                extra["catalysts"] = cats.get("data")
+        except Exception:
+            pass
+    return await asyncio.to_thread(generate_report, kind, extra)
+
+
+@app.get("/api/lite/reports")
+async def lite_reports(date: str = "", kind: str = ""):
+    """盘报查询：给 date+kind 返回单篇；否则返回可用日期列表。"""
+    from quantcore.quant.local_store import get_local_store
+    store_q = get_local_store()
+    if date and kind:
+        content = await asyncio.to_thread(store_q.load_daily_report, date, kind)
+        if content is None:
+            return {"success": False, "data": None, "message": "该日期暂无此类盘报"}
+        return {"success": True, "data": content}
+    dates = await asyncio.to_thread(store_q.list_report_dates, 60)
+    return {"success": True, "data": {"available": dates}}
+
+
+@app.get("/api/lite/reports/latest")
+async def lite_reports_latest(kind: str = "close"):
+    from quantcore.quant.local_store import get_local_store
+    store_q = get_local_store()
+    content = await asyncio.to_thread(store_q.latest_daily_report, kind)
+    return {"success": True, "data": content}
+
+
+@app.post("/api/lite/reports/generate")
+async def lite_reports_generate(kind: str = "close",
+                                user: dict = Depends(get_current_lite_user)):
+    """手动触发生成（验证/补数用），不等定时任务。"""
+    if kind not in ("premarket", "close"):
+        raise HTTPException(status_code=400, detail="kind 必须是 premarket 或 close")
+    content = await _generate_daily_report(kind)
+    return {"success": True, "data": content}
+
+
+@app.get("/api/lite/macro-bar")
+async def lite_macro_bar():
+    """顶部宏观条：三大指数 + 全市场涨跌家数/两市成交额。60s 缓存。"""
+    cached = _cache_get("macro-bar", 60)
+    if cached:
+        return cached
+    from quantcore.quant.macro_bar import fetch_index_quotes
+    try:
+        indices = await _run_data_task(fetch_index_quotes, timeout=10.0)
+    except Exception:
+        indices = []
+    breadth: dict[str, Any] | None = None
+    try:
+        snapshot = await _run_data_task(_load_realtime_quotes_snapshot, 60, timeout=8.0)
+        if snapshot:
+            ups = downs = flats = 0
+            total_amount = 0.0
+            for q in snapshot.values():
+                pct = q.get("change_percent")
+                if pct is None:
+                    continue
+                if pct > 0:
+                    ups += 1
+                elif pct < 0:
+                    downs += 1
+                else:
+                    flats += 1
+                total_amount += float(q.get("amount") or 0)
+            breadth = {"up": ups, "down": downs, "flat": flats,
+                       "amount_yi": round(total_amount / 1e8)}
+    except Exception:
+        breadth = None
+    payload = {"success": True, "data": {
+        "indices": indices, "breadth": breadth,
+        "updated_at": datetime.now().strftime("%H:%M:%S"),
+    }}
+    if indices or breadth:
+        _cache_set("macro-bar", payload)
+    return payload
 
 
 @app.get("/api/system/config/validate")

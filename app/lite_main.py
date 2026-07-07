@@ -3689,6 +3689,61 @@ async def lite_macro_bar():
     return payload
 
 
+@app.get("/api/lite/heatmap")
+async def lite_heatmap(level: str = "industry", industry: str = ""):
+    """行业/个股热力图：面积=总市值（亿，成交额兜底），颜色=当日涨跌幅。60s 缓存。
+
+    快照不可用（收盘后/断网）时退回本地日线最新 bar（同收盘快照教训：不读未同步的当日）。
+    """
+    from quantcore.quant.heatmap import build_heatmap_industry, build_heatmap_stocks
+
+    if level not in ("industry", "stock"):
+        raise HTTPException(status_code=400, detail="level 必须是 industry/stock")
+    if level == "stock" and not industry.strip():
+        raise HTTPException(status_code=400, detail="level=stock 需要 industry 参数")
+    cache_key = f"heatmap:{level}:{industry}"
+    cached = _cache_get(cache_key, 60)
+    if cached:
+        return cached
+
+    industry_map = await _run_data_task(_load_industry_map, timeout=15.0)
+    snapshot: dict[str, dict[str, Any]] = {}
+    source = "realtime"
+    try:
+        snapshot = await _run_data_task(_load_realtime_quotes_snapshot, 60, timeout=8.0) or {}
+    except Exception:
+        snapshot = {}
+    if not snapshot:
+        # 日线兜底：伪快照（无市值 -> 面积用成交额）
+        source = "daily-kline"
+        from quantcore.quant.local_store import get_local_store
+
+        def _fallback() -> dict[str, dict[str, Any]]:
+            store = get_local_store()
+            names = {str(m.get("symbol")): str(m.get("name") or "") for m in store.load_meta()}
+            return {sym: {"name": names.get(sym) or sym, "pct_chg": st["pct"], "amount": st["amount"]}
+                    for sym, st in store.latest_daily_stats().items()}
+
+        try:
+            snapshot = await _run_data_task(_fallback, timeout=20.0)
+        except Exception:
+            snapshot = {}
+
+    if level == "industry":
+        items = build_heatmap_industry(snapshot, industry_map)
+    else:
+        items = build_heatmap_stocks(snapshot, industry_map, industry.strip())
+    payload = {
+        "success": True,
+        "data": {"level": level, "industry": industry.strip() or None, "items": items,
+                 "source": source, "mapped": len(industry_map),
+                 "updated_at": datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S")},
+    }
+    if items:
+        _cache_set(cache_key, payload)
+    return payload
+
+
 @app.get("/api/system/config/validate")
 async def validate_config():
     membership_ready = bool(os.getenv("LYNX_MEMBERSHIP_WECHAT", "").strip() or os.getenv("LYNX_MEMBERSHIP_QR_URL", "").strip())

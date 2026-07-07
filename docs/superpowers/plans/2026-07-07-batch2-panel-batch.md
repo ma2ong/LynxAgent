@@ -9,7 +9,7 @@
 **Tech Stack:** 复用 `investor_panel(symbol)`（一次 LLM 调用出 5 人格），SQLite（LocalQuantStore），FastAPI 后台 ThreadPoolExecutor(1)，Vue3 + Element Plus。
 
 **实施偏离记录（执行后回写）:**
-（暂无）
+- Task 5 实机巡检用 headless Playwright 脚本代替人工浏览器操作（登录 → 一键智能推荐 → 验证列与弹层，截图确认），结论一致。注意 vite dev 只监听 IPv6 `::1`，巡检需访问 `http://[::1]:5173`。
 
 **约定:** 测试 `python -m pytest`（仓库根）；后端改动需重启（无 --reload）；A股红涨绿跌；commit message 英文 + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`；每 Task 一个 commit。
 
@@ -21,7 +21,7 @@
 - Modify: `quantcore/quant/local_store.py`（_SCHEMA + 类尾部新方法）
 - Test: `tests/test_panel_batch.py`（新建）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `tests/test_panel_batch.py`：
 
@@ -81,12 +81,12 @@ def test_load_picks_symbols(store):
     assert store.load_picks_symbols(today, "smart", limit=1) == ["600001"]
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_panel_batch.py -v`
 Expected: FAIL，`AttributeError: ... 'save_panel_score'`
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `_SCHEMA` 末尾（daily_reports 建表语句后、闭合 `"""` 前）追加：
 
@@ -160,12 +160,12 @@ CREATE TABLE IF NOT EXISTS panel_scores (
         return [r[0] for r in rows]
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_panel_batch.py -v`
 Expected: 4 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add quantcore/quant/local_store.py tests/test_panel_batch.py
@@ -180,7 +180,7 @@ git commit -m "feat(panel): panel_scores table and picks symbol lookup on LocalQ
 - Modify: `quantcore/quant/investor_panel.py`（文件末尾追加）
 - Test: `tests/test_panel_batch.py`（追加）
 
-- [ ] **Step 1: 追加失败测试**
+- [x] **Step 1: 追加失败测试**
 
 `tests/test_panel_batch.py` 末尾追加：
 
@@ -228,12 +228,12 @@ def test_run_panel_batch_inflight_dedupe(store, monkeypatch):
         ip._PANEL_INFLIGHT.discard("600009")
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_panel_batch.py -v`
 Expected: 新增 3 个 FAIL（AttributeError: run_panel_batch），原 4 个 PASS
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `quantcore/quant/investor_panel.py` 顶部 import 区确认已有 `from typing import Dict, List, Optional`（缺则补），并在文件顶部 import 区加：
 
@@ -279,12 +279,12 @@ def run_panel_batch(date: str, symbols: List[str]) -> int:
     return done
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_panel_batch.py -v`
 Expected: 7 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add quantcore/quant/investor_panel.py tests/test_panel_batch.py
@@ -298,7 +298,7 @@ git commit -m "feat(panel): run_panel_batch scores pool candidates once per day 
 **Files:**
 - Modify: `app/routers/quant.py`
 
-- [ ] **Step 1: 实现端点**
+- [x] **Step 1: 实现端点**
 
 `app/routers/quant.py`：
 
@@ -349,7 +349,7 @@ async def quant_panel_batch(pool: str = "smart", limit: int = 20):
     }}
 ```
 
-- [ ] **Step 2: 验证**
+- [x] **Step 2: 验证**
 
 `python -c "import app.routers.quant"` 无错误。重启后端（先杀 8001 再 `.\scripts\start_lite.ps1 -NoOpen -NoFrontend`），登录（looptest / loop-test-1234，token 在 `.data.access_token`）后：
 
@@ -360,12 +360,12 @@ Invoke-RestMethod "http://127.0.0.1:8001/api/quant/panel/batch?pool=smart" -Head
 
 Expected: success:true。若今日无留痕返回引导 message；若有候选则 pending>0，等 1-2 分钟再调 items 逐渐变多（llm 可用时）。`pool=bogus` 应 400。
 
-- [ ] **Step 3: 全量回归**
+- [x] **Step 3: 全量回归**
 
 Run: `python -m pytest tests/ -q`
 Expected: 63 passed（56+7）
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add app/routers/quant.py
@@ -380,7 +380,7 @@ git commit -m "feat(panel): batch scoring endpoint with background fill for pool
 - Modify: `frontend/src/api/quant.ts`（末尾追加）
 - Modify: `frontend/src/views/Quant/index.vue`（智能推荐表格 + 形态选股表格加列；新增弹层与轮询逻辑）
 
-- [ ] **Step 1: quant.ts 末尾追加**
+- [x] **Step 1: quant.ts 末尾追加**
 
 ```typescript
 export interface PanelVerdict {
@@ -417,7 +417,7 @@ export const panelApi = {
 }
 ```
 
-- [ ] **Step 2: Quant/index.vue 加状态与加载逻辑**
+- [x] **Step 2: Quant/index.vue 加状态与加载逻辑**
 
 该文件很大（约 2000 行），外科手术式插入。`<script setup>` 里（其他 ref 定义附近）加：
 
@@ -456,7 +456,7 @@ import 区补 `panelApi, type PanelScore`（并入现有 `@/api/quant` import）
 
 在智能池结果就绪处（后台任务完成给 `smartPoolResult.value` 赋值的地方，grep `smartPoolResult.value =` 找到所有赋值点，在成功赋值后）调用 `loadPanelScores('smart')`；形态池同理（`patternPoolResult.value =` 赋值成功后调 `loadPanelScores('pattern')`）。
 
-- [ ] **Step 3: 两个表格加「五方判读」列**
+- [x] **Step 3: 两个表格加「五方判读」列**
 
 智能推荐表格（`AI因子` 列之后）插入：
 
@@ -508,7 +508,7 @@ import 区补 `panelApi, type PanelScore`（并入现有 `@/api/quant` import）
 
 注意：形态表格若列很挤，列宽保持 110 即可（表格自身横向滚动）。立场配色红多绿空（A股习惯，stanceType 已按此写）。
 
-- [ ] **Step 4: 验证**
+- [x] **Step 4: 验证**
 
 ```bash
 cd frontend && npx vue-tsc --noEmit && npm run build
@@ -516,7 +516,7 @@ cd frontend && npx vue-tsc --noEmit && npm run build
 
 Expected: 通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/api/quant.ts frontend/src/views/Quant/index.vue
@@ -527,21 +527,21 @@ git commit -m "feat(panel): consensus/divergence column with judge detail dialog
 
 ### Task 5: 端到端验证 + README
 
-- [ ] **Step 1: 全量回归**
+- [x] **Step 1: 全量回归**
 
 ```bash
 python -m pytest tests/ -q          # 63 passed
 cd frontend && npx vue-tsc --noEmit && npm run build
 ```
 
-- [ ] **Step 2: 实机巡检**
+- [x] **Step 2: 实机巡检**
 
 后端 + 前端都在跑（`.\scripts\start_lite.ps1 -NoOpen`）。浏览器登录 → 智能选股页跑一次「一键智能推荐」→ 确认：
 1. 表格出现「五方判读」列，初始 `—`，随后台评分完成逐渐出现「66 ±18」样式分数（llm 可用时；每只约 5-15 秒）
 2. 点分数弹出评委弹层：5 行评分/立场/理由 + 摘要 + 免责
 3. 刷新页面重进：已评分的立即显示（当日缓存，无重复 LLM 调用，可从后端日志/耗时确认）
 
-- [ ] **Step 3: README 功能清单**
+- [x] **Step 3: README 功能清单**
 
 「✨ 核心功能」中「多智能体深度分析」条目后追加：
 
@@ -549,7 +549,7 @@ cd frontend && npx vue-tsc --noEmit && npm run build
 - **五方判读** — 价值/趋势/游资/逆向/量化 5 个 AI 人格对选股池候选批量打分，列表直接看共识分与分歧度，点开看各家立场与理由；同一股票当日只打一次。
 ```
 
-- [ ] **Step 4: Commit + push**
+- [x] **Step 4: Commit + push**
 
 ```bash
 git add README.md

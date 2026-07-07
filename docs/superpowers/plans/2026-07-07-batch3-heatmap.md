@@ -17,7 +17,7 @@
 **与 spec 的既定偏离（写计划时决定）:** spec 写的是 `GET /api/quant/heatmap`，实际用 `GET /api/lite/heatmap`——端点必须放 lite_main（快照/行业映射/缓存基建都在那里，routers/quant 反向 import 会循环），路径跟随 macro-bar 惯例。
 
 **实施偏离记录（执行后回写）:**
-（暂无）
+- 无实质偏离。实测提示：东财行业名带罗马数字后缀（如「银行Ⅱ」），下钻传参必须用行业列表返回的原名；当日 `_load_industry_map` 实际映射 4460 只，未映射的进「其他」块（752 只），面积可观但数据诚实，保留。
 
 **约定:** 测试 `python -m pytest`（仓库根）；后端改动需重启（无 --reload）；A股红涨绿跌；commit message 英文 + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`；每 Task 一个 commit。
 
@@ -29,7 +29,7 @@
 - Modify: `quantcore/quant/local_store.py`（`recent_returns` 方法之后）
 - Test: `tests/test_heatmap.py`（新建）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `tests/test_heatmap.py`：
 
@@ -76,12 +76,12 @@ def test_latest_daily_stats_needs_two_bars(store):
     assert "600003" not in store.latest_daily_stats()
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_heatmap.py -v`
 Expected: 3 FAIL（`AttributeError: ... 'latest_daily_stats'`）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `quantcore/quant/local_store.py`，`recent_returns` 方法结尾之后插入：
 
@@ -114,12 +114,12 @@ Expected: 3 FAIL（`AttributeError: ... 'latest_daily_stats'`）
         return out
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_heatmap.py -v`
 Expected: 3 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add quantcore/quant/local_store.py tests/test_heatmap.py
@@ -134,7 +134,7 @@ git commit -m "feat(heatmap): latest_daily_stats fallback stats on LocalQuantSto
 - Create: `quantcore/quant/heatmap.py`
 - Test: `tests/test_heatmap.py`（追加）
 
-- [ ] **Step 1: 追加失败测试**
+- [x] **Step 1: 追加失败测试**
 
 `tests/test_heatmap.py` 末尾追加：
 
@@ -177,12 +177,12 @@ def test_build_heatmap_stocks_filters_by_industry():
     assert build_heatmap_stocks(SNAP, IND, "不存在") == []
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_heatmap.py -v`
 Expected: 新增 2 个 FAIL（ModuleNotFoundError heatmap），原 3 个 PASS
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 新建 `quantcore/quant/heatmap.py`：
 
@@ -259,12 +259,12 @@ def build_heatmap_stocks(snapshot: Dict[str, Dict], industry_map: Dict[str, str]
     return out
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_heatmap.py -v`
 Expected: 5 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add quantcore/quant/heatmap.py tests/test_heatmap.py
@@ -278,7 +278,7 @@ git commit -m "feat(heatmap): industry/stock treemap aggregation module"
 **Files:**
 - Modify: `app/lite_main.py`（`lite_macro_bar` 端点之后插入）
 
-- [ ] **Step 1: 实现端点**
+- [x] **Step 1: 实现端点**
 
 `app/lite_main.py`，`lite_macro_bar` 函数体结束后（`@app.get("/api/system/config/validate")` 之前）插入：
 
@@ -338,7 +338,7 @@ async def lite_heatmap(level: str = "industry", industry: str = ""):
     return payload
 ```
 
-- [ ] **Step 2: 验证**
+- [x] **Step 2: 验证**
 
 `python -c "import app.lite_main"` 无错误。重启后端（杀 8001 上的 python，`.\scripts\start_lite.ps1 -NoOpen -NoFrontend`），然后：
 
@@ -349,12 +349,12 @@ Invoke-RestMethod "http://127.0.0.1:8001/api/lite/heatmap?level=stock&industry=�
 
 Expected: industry 返回几十个行业块（value 降序、pct 合理）；stock 返回该行业成分；`level=bogus` → 400；`level=stock` 无 industry → 400。二次调用应命中缓存（毫秒级）。
 
-- [ ] **Step 3: 全量回归**
+- [x] **Step 3: 全量回归**
 
 Run: `python -m pytest tests/ -q`
 Expected: 68 passed（63+5）
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add app/lite_main.py
@@ -372,7 +372,7 @@ git commit -m "feat(heatmap): /api/lite/heatmap endpoint with realtime snapshot 
 - Modify: `frontend/src/router/index.ts`（`limit-up` 路由行后加 `/heatmap`）
 - Modify: `frontend/src/components/Layout/AppLayout.vue`（涨停热点菜单项后加入口）
 
-- [ ] **Step 1: echarts.ts 注册 treemap**
+- [x] **Step 1: echarts.ts 注册 treemap**
 
 `import { BarChart, CandlestickChart, GaugeChart, LineChart } from 'echarts/charts'` 改为：
 
@@ -382,7 +382,7 @@ import { BarChart, CandlestickChart, GaugeChart, LineChart, TreemapChart } from 
 
 `echarts.use([` 数组里 `LineChart,` 后加一行 `TreemapChart,`。
 
-- [ ] **Step 2: quant.ts 末尾追加**
+- [x] **Step 2: quant.ts 末尾追加**
 
 ```typescript
 export interface HeatmapItem {
@@ -411,7 +411,7 @@ export const heatmapApi = {
 }
 ```
 
-- [ ] **Step 3: 新建 `frontend/src/views/Heatmap/Index.vue`**
+- [x] **Step 3: 新建 `frontend/src/views/Heatmap/Index.vue`**
 
 ```vue
 <template>
@@ -539,7 +539,7 @@ onBeforeUnmount(() => {
 </style>
 ```
 
-- [ ] **Step 4: 路由 + 侧边栏**
+- [x] **Step 4: 路由 + 侧边栏**
 
 `frontend/src/router/index.ts`，`limit-up` 行后插入：
 
@@ -553,7 +553,7 @@ onBeforeUnmount(() => {
         <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
 ```
 
-- [ ] **Step 5: 验证 + Commit**
+- [x] **Step 5: 验证 + Commit**
 
 ```bash
 cd frontend && npx vue-tsc --noEmit && npm run build
@@ -570,13 +570,13 @@ git commit -m "feat(heatmap): treemap page with industry drilldown and stock dee
 
 ### Task 5: 端到端验证 + README
 
-- [ ] **Step 1: 全量回归**
+- [x] **Step 1: 全量回归**
 
 ```bash
 python -m pytest tests/ -q     # 68 passed
 ```
 
-- [ ] **Step 2: 实机巡检（headless Playwright）**
+- [x] **Step 2: 实机巡检（headless Playwright）**
 
 复用批次 2 巡检方式：API 登录（looptest / loop-test-1234）拿 token 注入 localStorage `auth-token`，访问 `http://[::1]:5173/heatmap`（vite dev 只监听 IPv6）。验证：
 1. treemap 渲染出行业块（canvas 存在且 items>10）
@@ -584,7 +584,7 @@ python -m pytest tests/ -q     # 68 passed
 3. 点击个股块 → 跳转 `/stock-analysis?symbol=`
 4. 截图确认颜色红涨绿跌
 
-- [ ] **Step 3: README 功能清单**
+- [x] **Step 3: README 功能清单**
 
 「✨ 核心功能」中「五方判读」条目后追加：
 
@@ -592,7 +592,7 @@ python -m pytest tests/ -q     # 68 passed
 - **行业热力图** — 全市场行业 treemap（面积=市值、颜色=当日涨跌幅），点行业下钻成分股、点个股直达深研；实时行情断档时自动退回本地日线。
 ```
 
-- [ ] **Step 4: Commit + push**
+- [x] **Step 4: Commit + push**
 
 ```bash
 git add README.md docs/superpowers/plans/2026-07-07-batch3-heatmap.md

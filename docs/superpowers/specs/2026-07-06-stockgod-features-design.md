@@ -42,8 +42,9 @@
 - 现有 `investor_panel.py` 单股打分保持不动；新增 `investor_panel_batch()`：
   对指定候选池（形态/智能/竞价池当日候选）批量打分，结果存表
   `panel_scores(date, symbol, persona, score, stance, reason)`，当日缓存、重复请求不重算。
-- 触发方式：池扫描完成后后台任务打分（不阻塞扫描本身）。
-- API：`GET /api/quant/panel/batch?pool=`。
+- 触发方式：选股页加载/池结果就绪时调批量接口，缺评分的由后端单线程后台补打
+  （不阻塞扫描与请求；比 hook 扫描路径实现更简单，效果等价——用户看到列表时评分陆续就位）。
+- API：`GET /api/quant/panel/batch?pool=`（每池每日上限 20 只）。
 - 前端：智能选股/形态列表加「五方均分 + 分歧度」列（可排序），
   点开弹层显示 5 人格各自评分与一句话理由。
 

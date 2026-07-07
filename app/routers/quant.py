@@ -21,7 +21,7 @@ from quantcore.quant.capital_flow import (
 )
 from quantcore.quant.dragon_tiger import dragon_tiger_list, dragon_tiger_seats
 from quantcore.quant.calendar_events import financial_calendar
-from quantcore.quant.investor_panel import investor_panel
+from quantcore.quant.investor_panel import investor_panel, run_panel_batch
 from quantcore.quant.red_flags import red_flag_scan
 from quantcore.quant.weighted_sentiment import (
     stock_sentiment,
@@ -40,6 +40,10 @@ _light_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="quant-li
 
 async def _run_light(func, *args):
     return await asyncio.get_running_loop().run_in_executor(_light_executor, lambda: func(*args))
+
+
+# 五方判读批量评分专用（LLM 顺序调用，单线程防限流），与轻量读接口隔离
+_panel_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="panel-batch")
 
 
 class QuantAnalyzeRequest(BaseModel):
@@ -400,6 +404,37 @@ async def capital_calendar(types: str = "earnings,unlock,ipo", days: int = 14):
 @router.get("/stock/investor-panel")
 async def quant_investor_panel(symbol: str, user: dict = require_quota("investor_panel")):
     return await asyncio.to_thread(investor_panel, symbol)
+
+
+_PANEL_POOLS = ("smart", "pattern", "swing", "auction")
+
+
+@router.get("/panel/batch")
+async def quant_panel_batch(pool: str = "smart", limit: int = 20):
+    """当日选股池候选的五方判读批量评分：返回已有评分，缺的丢后台补打（不阻塞）。"""
+    from datetime import datetime
+    from quantcore.quant import llm
+    from quantcore.quant.local_store import get_local_store
+
+    if pool not in _PANEL_POOLS:
+        raise HTTPException(status_code=400, detail=f"pool 必须是 {'/'.join(_PANEL_POOLS)}")
+    limit = max(1, min(limit, 20))
+    today = datetime.now().strftime("%Y-%m-%d")
+    store = get_local_store()
+    symbols = await _run_light(store.load_picks_symbols, today, pool, limit)
+    if not symbols:
+        return {"success": True, "data": {"date": today, "pool": pool, "items": {},
+                                          "pending": 0, "llm": llm.available(),
+                                          "message": "今日该池暂无留痕候选，先跑一次选股"}}
+    scores = await _run_light(store.load_panel_scores, today, symbols)
+    pending = [s for s in symbols if s not in scores]
+    if pending and llm.available():
+        _panel_executor.submit(run_panel_batch, today, pending)
+    return {"success": True, "data": {
+        "date": today, "pool": pool, "items": scores,
+        "pending": len(pending) if llm.available() else 0,
+        "llm": llm.available(),
+    }}
 
 
 @router.get("/stock/red-flags")

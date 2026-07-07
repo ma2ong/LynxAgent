@@ -14,6 +14,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'reports', name: 'daily-reports', component: () => import('@/views/Reports/Index.vue') },
       { path: 'market/sentiment', name: 'market-sentiment', component: () => import('@/views/Market/Sentiment.vue') },
       { path: 'limit-up', name: 'limit-up', component: () => import('@/views/LimitUp/Index.vue') },
+      { path: 'heatmap', name: 'heatmap', component: () => import('@/views/Heatmap/Index.vue') },
       { path: 'call-auction', name: 'call-auction', component: () => import('@/views/CallAuction/Index.vue') },
       { path: 'quant', name: 'quant', component: () => import('@/views/Quant/index.vue') },
       { path: 'review', name: 'picks-review', component: () => import('@/views/Review/Index.vue') },

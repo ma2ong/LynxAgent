@@ -1,5 +1,5 @@
 import * as echarts from 'echarts/core'
-import { BarChart, CandlestickChart, GaugeChart, LineChart } from 'echarts/charts'
+import { BarChart, CandlestickChart, GaugeChart, LineChart, TreemapChart } from 'echarts/charts'
 import {
   DataZoomComponent,
   GridComponent,
@@ -18,6 +18,7 @@ echarts.use([
   CandlestickChart,
   GaugeChart,
   LineChart,
+  TreemapChart,
   DataZoomComponent,
   GridComponent,
   LegendComponent,

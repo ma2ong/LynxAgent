@@ -651,3 +651,28 @@ export const panelApi = {
     return (raw as any)?.data as PanelBatchData | null
   },
 }
+
+export interface HeatmapItem {
+  name: string
+  pct: number
+  value: number
+  amount_yi?: number
+  count?: number
+  symbol?: string
+  mv_yi?: number
+}
+
+export interface HeatmapData {
+  level: 'industry' | 'stock'
+  industry: string | null
+  items: HeatmapItem[]
+  source: string
+  updated_at: string
+}
+
+export const heatmapApi = {
+  fetch: async (level: 'industry' | 'stock', industry?: string) => {
+    const raw = await ApiClient.get<any>('/api/lite/heatmap', { level, industry: industry || '' }, { timeout: 30000 })
+    return (raw as any)?.data as HeatmapData | null
+  },
+}

@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import threading
+
 from typing import Dict, List, Optional
 
 from . import llm
@@ -166,3 +168,38 @@ def investor_panel(symbol: str) -> Dict[str, object]:
         "verdicts": verdicts,
         "summary": summary,
     }
+
+
+from .local_store import get_local_store
+
+# 批量评分：跨请求去重（同一 symbol 只允许一个在途评分）
+_PANEL_LOCK = threading.Lock()
+_PANEL_INFLIGHT: set = set()
+
+
+def run_panel_batch(date: str, symbols: List[str]) -> int:
+    """顺序为缺评分的 symbol 打分并落库，返回新打分数量。
+
+    - 已有当日评分/正在评分中的跳过（跨池复用，控 LLM 成本）；
+    - 单线程顺序调用（每只一次 LLM），失败的静默跳过下次再补；
+    - 供 API 层丢进后台线程执行，勿在请求路径同步调用。
+    """
+    store = get_local_store()
+    scored = set(store.load_panel_scores(date, symbols).keys())
+    with _PANEL_LOCK:
+        todo = [s for s in symbols if s not in scored and s not in _PANEL_INFLIGHT]
+        _PANEL_INFLIGHT.update(todo)
+    done = 0
+    try:
+        for symbol in todo:
+            try:
+                result = investor_panel(symbol)
+                if isinstance(result, dict) and not result.get("empty"):
+                    store.save_panel_score(date, symbol, result)
+                    done += 1
+            except Exception:
+                continue
+    finally:
+        with _PANEL_LOCK:
+            _PANEL_INFLIGHT.difference_update(todo)
+    return done

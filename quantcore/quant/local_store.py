@@ -326,6 +326,33 @@ class LocalQuantStore:
                 out[str(symbol).zfill(6)] = (c / b - 1) * 100
         return out
 
+    def latest_daily_stats(self) -> Dict[str, Dict[str, float]]:
+        """每只股票最新真实 bar 的当日涨跌幅%/成交额/收盘价（快照不可用时热力图兜底）。
+
+        与 recent_returns 同款 45 天窗口 + amount>0 过滤；涨跌幅 = 最新 bar vs 前一根。
+        """
+        from datetime import date as _date, timedelta as _td
+        cutoff = (_date.today() - _td(days=45)).strftime("%Y-%m-%d")
+        sql = """
+        WITH ranked AS (
+            SELECT symbol, close, amount,
+                   ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+            FROM daily_kline
+            WHERE amount > 0 AND date >= ?
+        )
+        SELECT cur.symbol, cur.close, cur.amount, prev.close
+        FROM ranked cur
+        JOIN ranked prev ON prev.symbol = cur.symbol AND prev.rn = 2
+        WHERE cur.rn = 1
+        """
+        out: Dict[str, Dict[str, float]] = {}
+        for symbol, close, amount, prev_close in self._conn().execute(sql, (cutoff,)).fetchall():
+            c = _f(close)
+            p = _f(prev_close)
+            if p > 0:
+                out[str(symbol).zfill(6)] = {"pct": round((c - p) / p * 100, 2), "amount": _f(amount), "close": c}
+        return out
+
     # ---- 选股留痕与胜率复盘 ----
     def record_picks(self, pool: str, items: List[Dict[str, object]]) -> int:
         """记录一次选股结果。当日同池同股只保留首次快照（INSERT OR IGNORE），供 T+N 复盘。"""

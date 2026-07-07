@@ -53,6 +53,18 @@ CREATE TABLE IF NOT EXISTS daily_reports (
     created_at TEXT,
     PRIMARY KEY (date, kind)
 );
+CREATE TABLE IF NOT EXISTS panel_scores (
+    date TEXT,
+    symbol TEXT,
+    consensus REAL,
+    divergence REAL,
+    bull INTEGER,
+    bear INTEGER,
+    verdicts_json TEXT,
+    summary TEXT,
+    created_at TEXT,
+    PRIMARY KEY (date, symbol)
+);
 """
 
 _COLS = ["date", "open", "high", "low", "close", "volume", "amount"]
@@ -481,6 +493,57 @@ class LocalQuantStore:
             "SELECT date, kind FROM daily_reports ORDER BY date DESC, kind LIMIT ?", (limit,)
         ).fetchall()
         return [{"date": r[0], "kind": r[1]} for r in rows]
+
+    # ---- 五方判读批量评分 ----
+    def save_panel_score(self, date: str, symbol: str, payload: Dict[str, object]) -> None:
+        import json
+        from datetime import datetime
+        conn = self._conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO panel_scores"
+            "(date, symbol, consensus, divergence, bull, bear, verdicts_json, summary, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (date, symbol,
+             float(payload.get("consensus_score") or 0.0),
+             float(payload.get("divergence") or 0.0),
+             int(payload.get("bull_count") or 0),
+             int(payload.get("bear_count") or 0),
+             json.dumps(payload.get("verdicts") or [], ensure_ascii=False),
+             str(payload.get("summary") or ""),
+             datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+
+    def load_panel_scores(self, date: str, symbols: Optional[List[str]] = None) -> Dict[str, Dict[str, object]]:
+        import json
+        if symbols is not None and not symbols:
+            return {}
+        sql = ("SELECT symbol, consensus, divergence, bull, bear, verdicts_json, summary"
+               " FROM panel_scores WHERE date=?")
+        params: List[object] = [date]
+        if symbols:
+            sql += f" AND symbol IN ({','.join('?' * len(symbols))})"
+            params.extend(symbols)
+        out: Dict[str, Dict[str, object]] = {}
+        for row in self._conn().execute(sql, params).fetchall():
+            try:
+                verdicts = json.loads(row[5] or "[]")
+            except ValueError:
+                verdicts = []
+            out[row[0]] = {
+                "consensus_score": row[1], "divergence": row[2],
+                "bull_count": row[3], "bear_count": row[4],
+                "verdicts": verdicts, "summary": row[6],
+            }
+        return out
+
+    def load_picks_symbols(self, date: str, pool: str, limit: int = 20) -> List[str]:
+        rows = self._conn().execute(
+            "SELECT symbol FROM picks_history WHERE pick_date=? AND pool=?"
+            " ORDER BY COALESCE(rank, 999), symbol LIMIT ?",
+            (date, pool, limit),
+        ).fetchall()
+        return [r[0] for r in rows]
 
 
 def _f(v) -> float:

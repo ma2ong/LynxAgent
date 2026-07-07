@@ -618,3 +618,36 @@ export const reportsApi = {
     return (raw as any)?.data as DailyReport | null
   },
 }
+
+export interface PanelVerdict {
+  persona: string
+  style: string
+  score: number
+  stance: string
+  reason: string
+}
+
+export interface PanelScore {
+  consensus_score: number
+  divergence: number
+  bull_count: number
+  bear_count: number
+  verdicts: PanelVerdict[]
+  summary: string
+}
+
+export interface PanelBatchData {
+  date: string
+  pool: string
+  items: Record<string, PanelScore>
+  pending: number
+  llm: boolean
+  message?: string
+}
+
+export const panelApi = {
+  batch: async (pool: string) => {
+    const raw = await ApiClient.get<any>('/api/quant/panel/batch', { pool }, { timeout: 30000 })
+    return (raw as any)?.data as PanelBatchData | null
+  },
+}

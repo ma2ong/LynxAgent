@@ -144,6 +144,17 @@
                   <span v-else>-</span>
                 </template>
               </el-table-column>
+              <el-table-column label="五方判读" width="110">
+                <template #default="{ row }">
+                  <el-tooltip v-if="panelScores.smart[row.symbol]" :content="panelScores.smart[row.symbol].summary" placement="top">
+                    <el-button text size="small" @click.stop="openPanelDialog(row, 'smart')">
+                      <b>{{ panelScores.smart[row.symbol].consensus_score.toFixed(0) }}</b>
+                      <span class="panel-div">±{{ panelScores.smart[row.symbol].divergence.toFixed(0) }}</span>
+                    </el-button>
+                  </el-tooltip>
+                  <span v-else class="panel-pending">—</span>
+                </template>
+              </el-table-column>
               <el-table-column prop="symbol" label="代码" width="100" />
               <el-table-column prop="name" label="名称" width="120" />
               <el-table-column label="行业/板块" width="130">
@@ -297,6 +308,17 @@
               <el-table-column type="selection" width="44" fixed />
               <el-table-column label="形态分" width="90" fixed>
                 <template #default="{ row }"><b>{{ formatScore(row.pattern_score ?? row.score) }}</b></template>
+              </el-table-column>
+              <el-table-column label="五方判读" width="110">
+                <template #default="{ row }">
+                  <el-tooltip v-if="panelScores.pattern[row.symbol]" :content="panelScores.pattern[row.symbol].summary" placement="top">
+                    <el-button text size="small" @click.stop="openPanelDialog(row, 'pattern')">
+                      <b>{{ panelScores.pattern[row.symbol].consensus_score.toFixed(0) }}</b>
+                      <span class="panel-div">±{{ panelScores.pattern[row.symbol].divergence.toFixed(0) }}</span>
+                    </el-button>
+                  </el-tooltip>
+                  <span v-else class="panel-pending">—</span>
+                </template>
               </el-table-column>
               <el-table-column prop="symbol" label="代码" width="100" />
               <el-table-column prop="name" label="名称" width="120" />
@@ -656,6 +678,23 @@
         <KLineProChart v-if="chartPayload" :payload="chartPayload" />
       </div>
     </el-drawer>
+
+    <el-dialog v-model="panelDialogVisible" :title="panelDialogTitle" width="560px">
+      <template v-if="panelDialogData">
+        <p class="panel-summary">{{ panelDialogData.summary }}</p>
+        <el-table :data="panelDialogData.verdicts" size="small">
+          <el-table-column prop="persona" label="评委" width="90" />
+          <el-table-column prop="score" label="评分" width="70" />
+          <el-table-column label="立场" width="80">
+            <template #default="{ row }">
+              <el-tag size="small" :type="stanceType(row.stance)">{{ row.stance }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="reason" label="一句话理由" min-width="220" />
+        </el-table>
+        <p class="panel-note">AI 模拟多风格视角生成，仅供参考，非投资建议。</p>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -684,6 +723,7 @@ import {
   type QuantStockPoolResult,
   type MarketContext
 } from '@/api/quant'
+import { panelApi, type PanelScore } from '@/api/quant'
 
 const route = useRoute()
 const routeInitialTab = () => String(route.meta.initialTab || route.query.tab || 'screen')
@@ -1018,7 +1058,37 @@ onUnmounted(() => {
   if (syncTimer) window.clearTimeout(syncTimer)
   stopSmartTaskPolling()
   stopSmartProgress()
+  Object.values(panelTimers).forEach(t => window.clearTimeout(t))
 })
+
+// 五方判读批量评分：pool -> symbol -> score；后台补打时轮询
+const panelScores = ref<Record<string, Record<string, PanelScore>>>({ smart: {}, pattern: {} })
+const panelDialogVisible = ref(false)
+const panelDialogData = ref<PanelScore | null>(null)
+const panelDialogTitle = ref('')
+const panelTimers: Record<string, number> = {}
+
+const loadPanelScores = async (pool: 'smart' | 'pattern', attempt = 0) => {
+  try {
+    const data = await panelApi.batch(pool)
+    if (!data) return
+    panelScores.value[pool] = data.items || {}
+    if (data.pending > 0 && attempt < 10) {
+      if (panelTimers[pool]) window.clearTimeout(panelTimers[pool])
+      panelTimers[pool] = window.setTimeout(() => loadPanelScores(pool, attempt + 1), 20000)
+    }
+  } catch { /* 判读是增强信息，失败静默 */ }
+}
+
+const openPanelDialog = (row: { symbol: string; name?: string }, pool: 'smart' | 'pattern') => {
+  const score = panelScores.value[pool]?.[row.symbol]
+  if (!score) return
+  panelDialogData.value = score
+  panelDialogTitle.value = `${row.name || row.symbol} · 五方判读`
+  panelDialogVisible.value = true
+}
+
+const stanceType = (stance: string) => (stance === '看多' ? 'danger' : stance === '看空' ? 'success' : 'info')
 
 const loadPool = async () => {
   poolLoading.value = true
@@ -1076,6 +1146,7 @@ const pollSmartPoolTask = async (taskId: string) => {
       if (!task.result) throw new Error('智能推荐任务已完成，但结果为空')
       smartPoolResult.value = task.result
       selectedSmartRows.value = []
+      loadPanelScores('smart')
       finishSmartPoolTask()
       ElMessage.success(`智能推荐完成：${task.result.items.length} 只`)
       return
@@ -1141,6 +1212,7 @@ const loadPatternPool = async () => {
             patternPoolForm.value.min_strength
         )
         selectedPatternRows.value = []
+        loadPanelScores('pattern')
     } catch (error: any) {
         ElMessage.error(error?.message || '形态扫描失败，请重试')
         patternPoolResult.value = null
@@ -1975,4 +2047,9 @@ const openChart = async (row: any) => {
 :deep(.el-table .cell) { line-height: 1.3; font-size: 12px; padding-left: 6px; padding-right: 6px; }
 :deep(.el-table th.el-table__cell) { padding: 6px 0; }
 :deep(.el-tag) { height: 20px; line-height: 18px; padding: 0 5px; font-size: 11px; }
+
+.panel-div { margin-left: 2px; font-size: 11px; color: var(--el-text-color-secondary); }
+.panel-pending { color: var(--el-text-color-placeholder); }
+.panel-summary { margin: 0 0 10px; font-size: 13px; }
+.panel-note { margin: 10px 0 0; font-size: 12px; color: var(--el-text-color-placeholder); }
 </style>

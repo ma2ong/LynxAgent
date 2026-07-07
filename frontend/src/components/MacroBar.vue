@@ -1,5 +1,5 @@
 <template>
-  <div v-if="data && data.indices.length" class="macro-bar">
+  <div v-if="data && (data.indices.length || data.breadth)" class="macro-bar">
     <span v-for="idx in data.indices" :key="idx.code" class="item">
       <span class="label">{{ idx.name }}</span>
       <span :class="colorClass(idx.change_percent)">

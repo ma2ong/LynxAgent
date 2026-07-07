@@ -8,6 +8,14 @@
 
 **Tech Stack:** FastAPI + APScheduler + SQLite（后端）；Vue 3 + Element Plus（前端）；LLM 走 `quantcore/quant/llm.py` 统一入口（`chat_json`，无密钥自动降级）。
 
+**实施偏离记录（2026-07-06 执行后回写）:**
+1. `_gather_close_facts(extra)` 增加 `realtime_quotes` 输入：15:35 生成时本地日线未同步（18:00），
+   不传实时快照收盘报告永远缺当日涨停/情绪数据；快照只作计算输入，不进 facts/LLM/落库。
+2. cron job 加 `_is_trading_day_now()` 守卫：节假日快照时间停留在上一交易日，跳过生成，避免旧行情落成当日盘报。
+3. `POST /reports/generate` 加 5 分钟冷却（返回现有盘报），LLM 调用有真实成本。
+4. macro-bar 失败结果短缓存 20s 退避，防上游故障时打满数据线程池；前端 v-if 放宽为 indices 或 breadth 任一可用即显示。
+5. 盘报页 loadByDate 加请求序号防竞态；`.gitignore` 的 `reports/` 收窄为 `/reports/`（Windows 大小写不敏感误伤 views/Reports）。
+
 **约定（全项目通用，执行时必须遵守）:**
 - 运行测试：`python -m pytest tests/test_report_daily.py -v`（项目根 `C:\Users\Administrator\lynxagent`）。
 - 后端改动需重启后端才生效（uvicorn 无 --reload）；前端 vite 有 HMR。

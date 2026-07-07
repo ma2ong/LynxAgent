@@ -18,7 +18,7 @@
               title="当前为纯数据版盘报（未配置 LLM 密钥），配置后可获得 AI 解读。" />
 
     <template v-if="report">
-      <el-card v-for="s in report.sections" :key="s.title" class="section" shadow="never">
+      <el-card v-for="(s, i) in report.sections" :key="`${i}-${s.title}`" class="section" shadow="never">
         <h2>{{ s.title }}</h2>
         <p>{{ s.body }}</p>
       </el-card>
@@ -43,15 +43,21 @@ const generating = ref(false)
 const datesForKind = computed(() =>
   [...new Set(available.value.filter(d => d.kind === kind.value).map(d => d.date))])
 
+let loadSeq = 0 // 快速切 tab/日期时，只让最后一次请求的结果落地
+
 const loadByDate = async () => {
+  const seq = ++loadSeq
   loading.value = true
   try {
     if (!datesForKind.value.includes(selectedDate.value)) selectedDate.value = datesForKind.value[0] ?? ''
-    report.value = selectedDate.value
+    const result = selectedDate.value
       ? await reportsApi.byDate(selectedDate.value, kind.value)
       : await reportsApi.latest(kind.value)
+    if (seq === loadSeq) report.value = result
+  } catch {
+    if (seq === loadSeq) report.value = null
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

@@ -116,9 +116,11 @@ async def _start_ml_factor_scheduler() -> None:
         replace_existing=True,
         misfire_grace_time=3600,
     )
-    # 每日盘报：盘前版 9:26（竞价结束后）、收盘版 15:35
+    # 每日盘报：盘前版 9:26（竞价结束后）、收盘版 15:35；节假日快照是旧行情，跳过不生成
     async def _job_daily_report_premarket() -> None:
         try:
+            if not await _is_trading_day_now():
+                return
             await _generate_daily_report("premarket")
         except Exception as exc:  # noqa: BLE001
             import warnings
@@ -126,6 +128,8 @@ async def _start_ml_factor_scheduler() -> None:
 
     async def _job_daily_report_close() -> None:
         try:
+            if not await _is_trading_day_now():
+                return
             await _generate_daily_report("close")
         except Exception as exc:  # noqa: BLE001
             import warnings
@@ -3547,6 +3551,26 @@ async def lite_limit_up_distribution(date: str | None = None):
 
 
 # ---- 每日盘报 + 宏观条 ----
+async def _is_trading_day_now() -> bool:
+    """用实时快照的行情时间判断今天是否交易日：节假日快照时间停留在上一交易日，
+    此时 cron 不应把旧行情落成当日盘报。仅在明确看到 stale 时间戳时返回 False；
+    快照拿不到/无时间戳则 fail-open 视为交易日，宁多生成不漏。"""
+    try:
+        snapshot = await _run_data_task(_load_realtime_quotes_snapshot, 300, timeout=8.0)
+    except Exception:
+        return True
+    if not snapshot:
+        return True
+    quote_dates: set[str] = set()
+    for q in list(snapshot.values())[:200]:
+        m = re.match(r"(\d{4})/(\d{2})/(\d{2})", str(q.get("updated_at") or ""))
+        if m:
+            quote_dates.add(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
+    if not quote_dates:
+        return True
+    return datetime.now().strftime("%Y-%m-%d") in quote_dates
+
+
 async def _generate_daily_report(kind: str) -> dict[str, Any]:
     """组装 app 层数据后调用生成器：盘前传竞价/催化剂；收盘传实时快照
     （15:35 生成时本地日线尚未同步，无快照则当天涨停/情绪缺数据）。"""
@@ -3600,9 +3624,19 @@ async def lite_reports_latest(kind: str = "close"):
 @app.post("/api/lite/reports/generate")
 async def lite_reports_generate(kind: str = "close",
                                 user: dict = Depends(get_current_lite_user)):
-    """手动触发生成（验证/补数用），不等定时任务。"""
+    """手动触发生成（验证/补数用），不等定时任务。5 分钟冷却：LLM 调用有真实成本。"""
     if kind not in ("premarket", "close"):
         raise HTTPException(status_code=400, detail="kind 必须是 premarket 或 close")
+    from quantcore.quant.local_store import get_local_store
+    today = datetime.now().strftime("%Y-%m-%d")
+    existing = await asyncio.to_thread(get_local_store().load_daily_report, today, kind)
+    if existing:
+        try:
+            gen_at = datetime.fromisoformat(str(existing.get("generated_at")))
+            if (datetime.now() - gen_at).total_seconds() < 300:
+                return {"success": True, "data": existing, "message": "5 分钟内已生成过，返回现有盘报"}
+        except (TypeError, ValueError):
+            pass
     content = await _generate_daily_report(kind)
     return {"success": True, "data": content}
 
@@ -3613,6 +3647,11 @@ async def lite_macro_bar():
     cached = _cache_get("macro-bar", 60)
     if cached:
         return cached
+    # 上游持续故障时全站客户端每 60s 都会打满 10s+8s 超时的重试，挤占数据线程池；
+    # 失败结果也短缓存 20s 做退避。
+    failed = _cache_get("macro-bar:fail", 20)
+    if failed:
+        return failed
     from quantcore.quant.macro_bar import fetch_index_quotes
     try:
         indices = await _run_data_task(fetch_index_quotes, timeout=10.0)
@@ -3645,6 +3684,8 @@ async def lite_macro_bar():
     }}
     if indices or breadth:
         _cache_set("macro-bar", payload)
+    else:
+        _cache_set("macro-bar:fail", payload)
     return payload
 
 

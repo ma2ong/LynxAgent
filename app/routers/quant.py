@@ -394,6 +394,25 @@ async def dragon_tiger_seat_detail(symbol: str, date: str = ""):
     return await asyncio.to_thread(dragon_tiger_seats, symbol, date)
 
 
+# ---- 聪明钱：活跃席位 / 席位胜率 / 基金重仓（akshare，6h 缓存，不计费）----
+@router.get("/smart-money/seats")
+async def quant_smart_money_seats(days: int = 30):
+    from quantcore.quant.smart_money import active_seats
+    return await asyncio.to_thread(active_seats, max(7, min(days, 90)))
+
+
+@router.get("/smart-money/seat-winrate")
+async def quant_smart_money_winrate():
+    from quantcore.quant.smart_money import seat_winrate
+    return await asyncio.to_thread(seat_winrate)
+
+
+@router.get("/smart-money/fund-consensus")
+async def quant_smart_money_fund():
+    from quantcore.quant.smart_money import fund_consensus
+    return await asyncio.to_thread(fund_consensus)
+
+
 @router.get("/calendar")
 async def capital_calendar(types: str = "earnings,unlock,ipo", days: int = 14):
     type_list = [t.strip() for t in types.split(",") if t.strip()]

@@ -147,6 +147,30 @@ async def _start_ml_factor_scheduler() -> None:
         id="daily_report_close", name="收盘盘报生成",
         replace_existing=True, misfire_grace_time=3600,
     )
+
+    # Arena 虚拟盘：交易日 15:40 调仓+结算（收盘盘报 15:35 之后，快照价=收盘价）
+    async def _job_arena_daily() -> None:
+        try:
+            if not await _is_trading_day_now():
+                return
+            from quantcore.quant.arena import run_arena_daily
+            today = datetime.now().strftime("%Y-%m-%d")
+
+            def _run():
+                prices, names = _arena_prices_and_names()
+                return run_arena_daily(today, _arena_candidates(today), prices, names)
+
+            await asyncio.to_thread(_run)
+        except Exception as exc:  # noqa: BLE001
+            import warnings
+            warnings.warn(f"arena daily run failed: {exc}", RuntimeWarning, stacklevel=1)
+
+    _ml_factor_scheduler.add_job(
+        _job_arena_daily,
+        CronTrigger.from_crontab(os.getenv("ARENA_CRON", "40 15 * * 1-5"), timezone=tz),
+        id="arena_daily", name="Arena虚拟盘每日调仓",
+        replace_existing=True, misfire_grace_time=3600,
+    )
     _ml_factor_scheduler.start()
 
 
@@ -3742,6 +3766,108 @@ async def lite_heatmap(level: str = "industry", industry: str = ""):
     if items:
         _cache_set(cache_key, payload)
     return payload
+
+
+def _arena_prices_and_names() -> tuple[dict[str, float], dict[str, str]]:
+    """Arena 结算价：优先实时快照（15:40 快照价=收盘价），失败退本地日线最新收盘。"""
+    prices: dict[str, float] = {}
+    names: dict[str, str] = {}
+    try:
+        snapshot = _load_realtime_quotes_snapshot(60)
+    except Exception:
+        snapshot = {}
+    if snapshot:
+        for sym, q in snapshot.items():
+            price = q.get("price") or q.get("close")
+            if price:
+                prices[sym] = float(price)
+                names[sym] = str(q.get("name") or sym)
+        return prices, names
+    from quantcore.quant.local_store import get_local_store
+    store = get_local_store()
+    metas = {str(m.get("symbol")): str(m.get("name") or "") for m in store.load_meta()}
+    for sym, st in store.latest_daily_stats().items():
+        prices[sym] = float(st["close"])
+        names[sym] = metas.get(sym, sym)
+    return prices, names
+
+
+def _arena_candidates(today: str) -> list[str]:
+    """当日四池留痕并集（每池 rank 前 10，去重保序）。"""
+    from quantcore.quant.local_store import get_local_store
+    store = get_local_store()
+    seen: list[str] = []
+    for pool in ("smart", "pattern", "swing", "auction"):
+        for sym in store.load_picks_symbols(today, pool, limit=10):
+            if sym not in seen:
+                seen.append(sym)
+    return seen
+
+
+@app.post("/api/lite/arena/run")
+async def lite_arena_run():
+    """手动触发一次 Arena 调仓+结算（幂等：当日已结算的人格跳过）。无交易日守卫，便于验证。"""
+    from quantcore.quant.arena import run_arena_daily
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    def _run():
+        prices, names = _arena_prices_and_names()
+        return run_arena_daily(today, _arena_candidates(today), prices, names)
+
+    result = await asyncio.to_thread(_run)
+    return {"success": True, "data": result}
+
+
+@app.get("/api/lite/arena")
+async def lite_arena_board():
+    """排行榜：各人格最新 NAV/收益率/持仓数 + NAV 序列。"""
+    from quantcore.quant.arena import _PERSONAS
+    from quantcore.quant.local_store import get_local_store
+
+    def _load():
+        store = get_local_store()
+        series = store.load_arena_nav_series()
+        board = []
+        for p in _PERSONAS:
+            pname = p["persona"]
+            navs = series.get(pname) or []
+            latest = navs[-1]["nav"] if navs else store.ARENA_INITIAL_CASH
+            board.append({
+                "persona": pname, "style": p["style"], "desc": p["desc"],
+                "nav": round(latest, 2),
+                "return_pct": round((latest / store.ARENA_INITIAL_CASH - 1) * 100, 2),
+                "positions": len(store.arena_positions(pname)),
+                "comment": navs[-1]["comment"] if navs else "",
+                "days": len(navs),
+            })
+        board.sort(key=lambda x: x["nav"], reverse=True)
+        return {"board": board, "series": series}
+
+    return {"success": True, "data": await asyncio.to_thread(_load)}
+
+
+@app.get("/api/lite/arena/detail")
+async def lite_arena_detail(persona: str):
+    """人格详情：持仓明细（现价/浮盈）+ 交易历史。"""
+    from quantcore.quant.arena import _PERSONAS
+    from quantcore.quant.local_store import get_local_store
+    if persona not in {p["persona"] for p in _PERSONAS}:
+        raise HTTPException(status_code=400, detail="未知人格")
+
+    def _load():
+        store = get_local_store()
+        prices, names = _arena_prices_and_names()
+        positions = []
+        for pos in store.arena_positions(persona):
+            price = prices.get(pos["symbol"]) or pos["avg_cost"]
+            positions.append({
+                **pos, "name": names.get(pos["symbol"], ""), "price": round(price, 2),
+                "pnl_pct": round((price / pos["avg_cost"] - 1) * 100, 2) if pos["avg_cost"] else 0.0,
+            })
+        return {"persona": persona, "cash": round(store.arena_cash(persona), 2),
+                "positions": positions, "trades": store.load_arena_trades(persona, limit=50)}
+
+    return {"success": True, "data": await asyncio.to_thread(_load)}
 
 
 @app.get("/api/system/config/validate")

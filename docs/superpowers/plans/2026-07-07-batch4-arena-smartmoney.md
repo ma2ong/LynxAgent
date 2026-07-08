@@ -23,7 +23,10 @@
 - 手动触发 `POST /api/lite/arena/run`（不设交易日守卫，便于验证；cron 才有守卫）
 
 **实施偏离记录（执行后回写）:**
-（暂无）
+- **NaN 序列化 bug（端到端验证抓到）**：`smart_money._f` 原用 `round(float(v),2)`，东财某席位金额为 NaN 时透传 NaN，FastAPI JSON 序列化直接 500。修为 `x==x` 判 NaN 归零 + 加回归测试。单元测试没覆盖是因为造数据没含 NaN——只有实机调真实 akshare 数据才暴露。
+- **基金季报未披露完整**：`_recent_quarter_ends` 取最近已过季度末（今日为 2026Q2/20260630），但季度刚过时基金持仓仅个位数行。`fund_consensus` 加 `len(df)>=100` 阈值，不足则回退上一季（实测回退到 20260331/100 行）。
+- 测试数达 81（68+9 arena+4 smart_money，smart_money 比计划多 1 个 NaN 回归测试）。
+- E2E 环境提示：akshare 重取数会占满默认线程池，紧接着的 board 端点冷调用一次耗时 11s（暖后 0.1s）；巡检脚本 goto 用 `domcontentloaded` 比 `networkidle` 稳（vite HMR websocket 会拖住 networkidle）。
 
 **约定:** 测试 `python -m pytest`（仓库根）；后端改动需重启（无 --reload）；A股红涨绿跌；commit message 英文 + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`；每 Task 一个 commit。
 
@@ -35,7 +38,7 @@
 - Modify: `quantcore/quant/local_store.py`（_SCHEMA 末尾 + panel 方法后新增方法组）
 - Test: `tests/test_arena.py`（新建）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `tests/test_arena.py`：
 
@@ -91,12 +94,12 @@ def test_arena_nav_roundtrip_and_series(store):
     assert len(series["趋势派"]) == 1
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_arena.py -v`
 Expected: 4 FAIL（AttributeError arena_cash 等）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `_SCHEMA` 末尾（panel_scores 建表后、闭合 `"""` 前）追加：
 
@@ -203,12 +206,12 @@ CREATE TABLE IF NOT EXISTS arena_nav (
         return out
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_arena.py -v`
 Expected: 4 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add quantcore/quant/local_store.py tests/test_arena.py
@@ -223,7 +226,7 @@ git commit -m "feat(arena): portfolio state, trades and nav storage on LocalQuan
 - Create: `quantcore/quant/arena.py`
 - Test: `tests/test_arena.py`（追加）
 
-- [ ] **Step 1: 追加失败测试**
+- [x] **Step 1: 追加失败测试**
 
 `tests/test_arena.py` 末尾追加：
 
@@ -299,12 +302,12 @@ def test_arena_ignores_symbols_outside_candidates_and_holdings(store, monkeypatc
     assert store.arena_positions("价值派") == []  # 幻觉代码被过滤
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_arena.py -v`
 Expected: 新增 5 个 FAIL（ModuleNotFoundError arena），原 4 个 PASS
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 新建 `quantcore/quant/arena.py`：
 
@@ -426,12 +429,12 @@ def run_arena_daily(date: str, candidates: List[str], prices: Dict[str, float],
     return {"date": date, "personas": summary}
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `python -m pytest tests/test_arena.py -v`
 Expected: 9 passed
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add quantcore/quant/arena.py tests/test_arena.py
@@ -445,7 +448,7 @@ git commit -m "feat(arena): daily rebalance engine with LLM orders, lot rounding
 **Files:**
 - Modify: `app/lite_main.py`（heatmap 端点后加 3 个端点；`_start_ml_factor_scheduler` 里加 cron）
 
-- [ ] **Step 1: 实现端点与 cron**
+- [x] **Step 1: 实现端点与 cron**
 
 `app/lite_main.py`，`lite_heatmap` 端点之后插入：
 
@@ -580,7 +583,7 @@ async def lite_arena_detail(persona: str):
     )
 ```
 
-- [ ] **Step 2: 验证**
+- [x] **Step 2: 验证**
 
 `python -c "import app.lite_main"` 无错误。重启后端后：
 
@@ -592,12 +595,12 @@ Invoke-RestMethod "http://127.0.0.1:8001/api/lite/arena/detail?persona=价值派
 
 Expected: run 返回 5 人格摘要（LLM 可用时有 comment/交易；候选池有当日留痕）；再跑一次 run → personas 为空数组（幂等）；board 有 5 行；detail 返回持仓+交易；`persona=瞎写` → 400。
 
-- [ ] **Step 3: 全量回归**
+- [x] **Step 3: 全量回归**
 
 Run: `python -m pytest tests/ -q`
 Expected: 77 passed（68+9）
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add app/lite_main.py
@@ -613,7 +616,7 @@ git commit -m "feat(arena): run/board/detail endpoints and 15:40 trading-day cro
 - Modify: `app/routers/quant.py`（dragon-tiger 端点后追加 3 个端点）
 - Test: `tests/test_smart_money.py`（新建）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `tests/test_smart_money.py`：
 
@@ -665,12 +668,12 @@ def test_shape_fund_hold_top_by_mv():
     assert rows[1]["change"] == "减仓" and rows[1]["change_pct"] == -22.87
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `python -m pytest tests/test_smart_money.py -v`
 Expected: 3 FAIL（ModuleNotFoundError smart_money）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 新建 `quantcore/quant/smart_money.py`：
 
@@ -816,7 +819,7 @@ def fund_consensus() -> Dict[str, object]:
     return cached("sm:fund", _TTL, _compute)
 ```
 
-- [ ] **Step 4: 跑测试确认通过 + 端点**
+- [x] **Step 4: 跑测试确认通过 + 端点**
 
 Run: `python -m pytest tests/test_smart_money.py -v`
 Expected: 3 passed
@@ -843,7 +846,7 @@ async def quant_smart_money_fund():
     return await asyncio.to_thread(fund_consensus)
 ```
 
-- [ ] **Step 5: 验证 + Commit**
+- [x] **Step 5: 验证 + Commit**
 
 重启后端，登录拿 token 后逐个调 3 个端点，Expected: empty:false + rows 非空（席位榜有「沪股通专用」等，基金重仓有宁德时代等）。
 
@@ -863,7 +866,7 @@ git commit -m "feat(smart-money): active seats, seat winrate and fund consensus 
 - Modify: `frontend/src/router/index.ts`（heatmap 路由后加）
 - Modify: `frontend/src/components/Layout/AppLayout.vue`（行业热力菜单后加，图标 Trophy）
 
-- [ ] **Step 1: quant.ts 末尾追加**
+- [x] **Step 1: quant.ts 末尾追加**
 
 ```typescript
 export interface ArenaBoardRow {
@@ -913,7 +916,7 @@ export const arenaApi = {
 }
 ```
 
-- [ ] **Step 2: 新建 `frontend/src/views/Arena/Index.vue`**
+- [x] **Step 2: 新建 `frontend/src/views/Arena/Index.vue`**
 
 ```vue
 <template>
@@ -1070,7 +1073,7 @@ h4 { margin: 12px 0 6px; }
 </style>
 ```
 
-- [ ] **Step 3: 路由 + 侧边栏 + 验证 + Commit**
+- [x] **Step 3: 路由 + 侧边栏 + 验证 + Commit**
 
 `router/index.ts` heatmap 行后：
 
@@ -1100,7 +1103,7 @@ git commit -m "feat(arena): leaderboard page with nav chart and persona detail d
 - Modify: `frontend/src/router/index.ts`（arena 路由后加）
 - Modify: `frontend/src/components/Layout/AppLayout.vue`（AI擂台菜单后加，图标 Wallet）
 
-- [ ] **Step 1: quant.ts 末尾追加**
+- [x] **Step 1: quant.ts 末尾追加**
 
 ```typescript
 export interface SmartSeatRow {
@@ -1147,7 +1150,7 @@ export const smartMoneyApi = {
 }
 ```
 
-- [ ] **Step 2: 新建 `frontend/src/views/SmartMoney/Index.vue`**
+- [x] **Step 2: 新建 `frontend/src/views/SmartMoney/Index.vue`**
 
 ```vue
 <template>
@@ -1267,7 +1270,7 @@ onMounted(loadSeats)
 </style>
 ```
 
-- [ ] **Step 3: 路由 + 侧边栏 + 验证 + Commit**
+- [x] **Step 3: 路由 + 侧边栏 + 验证 + Commit**
 
 `router/index.ts` arena 行后：
 
@@ -1291,21 +1294,21 @@ git commit -m "feat(smart-money): seats, winrate and fund consensus tabs page"
 
 ### Task 7: 端到端验证 + README + push
 
-- [ ] **Step 1: 全量回归**
+- [x] **Step 1: 全量回归**
 
 ```bash
 python -m pytest tests/ -q     # 80 passed
 cd frontend && npx vue-tsc --noEmit && npm run build
 ```
 
-- [ ] **Step 2: 实机巡检（headless Playwright，复用既有方式）**
+- [x] **Step 2: 实机巡检（headless Playwright，复用既有方式）**
 
 登录 token 注入 localStorage → 依次访问 `http://[::1]:5173/arena` 与 `/smart-money`：
 1. `/arena`：先 POST `/api/lite/arena/run` 触发一次结算 → 排行榜 5 行、NAV 图有线、点行开抽屉见持仓/交易
 2. `/smart-money`：活跃席位表非空；切换席位胜率/基金重仓 tab 各自加载出行
 3. 截图确认
 
-- [ ] **Step 3: README 功能清单**
+- [x] **Step 3: README 功能清单**
 
 「行业热力图」条目后追加：
 
@@ -1314,7 +1317,7 @@ cd frontend && npx vue-tsc --noEmit && npm run build
 - **聪明钱** — 龙虎榜活跃席位榜、席位胜率排行（上榜后 5 日跟踪）、基金共识重仓（季报口径）；北向持股因披露停止不提供。
 ```
 
-- [ ] **Step 4: Commit + push**
+- [x] **Step 4: Commit + push**
 
 ```bash
 git add README.md docs/superpowers/plans/2026-07-07-batch4-arena-smartmoney.md

@@ -676,3 +676,49 @@ export const heatmapApi = {
     return (raw as any)?.data as HeatmapData | null
   },
 }
+
+export interface ArenaBoardRow {
+  persona: string
+  style: string
+  desc: string
+  nav: number
+  return_pct: number
+  positions: number
+  comment: string
+  days: number
+}
+
+export interface ArenaNavPoint { date: string; nav: number; comment: string }
+
+export interface ArenaPosition {
+  symbol: string
+  name: string
+  shares: number
+  avg_cost: number
+  price: number
+  pnl_pct: number
+}
+
+export interface ArenaTrade {
+  date: string
+  symbol: string
+  side: string
+  price: number
+  shares: number
+  reason: string
+}
+
+export const arenaApi = {
+  board: async () => {
+    const raw = await ApiClient.get<any>('/api/lite/arena')
+    return (raw as any)?.data as { board: ArenaBoardRow[]; series: Record<string, ArenaNavPoint[]> } | null
+  },
+  detail: async (persona: string) => {
+    const raw = await ApiClient.get<any>('/api/lite/arena/detail', { persona })
+    return (raw as any)?.data as { persona: string; cash: number; positions: ArenaPosition[]; trades: ArenaTrade[] } | null
+  },
+  run: async () => {
+    const raw = await ApiClient.post<any>('/api/lite/arena/run', undefined, { timeout: 180000 })
+    return (raw as any)?.data
+  },
+}

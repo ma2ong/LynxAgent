@@ -65,6 +65,36 @@ CREATE TABLE IF NOT EXISTS panel_scores (
     created_at TEXT,
     PRIMARY KEY (date, symbol)
 );
+CREATE TABLE IF NOT EXISTS arena_state (
+    persona TEXT PRIMARY KEY,
+    cash REAL
+);
+CREATE TABLE IF NOT EXISTS arena_positions (
+    persona TEXT,
+    symbol TEXT,
+    shares INTEGER,
+    avg_cost REAL,
+    PRIMARY KEY (persona, symbol)
+);
+CREATE TABLE IF NOT EXISTS arena_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT,
+    persona TEXT,
+    symbol TEXT,
+    side TEXT,
+    price REAL,
+    shares INTEGER,
+    reason TEXT,
+    created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS arena_nav (
+    date TEXT,
+    persona TEXT,
+    nav REAL,
+    cash REAL,
+    comment TEXT,
+    PRIMARY KEY (date, persona)
+);
 """
 
 _COLS = ["date", "open", "high", "low", "close", "volume", "amount"]
@@ -571,6 +601,72 @@ class LocalQuantStore:
             (date, pool, limit),
         ).fetchall()
         return [r[0] for r in rows]
+
+    # ---- Arena 虚拟盘 ----
+    ARENA_INITIAL_CASH = 1_000_000.0
+
+    def arena_cash(self, persona: str) -> float:
+        row = self._conn().execute("SELECT cash FROM arena_state WHERE persona=?", (persona,)).fetchone()
+        return float(row[0]) if row else self.ARENA_INITIAL_CASH
+
+    def set_arena_cash(self, persona: str, cash: float) -> None:
+        conn = self._conn()
+        conn.execute("INSERT OR REPLACE INTO arena_state(persona, cash) VALUES(?,?)", (persona, float(cash)))
+        conn.commit()
+
+    def arena_positions(self, persona: str) -> List[Dict[str, object]]:
+        rows = self._conn().execute(
+            "SELECT symbol, shares, avg_cost FROM arena_positions WHERE persona=? ORDER BY symbol",
+            (persona,)).fetchall()
+        return [{"symbol": r[0], "shares": int(r[1]), "avg_cost": float(r[2])} for r in rows]
+
+    def upsert_arena_position(self, persona: str, symbol: str, shares: int, avg_cost: float) -> None:
+        conn = self._conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO arena_positions(persona, symbol, shares, avg_cost) VALUES(?,?,?,?)",
+            (persona, symbol, int(shares), float(avg_cost)))
+        conn.commit()
+
+    def delete_arena_position(self, persona: str, symbol: str) -> None:
+        conn = self._conn()
+        conn.execute("DELETE FROM arena_positions WHERE persona=? AND symbol=?", (persona, symbol))
+        conn.commit()
+
+    def insert_arena_trade(self, date: str, persona: str, symbol: str, side: str,
+                           price: float, shares: int, reason: str) -> None:
+        from datetime import datetime
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO arena_trades(date, persona, symbol, side, price, shares, reason, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (date, persona, symbol, side, float(price), int(shares), str(reason or ""),
+             datetime.now().isoformat(timespec="seconds")))
+        conn.commit()
+
+    def load_arena_trades(self, persona: str, limit: int = 50) -> List[Dict[str, object]]:
+        rows = self._conn().execute(
+            "SELECT date, symbol, side, price, shares, reason FROM arena_trades"
+            " WHERE persona=? ORDER BY id DESC LIMIT ?", (persona, int(limit))).fetchall()
+        return [{"date": r[0], "symbol": r[1], "side": r[2], "price": float(r[3]),
+                 "shares": int(r[4]), "reason": r[5]} for r in rows]
+
+    def arena_nav_exists(self, date: str, persona: str) -> bool:
+        return self._conn().execute(
+            "SELECT 1 FROM arena_nav WHERE date=? AND persona=?", (date, persona)).fetchone() is not None
+
+    def save_arena_nav(self, date: str, persona: str, nav: float, cash: float, comment: str = "") -> None:
+        conn = self._conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO arena_nav(date, persona, nav, cash, comment) VALUES(?,?,?,?,?)",
+            (date, persona, float(nav), float(cash), str(comment or "")))
+        conn.commit()
+
+    def load_arena_nav_series(self) -> Dict[str, List[Dict[str, object]]]:
+        out: Dict[str, List[Dict[str, object]]] = {}
+        for date, persona, nav, comment in self._conn().execute(
+                "SELECT date, persona, nav, comment FROM arena_nav ORDER BY date").fetchall():
+            out.setdefault(persona, []).append({"date": date, "nav": float(nav), "comment": comment or ""})
+        return out
 
 
 def _f(v) -> float:

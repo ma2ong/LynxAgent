@@ -722,3 +722,46 @@ export const arenaApi = {
     return (raw as any)?.data
   },
 }
+
+export interface SmartSeatRow {
+  seat: string
+  count: number
+  buy_yi: number
+  sell_yi: number
+  net_yi: number
+  last_date: string
+  stocks: string
+}
+
+export interface SeatWinrateRow {
+  seat: string
+  trades_5d: number
+  avg_chg_5d: number
+  win_rate_5d: number
+  avg_chg_1d: number
+  win_rate_1d: number
+}
+
+export interface FundHoldRow {
+  symbol: string
+  name: string
+  funds: number
+  mv_yi: number
+  change: string
+  change_pct: number
+}
+
+export const smartMoneyApi = {
+  seats: async (days = 30) => {
+    const raw = await ApiClient.get<any>('/api/quant/smart-money/seats', { days }, { timeout: 60000 })
+    return raw as { empty: boolean; message?: string; rows: SmartSeatRow[] }
+  },
+  winrate: async () => {
+    const raw = await ApiClient.get<any>('/api/quant/smart-money/seat-winrate', undefined, { timeout: 60000 })
+    return raw as { empty: boolean; message?: string; rows: SeatWinrateRow[] }
+  },
+  fund: async () => {
+    const raw = await ApiClient.get<any>('/api/quant/smart-money/fund-consensus', undefined, { timeout: 60000 })
+    return raw as { empty: boolean; message?: string; quarter?: string; rows: FundHoldRow[] }
+  },
+}

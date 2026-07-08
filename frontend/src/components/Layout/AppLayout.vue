@@ -30,6 +30,7 @@
         <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
         <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
         <el-menu-item index="/arena"><el-icon><Trophy /></el-icon><span>AI擂台</span></el-menu-item>
+        <el-menu-item index="/smart-money"><el-icon><Wallet /></el-icon><span>聪明钱</span></el-menu-item>
         <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
         <el-menu-item index="/insights/kol"><el-icon><Bell /></el-icon><span>KOL日报</span></el-menu-item>
         <el-menu-item index="/insights/capital"><el-icon><Coin /></el-icon><span>资金面板</span></el-menu-item>
@@ -63,7 +64,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, TrendCharts, Star, SwitchButton,
   DocumentChecked, Coin, Calendar, Menu,
-  Bell, MagicStick, Medal, Setting, DataLine, Sunrise, DataAnalysis, Notebook, Histogram, Trophy,
+  Bell, MagicStick, Medal, Setting, DataLine, Sunrise, DataAnalysis, Notebook, Histogram, Trophy, Wallet,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'

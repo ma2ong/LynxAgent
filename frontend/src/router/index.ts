@@ -16,6 +16,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'limit-up', name: 'limit-up', component: () => import('@/views/LimitUp/Index.vue') },
       { path: 'heatmap', name: 'heatmap', component: () => import('@/views/Heatmap/Index.vue') },
       { path: 'arena', name: 'arena', component: () => import('@/views/Arena/Index.vue') },
+      { path: 'smart-money', name: 'smart-money', component: () => import('@/views/SmartMoney/Index.vue') },
       { path: 'call-auction', name: 'call-auction', component: () => import('@/views/CallAuction/Index.vue') },
       { path: 'quant', name: 'quant', component: () => import('@/views/Quant/index.vue') },
       { path: 'review', name: 'picks-review', component: () => import('@/views/Review/Index.vue') },

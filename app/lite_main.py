@@ -174,6 +174,33 @@ async def _start_ml_factor_scheduler() -> None:
         id="arena_daily", name="Arena虚拟盘每日调仓",
         replace_existing=True, misfire_grace_time=3600,
     )
+
+    # 回放自愈：进程被杀会留下 status='running' 的僵尸 run；每 10 分钟检查并自动续跑
+    # （replay_scan 按 symbol 断点缓存，续跑只做增量；运行中/无僵尸时为 no-op）。
+    async def _job_replay_resume() -> None:
+        try:
+            from quantcore.quant.local_store import get_local_store
+            from quantcore.quant.replay import replay_status, start_replay_async
+            if replay_status().get("running"):
+                return
+            row = get_local_store()._conn().execute(
+                "SELECT params_json FROM replay_runs WHERE status='running' "
+                "ORDER BY created_at DESC LIMIT 1").fetchone()
+            if not row:
+                return
+            params = json.loads(row[0] or "{}")
+            start_replay_async(months=int(params.get("months", 12)),
+                               step=int(params.get("step", 5)),
+                               top_n=int(params.get("top_n", 20)))
+        except Exception as exc:  # noqa: BLE001
+            import warnings
+            warnings.warn(f"replay resume failed: {exc}", RuntimeWarning, stacklevel=1)
+
+    _ml_factor_scheduler.add_job(
+        _job_replay_resume, "interval", minutes=10,
+        id="replay_resume", name="历史回放断点自愈",
+        replace_existing=True, misfire_grace_time=300,
+    )
     _ml_factor_scheduler.start()
 
 

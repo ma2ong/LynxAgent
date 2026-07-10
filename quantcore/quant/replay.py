@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS replay_results (
     excess_t5 REAL,
     PRIMARY KEY (run_id, pool, as_of, symbol)
 );
+CREATE TABLE IF NOT EXISTS replay_scan (
+    param_key TEXT,
+    symbol TEXT,
+    candidates_json TEXT,
+    PRIMARY KEY (param_key, symbol)
+);
 """
 
 _run_lock = threading.Lock()
@@ -177,12 +183,18 @@ def run_replay(months: int = 12, step: int = 5, top_n: int = 20,
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     since = (date.today() - timedelta(days=int(months * 30.5) + 40)).strftime("%Y-%m-%d")
     tdates = _complete_trading_dates(store, since)
+    # 轴尾截断到 9 天前：近期日期可能被增量补数据改变「完整日」判定，
+    # 导致断点续跑的会话轴漂移、缓存作废；旧数据是稳定的。
+    cutoff = (date.today() - timedelta(days=9)).strftime("%Y-%m-%d")
+    tdates = [d for d in tdates if d <= cutoff]
     # 采样期：每 step 个交易日一期；末尾留足 T+5 前向窗口
     sessions = [d for idx, d in enumerate(tdates[:-HORIZON]) if idx % max(1, step) == 0]
     if not sessions:
         raise ValueError("本地日线不足，无法回放")
 
     conn = store._conn()
+    # 上一次运行如果被杀，会留下 status='running' 的僵尸行，统一标记失败
+    conn.execute("UPDATE replay_runs SET status='failed' WHERE status='running'")
     conn.execute(
         "INSERT OR REPLACE INTO replay_runs(run_id, created_at, params_json, status, progress) "
         "VALUES(?,?,?,?,0)",
@@ -193,23 +205,46 @@ def run_replay(months: int = 12, step: int = 5, top_n: int = 20,
 
     metas = {str(r[0]): str(r[1] or r[0]) for r in conn.execute("SELECT symbol, name FROM stock_meta")}
     symbols = store.list_kline_symbols(min_rows=MIN_BARS)
+
+    # 断点续跑：同参数（月数/步长/会话轴指纹）下已扫描过的 symbol 直接用缓存，
+    # 进程被杀后重跑只补增量——本 harness 会不定期回收长任务，进度必须只增不减。
+    param_key = f"m{months}-s{step}-{sessions[0]}-{sessions[-1]}-{len(sessions)}"
+    cached: Dict[str, str] = {
+        str(r[0]): str(r[1]) for r in conn.execute(
+            "SELECT symbol, candidates_json FROM replay_scan WHERE param_key=?", (param_key,))
+    }
     payloads = [{"symbol": s, "name": metas.get(s, s), "sessions": sessions, "db_path": store.db_path}
-                for s in symbols]
+                for s in symbols if s not in cached]
 
     _progress.update({"running": True, "run_id": run_id, "phase": "scan",
-                      "done": 0, "total": len(payloads)})
+                      "done": len(cached), "total": len(symbols)})
     candidates: List[Dict[str, object]] = []
+    for blob in cached.values():
+        candidates.extend(json.loads(blob))
+
+    def _checkpoint(symbol: str, cands: List[Dict[str, object]]) -> None:
+        conn.execute(
+            "INSERT OR REPLACE INTO replay_scan(param_key, symbol, candidates_json) VALUES(?,?,?)",
+            (param_key, symbol, json.dumps(cands, ensure_ascii=False)))
+        done = int(_progress["done"]) + 1
+        _progress["done"] = done
+        if done % 50 == 0:
+            conn.commit()
+
     try:
         if workers and workers > 0:
             with ProcessPoolExecutor(max_workers=workers) as ex:
-                futures = [ex.submit(_replay_symbol, p) for p in payloads]
+                futures = {ex.submit(_replay_symbol, p): str(p["symbol"]) for p in payloads}
                 for fut in as_completed(futures):
-                    candidates.extend(fut.result() or [])
-                    _progress["done"] = int(_progress["done"]) + 1
+                    cands = fut.result() or []
+                    candidates.extend(cands)
+                    _checkpoint(futures[fut], cands)
         else:
             for p in payloads:
-                candidates.extend(_replay_symbol(p))
-                _progress["done"] = int(_progress["done"]) + 1
+                cands = _replay_symbol(p)
+                candidates.extend(cands)
+                _checkpoint(str(p["symbol"]), cands)
+        conn.commit()
 
         _progress["phase"] = "evaluate"
         # 每期每池 top-N

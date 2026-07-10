@@ -187,12 +187,14 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="200" fixed="right">
+              <el-table-column label="操作" width="230" fixed="right">
                 <template #default="{ row }">
                   <el-button type="primary" link size="small" @click="addOneToFavorites(row)">加入自选</el-button>
                   <el-button link type="primary" size="small" @click="openChart(row)">看图</el-button>
                   <el-button link type="primary" size="small" @click="openWhy(row, 'pattern')">理由</el-button>
+                  <el-button link type="warning" size="small" @click="addToPortfolio(row, 'pattern')">+组合</el-button>
                   <el-button link type="primary" size="small" @click="openWhy(row, 'smart')">理由</el-button>
+                  <el-button link type="warning" size="small" @click="addToPortfolio(row, 'smart')">+组合</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -367,7 +369,7 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="200" fixed="right">
+              <el-table-column label="操作" width="230" fixed="right">
                 <template #default="{ row }">
                   <el-button type="primary" link size="small" @click="addOneToFavorites(row)">加入自选</el-button>
                   <el-button link type="primary" size="small" @click="openChart(row)">看图</el-button>
@@ -731,7 +733,7 @@ import {
   type QuantStockPoolResult,
   type MarketContext
 } from '@/api/quant'
-import { panelApi, type PanelScore } from '@/api/quant'
+import { panelApi, portfolioApi, type PanelScore } from '@/api/quant'
 
 const route = useRoute()
 const routeInitialTab = () => String(route.meta.initialTab || route.query.tab || 'screen')
@@ -758,6 +760,15 @@ const openWhy = (row: any, pool: 'smart' | 'pattern') => {
   whyRow.value = row
   whyPool.value = pool
   whyVisible.value = true
+}
+
+const addToPortfolio = async (row: any, source: 'smart' | 'pattern') => {
+  try {
+    const pos = await portfolioApi.add({ symbol: row.symbol, name: row.name, source })
+    ElMessage.success(`已加入模拟组合：${row.name} ${pos?.shares || ''}股，可到「模拟组合」页跟踪`)
+  } catch (e: any) {
+    ElMessage.warning(e?.message || '加入组合失败')
+  }
 }
 const healthLoading = ref(false)
 

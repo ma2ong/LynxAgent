@@ -807,6 +807,66 @@ export const arenaApi = {
   },
 }
 
+export interface PortfolioSignal { key: string; label: string; detail: string }
+
+export interface PortfolioPosition {
+  id: number
+  symbol: string
+  name: string
+  shares: number
+  buy_price: number
+  cost: number
+  buy_date: string
+  source: string
+  status: string
+  price?: number
+  market_value?: number
+  pnl?: number
+  pnl_pct?: number | null
+  signals?: PortfolioSignal[]
+  sell_date?: string
+  sell_price?: number
+  sell_reason?: string
+}
+
+export interface PortfolioSummary {
+  open_count: number
+  closed_count: number
+  total_cost: number
+  market_value: number
+  unrealized_pnl: number
+  unrealized_pnl_pct: number | null
+  realized_pnl: number
+  closed_win_rate: number | null
+}
+
+export interface PortfolioNavPoint {
+  date: string
+  market_value: number
+  cost_value: number
+  pnl_pct: number
+  bench_cum_pct: number
+}
+
+export const portfolioApi = {
+  list: async () => {
+    const raw = await ApiClient.get<any>('/api/lite/portfolio', { _ts: nonce() })
+    return (raw as any)?.data as { open: PortfolioPosition[]; closed: PortfolioPosition[]; summary: PortfolioSummary } | null
+  },
+  add: async (payload: { symbol: string; name?: string; source?: string; budget?: number }) => {
+    const raw = await ApiClient.post<any>('/api/lite/portfolio/add', payload, { timeout: 30000 })
+    return (raw as any)?.data
+  },
+  sell: async (id: number, reason = 'manual') => {
+    const raw = await ApiClient.post<any>('/api/lite/portfolio/sell', { id, reason }, { timeout: 30000 })
+    return (raw as any)?.data
+  },
+  nav: async () => {
+    const raw = await ApiClient.get<any>('/api/lite/portfolio/nav', { _ts: nonce() })
+    return (raw as any)?.data as PortfolioNavPoint[] | null
+  },
+}
+
 export interface SmartSeatRow {
   seat: string
   count: number

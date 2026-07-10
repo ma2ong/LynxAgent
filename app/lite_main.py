@@ -158,7 +158,10 @@ async def _start_ml_factor_scheduler() -> None:
 
             def _run():
                 prices, names = _arena_prices_and_names()
-                return run_arena_daily(today, _arena_candidates(today), prices, names)
+                run_arena_daily(today, _arena_candidates(today), prices, names)
+                # 用户模拟组合每日快照（幂等），共用收盘快照价
+                from quantcore.quant.portfolio import settle_daily
+                settle_daily(today, prices)
 
             await asyncio.to_thread(_run)
         except Exception as exc:  # noqa: BLE001
@@ -3868,6 +3871,74 @@ async def lite_arena_detail(persona: str):
                 "positions": positions, "trades": store.load_arena_trades(persona, limit=50)}
 
     return {"success": True, "data": await asyncio.to_thread(_load)}
+
+
+# ---- 模拟组合（选股跟踪：一键入组合、盈亏与卖出信号、每日快照）----
+@app.post("/api/lite/portfolio/add")
+async def lite_portfolio_add(payload: dict[str, Any], user: dict[str, Any] = Depends(get_current_lite_user)):
+    from quantcore.quant.portfolio import add_position
+    symbol = str(payload.get("symbol") or "").strip()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="缺少股票代码")
+    sym6 = symbol.zfill(6)
+
+    def _run():
+        prices, names = _arena_prices_and_names()
+        price = float(payload.get("price") or 0) or float(prices.get(sym6, 0) or 0)
+        name = str(payload.get("name") or names.get(sym6) or sym6)
+        budget = max(2000.0, min(float(payload.get("budget") or 10000), 1_000_000.0))
+        return add_position(user["username"], sym6, name, price, budget,
+                            str(payload.get("source") or ""))
+
+    try:
+        pos = await asyncio.to_thread(_run)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "data": pos}
+
+
+@app.post("/api/lite/portfolio/sell")
+async def lite_portfolio_sell(payload: dict[str, Any], user: dict[str, Any] = Depends(get_current_lite_user)):
+    from quantcore.quant.local_store import get_local_store
+    from quantcore.quant.portfolio import close_position
+    position_id = int(payload.get("id") or 0)
+    if not position_id:
+        raise HTTPException(status_code=400, detail="缺少持仓 id")
+
+    def _run():
+        store = get_local_store()
+        row = store._conn().execute(
+            "SELECT symbol FROM portfolio_positions WHERE user=? AND id=? AND status='open'",
+            (user["username"], position_id)).fetchone()
+        if not row:
+            raise ValueError("持仓不存在或已卖出")
+        prices, _ = _arena_prices_and_names()
+        price = float(payload.get("price") or 0) or float(prices.get(str(row[0]), 0) or 0)
+        return close_position(user["username"], position_id, price,
+                              str(payload.get("reason") or "manual"))
+
+    try:
+        res = await asyncio.to_thread(_run)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "data": res}
+
+
+@app.get("/api/lite/portfolio")
+async def lite_portfolio(user: dict[str, Any] = Depends(get_current_lite_user)):
+    from quantcore.quant.portfolio import list_portfolio
+
+    def _run():
+        prices, _ = _arena_prices_and_names()
+        return list_portfolio(user["username"], prices)
+
+    return {"success": True, "data": await asyncio.to_thread(_run)}
+
+
+@app.get("/api/lite/portfolio/nav")
+async def lite_portfolio_nav(user: dict[str, Any] = Depends(get_current_lite_user)):
+    from quantcore.quant.portfolio import nav_series
+    return {"success": True, "data": await asyncio.to_thread(nav_series, user["username"])}
 
 
 @app.get("/api/system/config/validate")

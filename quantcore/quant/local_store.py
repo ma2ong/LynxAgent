@@ -10,6 +10,10 @@ import pandas as pd
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = os.environ.get("QUANT_DATA_DB_PATH", str(_PROJECT_ROOT / "runtime" / "quant_data.sqlite"))
 
+# 复盘统计的市场覆盖率守卫：T+N 目标日的日线覆盖数低于窗口内峰值的 60% 时，
+# 视为数据未就绪（同步缺口），该 horizon 不进统计。
+MIN_MARKET_COVERAGE = 0.6
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS stock_meta (
     symbol TEXT PRIMARY KEY,
@@ -429,6 +433,32 @@ class LocalQuantStore:
         sql += " ORDER BY pick_date DESC, pool, rank"
         picks = conn.execute(sql, params).fetchall()
 
+        import statistics
+
+        # ---- 全市场收盘矩阵：基准（中位收益）与覆盖率守卫共用 ----
+        by_date: Dict[str, Dict[str, float]] = {}
+        for d, sym, c in conn.execute(
+            "SELECT date, symbol, close FROM daily_kline WHERE date >= ? AND amount > 0",
+            (since,),
+        ):
+            by_date.setdefault(str(d), {})[str(sym)] = _f(c)
+        trading_dates = sorted(by_date)
+        max_coverage = max((len(v) for v in by_date.values()), default=0)
+
+        def _cover_ok(d: str) -> bool:
+            return max_coverage <= 0 or len(by_date.get(d, {})) >= max_coverage * MIN_MARKET_COVERAGE
+
+        bench_cache: Dict[tuple, Optional[float]] = {}
+
+        def _bench(d0: str, d1: str) -> Optional[float]:
+            """d0→d1 全市场中位涨跌幅（%），仅统计两日都有 bar 的股票。"""
+            key = (d0, d1)
+            if key not in bench_cache:
+                m0, m1 = by_date.get(d0, {}), by_date.get(d1, {})
+                rets = [(m1[s] / m0[s] - 1) * 100 for s in m0.keys() & m1.keys() if m0[s] > 0]
+                bench_cache[key] = round(statistics.median(rets), 4) if rets else None
+            return bench_cache[key]
+
         kline_cache: Dict[str, List[tuple]] = {}
 
         def _bars(sym: str) -> List[tuple]:
@@ -441,6 +471,7 @@ class LocalQuantStore:
         horizons = (1, 3, 5)
         detail: List[Dict[str, object]] = []
         agg: Dict[str, Dict[int, List[float]]] = {}
+        ex_agg: Dict[str, Dict[int, List[float]]] = {}
         for pick_date, pool_name, symbol, name, score, close, rank in picks:
             bars = _bars(str(symbol))
             dates = [b[0] for b in bars]
@@ -448,32 +479,48 @@ class LocalQuantStore:
             base = _f(close)
             if base <= 0 and idx >= 0:
                 base = _f(bars[idx][1])
+            i_mkt = bisect.bisect_right(trading_dates, str(pick_date)) - 1
             rets: Dict[str, Optional[float]] = {}
             for h in horizons:
                 j = idx + h
-                if idx >= 0 and base > 0 and j < len(bars):
-                    rets[f"t{h}"] = round((_f(bars[j][1]) / base - 1) * 100, 2)
+                jm = i_mkt + h
+                tgt = trading_dates[jm] if 0 <= i_mkt and jm < len(trading_dates) else None
+                ready = (idx >= 0 and base > 0 and j < len(bars)
+                         and tgt is not None and _cover_ok(tgt))
+                if ready:
+                    ret = round((_f(bars[j][1]) / base - 1) * 100, 2)
+                    rets[f"t{h}"] = ret
+                    bench = _bench(trading_dates[i_mkt], tgt)
+                    rets[f"excess_t{h}"] = round(ret - bench, 2) if bench is not None else None
                 else:
                     rets[f"t{h}"] = None
+                    rets[f"excess_t{h}"] = None
             detail.append({
                 "pick_date": pick_date, "pool": pool_name, "symbol": symbol, "name": name,
                 "score": _f(score), "rank": int(rank or 0), "base_close": round(base, 2), **rets,
             })
             bucket = agg.setdefault(str(pool_name), {h: [] for h in horizons})
+            ex_bucket = ex_agg.setdefault(str(pool_name), {h: [] for h in horizons})
             for h in horizons:
                 v = rets[f"t{h}"]
                 if v is not None:
                     bucket[h].append(v)
+                ev = rets[f"excess_t{h}"]
+                if ev is not None:
+                    ex_bucket[h].append(ev)
 
         pools_out: List[Dict[str, object]] = []
         for pool_name in sorted(agg):
             stats: Dict[str, object] = {}
             for h in horizons:
                 vals = agg[pool_name][h]
+                evals = ex_agg[pool_name][h]
                 stats[f"t{h}"] = {
                     "samples": len(vals),
                     "win_rate": round(sum(1 for v in vals if v > 0) / len(vals), 4) if vals else None,
                     "avg_return": round(sum(vals) / len(vals), 2) if vals else None,
+                    "excess_win_rate": round(sum(1 for v in evals if v > 0) / len(evals), 4) if evals else None,
+                    "avg_excess": round(sum(evals) / len(evals), 2) if evals else None,
                 }
             pools_out.append({
                 "pool": pool_name,

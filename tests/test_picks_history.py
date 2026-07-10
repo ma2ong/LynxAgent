@@ -86,6 +86,62 @@ def test_evaluate_picks_future_bars_missing_gives_none(store):
     assert item["t1"] is None and item["t5"] is None
 
 
+def test_evaluate_picks_excess_vs_market_median(store):
+    """超额收益 = 个股 T+N 收益 − 同期全市场中位收益。"""
+    # 市场由 5 只股票构成：1 只大涨、1 只大跌、3 只横盘 → 中位 = 0
+    up = [10.0 * 1.02 ** i for i in range(8)]
+    down = [10.0 * 0.98 ** i for i in range(8)]
+    flat = [10.0] * 8
+    dates = _seed_kline(store, "600001", up)
+    _seed_kline(store, "600002", down)
+    for sym in ("600003", "600004", "600005"):
+        _seed_kline(store, sym, flat)
+    conn = store._conn()
+    conn.execute(
+        "INSERT OR IGNORE INTO picks_history VALUES (?,?,?,?,?,?,?,?)",
+        (dates[1], "pattern", "600001", "涨股", 88.0, up[1], 1, "金叉"),
+    )
+    conn.commit()
+
+    stats = store.evaluate_picks(days=60)
+    item = next(i for i in stats["items"] if i["symbol"] == "600001")
+    expected_ret = (1.02 ** 3 - 1) * 100
+    assert item["t3"] == pytest.approx(expected_ret, abs=0.05)
+    # 市场中位 = 横盘股 0% → 超额 ≈ 绝对收益
+    assert item["excess_t3"] == pytest.approx(expected_ret, abs=0.05)
+    pat = next(p for p in stats["pools"] if p["pool"] == "pattern")
+    t3 = pat["horizons"]["t3"]
+    assert t3["excess_win_rate"] == pytest.approx(1.0)
+    assert t3["avg_excess"] == pytest.approx(expected_ret, abs=0.05)
+
+
+def test_evaluate_picks_low_coverage_day_not_ready(store):
+    """T+N 目标日市场覆盖率 <60% 时该 horizon 记为未就绪（不污染统计）。"""
+    flat = [10.0] * 8
+    dates = None
+    for sym in ("600011", "600012", "600013", "600014", "600015",
+                "600016", "600017", "600018", "600019", "600020"):
+        dates = _seed_kline(store, sym, flat)
+    conn = store._conn()
+    # 制造缺口：最后一个交易日仅保留 2/10 只股票的日线（20% < 60%）
+    conn.execute(
+        "DELETE FROM daily_kline WHERE date = ? AND symbol NOT IN ('600011','600012')",
+        (dates[-1],),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO picks_history VALUES (?,?,?,?,?,?,?,?)",
+        (dates[-2], "smart", "600011", "留痕股", 80.0, 10.0, 1, ""),
+    )
+    conn.commit()
+
+    stats = store.evaluate_picks(days=60)
+    item = next(i for i in stats["items"] if i["symbol"] == "600011")
+    # 600011 自身在缺口日有 bar，但市场截面残缺 → t1 必须为 None
+    assert item["t1"] is None and item["excess_t1"] is None
+    smart = next(p for p in stats["pools"] if p["pool"] == "smart")
+    assert smart["horizons"]["t1"]["samples"] == 0
+
+
 def test_backtest_applies_transaction_costs():
     closes = [10.0 * 1.02 ** i for i in range(8)]
     dates = pd.to_datetime(_trading_dates(8))

@@ -467,6 +467,15 @@ export const quantApi = {
 
   marketContext: async () =>
     unwrap<MarketContext>(await ApiClient.get('/api/quant/market-context', { _ts: nonce() }, { timeout: 30000 })),
+
+  replayRun: async (months = 12, step = 5, topN = 20) =>
+    unwrap<ReplayStatus>(await ApiClient.post(`/api/quant/replay/run?months=${months}&step=${step}&top_n=${topN}`, undefined, { timeout: 30000 })),
+
+  replayStatus: async () =>
+    unwrap<ReplayStatus>(await ApiClient.get('/api/quant/replay/status', { _ts: nonce() }, { timeout: 15000 })),
+
+  replayResults: async () =>
+    unwrap<ReplaySummary>(await ApiClient.get('/api/quant/replay/results', { _ts: nonce() }, { timeout: 60000 })),
 }
 
 export interface MarketContext {
@@ -513,6 +522,48 @@ export interface PicksStatsResult {
   total_picks: number
   pools: PicksPoolStat[]
   items: PicksStatsItem[]
+}
+
+export interface ReplayStatus {
+  running: boolean
+  started?: boolean
+  reason?: string
+  run_id?: string
+  phase?: string
+  done?: number
+  total?: number
+}
+
+export interface ReplayMonthly {
+  month: string
+  picks: number
+  excess_win_rate: number
+  avg_excess: number
+}
+
+export interface ReplayCurvePoint {
+  as_of: string
+  avg_excess: number
+  cum_excess: number
+}
+
+export interface ReplayPoolSummary {
+  pool: string
+  picks: number
+  evaluated: number
+  win_rate: number | null
+  avg_return: number | null
+  excess_win_rate: number | null
+  avg_excess: number | null
+  monthly: ReplayMonthly[]
+  curve: ReplayCurvePoint[]
+}
+
+export interface ReplaySummary {
+  run_id?: string
+  created_at?: string
+  params?: { months?: number; step?: number; top_n?: number; sessions?: number }
+  pools?: ReplayPoolSummary[]
 }
 
 export interface MLFactorPick {

@@ -94,6 +94,65 @@
       </el-table>
     </section>
 
+    <section class="panel">
+      <div class="panel-head">
+        <h2>历史回放验证</h2>
+        <div class="head-actions">
+          <el-tag v-if="replayRunning" type="warning" effect="plain">
+            回放中 {{ replayStat?.done || 0 }}/{{ replayStat?.total || 0 }}
+          </el-tag>
+          <el-button size="small" :loading="replayStarting" :disabled="replayRunning" @click="startReplay">
+            重跑回放（约 10 分钟）
+          </el-button>
+        </div>
+      </div>
+      <template v-if="replay?.pools?.length">
+        <p class="replay-meta muted">
+          回放 {{ replay.params?.months || 12 }} 个月 · 每 {{ replay.params?.step || 5 }} 个交易日一期 ·
+          每期 top{{ replay.params?.top_n || 20 }} · 统计 T+5 相对全市场中位的超额 · 完成于 {{ replay.created_at }}
+        </p>
+        <div class="pool-grid">
+          <div v-for="p in replay.pools" :key="p.pool" class="pool-card">
+            <div class="pool-title">
+              <b>{{ poolLabel(p.pool) }}</b>
+              <small>{{ p.evaluated }}/{{ p.picks }} 样本</small>
+            </div>
+            <div class="horizon-row replay-row">
+              <div class="horizon-cell">
+                <span>超额胜率</span>
+                <b :class="rateClass(p.excess_win_rate)">{{ fmtRate(p.excess_win_rate) }}</b>
+              </div>
+              <div class="horizon-cell">
+                <span>平均超额</span>
+                <b :class="retClass(p.avg_excess)">{{ fmtExcess(p.avg_excess) }}</b>
+              </div>
+              <div class="horizon-cell">
+                <span>累计超额</span>
+                <b :class="retClass(cumExcess(p))">{{ fmtExcess(cumExcess(p)) }}</b>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div ref="replayChartEl" class="replay-chart" />
+        <el-table :data="monthlyRows" size="small" stripe>
+          <el-table-column prop="month" label="月份" width="100" />
+          <el-table-column v-for="p in replay.pools" :key="p.pool" :label="poolLabel(p.pool)">
+            <template #default="{ row }">
+              <span v-if="row[p.pool]" :class="retClass(row[p.pool].avg_excess)">
+                {{ fmtExcess(row[p.pool].avg_excess) }} · 胜 {{ fmtRate(row[p.pool].excess_win_rate) }} ({{ row[p.pool].picks }})
+              </span>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <p class="foot-note replay-note">
+          回放口径：pattern 池形态/因子严格 point-in-time；smart 池实时行情输入用日线近似重建（量比≈当日量/前5日均量，换手率缺失），
+          critic 融合层跳过；排除规则使用当前股票名称。近似口径下结果偏乐观/悲观的方向不定，主要看趋势与月度稳定性。
+        </p>
+      </template>
+      <el-empty v-else-if="!replayRunning" description="还没有回放结果。点「重跑回放」用本地历史日线验证选股规则的真实超额表现。" :image-size="80" />
+    </section>
+
     <p class="foot-note">
       口径说明：留痕价为扫描当时的价格；T+N 为留痕后第 N 个交易日收盘价相对留痕价的涨跌幅；
       超额 = 个股收益 − 同期全市场中位收益（单位 pp），用于区分策略能力与大盘涨跌；
@@ -103,8 +162,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { quantApi, type MarketContext, type PicksPoolStat, type PicksStatsItem, type QuantDataHealth } from '@/api/quant'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { quantApi, type MarketContext, type PicksPoolStat, type PicksStatsItem, type QuantDataHealth, type ReplayPoolSummary, type ReplayStatus, type ReplaySummary } from '@/api/quant'
+import { echarts, type ECharts } from '@/utils/echarts'
 
 const loading = ref(false)
 const error = ref('')
@@ -173,10 +233,98 @@ const load = async () => {
   }
 }
 
+// ---- 历史回放 ----
+const replay = ref<ReplaySummary | null>(null)
+const replayStat = ref<ReplayStatus | null>(null)
+const replayStarting = ref(false)
+const replayChartEl = ref<HTMLElement | null>(null)
+let replayChart: ECharts | null = null
+let pollTimer: number | undefined
+
+const replayRunning = computed(() => !!replayStat.value?.running)
+
+const cumExcess = (p: ReplayPoolSummary) => (p.curve?.length ? p.curve[p.curve.length - 1].cum_excess : null)
+
+const monthlyRows = computed(() => {
+  const months = new Map<string, Record<string, any>>()
+  for (const p of replay.value?.pools || []) {
+    for (const m of p.monthly || []) {
+      if (!months.has(m.month)) months.set(m.month, { month: m.month })
+      months.get(m.month)![p.pool] = m
+    }
+  }
+  return [...months.values()].sort((a, b) => (a.month < b.month ? -1 : 1))
+})
+
+const renderReplayChart = async () => {
+  await nextTick()
+  if (!replayChartEl.value || !replay.value?.pools?.length) return
+  if (!replayChart) replayChart = echarts.init(replayChartEl.value)
+  const series = replay.value.pools.map((p) => ({
+    name: poolLabel(p.pool),
+    type: 'line' as const,
+    showSymbol: false,
+    data: (p.curve || []).map((c) => [c.as_of, c.cum_excess]),
+  }))
+  replayChart.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { top: 0 },
+    grid: { left: 48, right: 16, top: 30, bottom: 24 },
+    xAxis: { type: 'time' },
+    yAxis: { type: 'value', name: '累计超额(pp)' },
+    series,
+  })
+}
+
+const loadReplay = async () => {
+  try {
+    const res = await quantApi.replayResults()
+    if (res?.pools?.length) {
+      replay.value = res
+      renderReplayChart()
+    }
+  } catch { /* 无结果时忽略 */ }
+}
+
+const pollReplay = () => {
+  window.clearInterval(pollTimer)
+  pollTimer = window.setInterval(async () => {
+    try {
+      replayStat.value = await quantApi.replayStatus()
+      if (!replayStat.value?.running) {
+        window.clearInterval(pollTimer)
+        loadReplay()
+      }
+    } catch { /* 轮询失败下轮重试 */ }
+  }, 5000)
+}
+
+const startReplay = async () => {
+  replayStarting.value = true
+  try {
+    replayStat.value = await quantApi.replayRun()
+    pollReplay()
+  } catch (e: any) {
+    error.value = e?.message || '启动回放失败'
+  } finally {
+    replayStarting.value = false
+  }
+}
+
 onMounted(() => {
   load()
   quantApi.marketContext().then((ctx) => { marketCtx.value = ctx || null }).catch(() => {})
   quantApi.dataHealth(true).then((h) => { health.value = h || null }).catch(() => {})
+  loadReplay()
+  quantApi.replayStatus().then((s) => {
+    replayStat.value = s
+    if (s?.running) pollReplay()
+  }).catch(() => {})
+})
+
+onBeforeUnmount(() => {
+  window.clearInterval(pollTimer)
+  replayChart?.dispose()
 })
 </script>
 
@@ -314,6 +462,24 @@ onMounted(() => {
 .fresh-ok { border-color: #a7d4b4; background: #f0fff4; b { color: #0e9f5a; } }
 .fresh-warn { border-color: #ffd591; background: #fffbe6; b { color: #d46b08; } }
 .fresh-bad { border-color: #ffccc7; background: #fff2f0; b { color: #cf1322; } }
+
+.replay-chart {
+  height: 280px;
+  margin: 12px 0;
+}
+
+.replay-meta {
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+
+.replay-row {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.replay-note {
+  margin-top: 10px;
+}
 
 .up { color: #ef232a; }
 .down { color: #14b143; }

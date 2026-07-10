@@ -369,6 +369,34 @@ async def quant_picks_stats(days: int = 30, pool: str = ""):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/replay/run")
+async def quant_replay_run(months: int = 12, step: int = 5, top_n: int = 20):
+    """启动一次选股规则历史回放（后台线程，防重入；结果落库后由 /replay/results 查询）。"""
+    try:
+        from quantcore.quant.replay import start_replay_async
+        return start_replay_async(
+            months=max(1, min(months, 24)), step=max(1, min(step, 20)),
+            top_n=max(3, min(top_n, 50)))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/replay/status")
+async def quant_replay_status():
+    from quantcore.quant.replay import replay_status
+    return replay_status()
+
+
+@router.get("/replay/results")
+async def quant_replay_results():
+    """最近一次完成的回放汇总：各池月度超额胜率与累计超额曲线。"""
+    try:
+        from quantcore.quant.replay import latest_replay_summary
+        return await _run_light(latest_replay_summary) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/capital/industry-flow")
 async def capital_industry_flow():
     return await asyncio.to_thread(industry_fund_flow_rank)

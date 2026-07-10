@@ -479,6 +479,8 @@ export interface PicksHorizonStat {
   samples: number
   win_rate: number | null
   avg_return: number | null
+  excess_win_rate?: number | null
+  avg_excess?: number | null
 }
 
 export interface PicksPoolStat {
@@ -498,6 +500,9 @@ export interface PicksStatsItem {
   t1: number | null
   t3: number | null
   t5: number | null
+  excess_t1?: number | null
+  excess_t3?: number | null
+  excess_t5?: number | null
 }
 
 export interface PicksStatsResult {

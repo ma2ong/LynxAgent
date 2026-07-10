@@ -3,7 +3,7 @@
     <header class="review-head">
       <div>
         <h1>选股复盘</h1>
-        <p>每次扫描自动留痕，按真实行情统计各池 T+1 / T+3 / T+5 胜率——数据说话，不承诺胜率。</p>
+        <p>每次扫描自动留痕，按真实行情统计各池 T+1 / T+3 / T+5 胜率与相对大盘的超额——数据说话，不承诺胜率。</p>
       </div>
       <div class="head-actions">
         <el-radio-group v-model="days" size="small" @change="load">
@@ -38,6 +38,9 @@
             <small :class="retClass(stat(p, h.key)?.avg_return)">
               均 {{ fmtRet(stat(p, h.key)?.avg_return) }}
             </small>
+            <small :class="retClass(stat(p, h.key)?.avg_excess)">
+              超额 {{ fmtExcess(stat(p, h.key)?.avg_excess) }} · 胜 {{ fmtRate(stat(p, h.key)?.excess_win_rate) }}
+            </small>
             <small class="muted">{{ stat(p, h.key)?.samples ?? 0 }} 样本</small>
           </div>
         </div>
@@ -60,6 +63,10 @@
           <el-radio-button value="swing">短线波段</el-radio-button>
           <el-radio-button value="auction">竞价优选</el-radio-button>
         </el-radio-group>
+        <el-radio-group v-model="retMode" size="small">
+          <el-radio-button value="abs">绝对</el-radio-button>
+          <el-radio-button value="excess">超额</el-radio-button>
+        </el-radio-group>
       </div>
       <el-table :data="filteredItems" size="small" stripe max-height="560">
         <el-table-column prop="pick_date" label="日期" width="100" />
@@ -74,7 +81,7 @@
         <el-table-column prop="base_close" label="留痕价" width="80" />
         <el-table-column v-for="h in horizons" :key="h.key" :label="h.label" width="90">
           <template #default="{ row }">
-            <span :class="retClass(row[h.key])">{{ fmtRet(row[h.key]) }}</span>
+            <span :class="retClass(cellVal(row, h.key))">{{ fmtRet(cellVal(row, h.key)) }}</span>
           </template>
         </el-table-column>
       </el-table>
@@ -82,7 +89,8 @@
 
     <p class="foot-note">
       口径说明：留痕价为扫描当时的价格；T+N 为留痕后第 N 个交易日收盘价相对留痕价的涨跌幅；
-      胜率 = 上涨样本占比。历史表现不代表未来收益，不构成投资建议。
+      超额 = 个股收益 − 同期全市场中位收益（单位 pp），用于区分策略能力与大盘涨跌；
+      目标日行情覆盖不足（数据同步缺口）的样本自动排除。历史表现不代表未来收益，不构成投资建议。
     </p>
   </div>
 </template>
@@ -123,7 +131,12 @@ const filteredItems = computed(() =>
   poolFilter.value ? items.value.filter((it) => it.pool === poolFilter.value) : items.value,
 )
 
+const retMode = ref<'abs' | 'excess'>('abs')
+const cellVal = (row: PicksStatsItem, key: 't1' | 't3' | 't5') =>
+  retMode.value === 'abs' ? row[key] : row[`excess_${key}`]
+
 const fmtRate = (v: number | null | undefined) => (v == null ? '—' : `${(v * 100).toFixed(0)}%`)
+const fmtExcess = (v: number | null | undefined) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}pp`)
 const fmtRet = (v: number | null | undefined) => (v == null ? '待更新' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`)
 const rateClass = (v: number | null | undefined) => (v == null ? 'muted' : v >= 0.5 ? 'up' : 'down')
 const retClass = (v: number | null | undefined) => (v == null ? 'muted' : v > 0 ? 'up' : v < 0 ? 'down' : 'muted')

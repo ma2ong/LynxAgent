@@ -17,6 +17,13 @@
 
     <el-alert v-if="error" :title="error" type="warning" show-icon :closable="false" />
 
+    <div v-if="health" class="data-fresh" :class="freshTone">
+      <b>数据{{ freshLabel }}</b>
+      <span>日线截至 {{ health.latest_complete_date || health.latest_date || '—' }} · 覆盖 {{ health.latest_complete_count || health.latest_date_count || 0 }}/{{ health.meta_count || '—' }}</span>
+      <span v-if="health.gap_dates?.length" class="gap">缺口日 {{ health.gap_dates.join('、') }}（已触发自动补齐，统计自动排除）</span>
+      <span v-if="health.sync_running" class="muted">同步中 {{ health.sync_done || 0 }}/{{ health.sync_total || 0 }}…</span>
+    </div>
+
     <div v-if="marketCtx?.state" class="market-context" :class="`ctx-${ctxTone}`">
       <b>大盘环境：{{ marketCtx.state }}</b>
       <span>近5日{{ marketCtx.as_of ? `(截至 ${marketCtx.as_of})` : '' }}全市场中位 {{ (marketCtx.median_5d_pct ?? 0) > 0 ? '+' : '' }}{{ marketCtx.median_5d_pct }}% · 上涨占比 {{ Math.round((marketCtx.breadth_up || 0) * 100) }}%</span>
@@ -97,7 +104,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { quantApi, type MarketContext, type PicksPoolStat, type PicksStatsItem } from '@/api/quant'
+import { quantApi, type MarketContext, type PicksPoolStat, type PicksStatsItem, type QuantDataHealth } from '@/api/quant'
 
 const loading = ref(false)
 const error = ref('')
@@ -106,6 +113,17 @@ const poolFilter = ref('')
 const pools = ref<PicksPoolStat[]>([])
 const items = ref<PicksStatsItem[]>([])
 const marketCtx = ref<MarketContext | null>(null)
+const health = ref<QuantDataHealth | null>(null)
+const freshTone = computed(() => {
+  const h = health.value
+  if (!h) return 'fresh-ok'
+  if (h.gap_dates?.length || !h.ready) return 'fresh-bad'
+  if (h.needs_incremental_sync || h.status === 'partial_today' || h.status === 'stale_today') return 'fresh-warn'
+  return 'fresh-ok'
+})
+const freshLabel = computed(() =>
+  freshTone.value === 'fresh-bad' ? '有缺口' : freshTone.value === 'fresh-warn' ? '待补齐' : '新鲜',
+)
 const ctxTone = computed(() => {
   const s = marketCtx.value?.state
   return s === '偏暖' ? 'warm' : s === '偏冷' ? 'cold' : 'flat'
@@ -158,6 +176,7 @@ const load = async () => {
 onMounted(() => {
   load()
   quantApi.marketContext().then((ctx) => { marketCtx.value = ctx || null }).catch(() => {})
+  quantApi.dataHealth(true).then((h) => { health.value = h || null }).catch(() => {})
 })
 </script>
 
@@ -276,6 +295,25 @@ onMounted(() => {
   background: #f0fff4;
   b { color: #0e9f5a; }
 }
+
+.data-fresh {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  font-size: 12px;
+
+  b { font-size: 13px; }
+  span { color: var(--el-text-color-secondary); }
+  .gap { color: #cf1322; font-weight: 600; }
+}
+
+.fresh-ok { border-color: #a7d4b4; background: #f0fff4; b { color: #0e9f5a; } }
+.fresh-warn { border-color: #ffd591; background: #fffbe6; b { color: #d46b08; } }
+.fresh-bad { border-color: #ffccc7; background: #fff2f0; b { color: #cf1322; } }
 
 .up { color: #ef232a; }
 .down { color: #14b143; }

@@ -238,6 +238,41 @@ class LocalQuantStore:
             ).fetchall()
         return [r[0] for r in rows]
 
+    def whole_day_gap_dates(self, days: int = 18) -> List[str]:
+        """近 days 自然日内「整天缺失」的交易日：当日真实 bar 覆盖数低于窗口峰值的 60%（今天除外）。
+
+        单日全市场缺失时逐股近窗 bar 计数几乎不降（MIN_RECENT_BARS 容忍 4-5 天），
+        只有按日期截面才能发现；历史上 7-01/7-02 数据洞靠手动全量修复，此检测用于自愈。
+        """
+        from datetime import date as _date, timedelta as _td
+        since = (_date.today() - _td(days=max(1, days))).strftime("%Y-%m-%d")
+        today = _date.today().strftime("%Y-%m-%d")
+        rows = self._conn().execute(
+            "SELECT date, COUNT(DISTINCT symbol) FROM daily_kline "
+            "WHERE date >= ? AND amount > 0 GROUP BY date ORDER BY date",
+            (since,),
+        ).fetchall()
+        if not rows:
+            return []
+        peak = max(int(r[1]) for r in rows)
+        return [str(r[0]) for r in rows
+                if str(r[0]) != today and int(r[1]) < peak * MIN_MARKET_COVERAGE]
+
+    def symbols_missing_on_dates(self, dates: List[str]) -> set:
+        """在给定交易日中缺真实 bar（amount>0）的股票集合，用于定向回补。"""
+        if not dates:
+            return set()
+        conn = self._conn()
+        all_syms = {str(r[0]) for r in conn.execute("SELECT symbol FROM stock_meta").fetchall()}
+        if not all_syms:
+            all_syms = {str(r[0]) for r in conn.execute("SELECT DISTINCT symbol FROM daily_kline").fetchall()}
+        missing: set = set()
+        for d in dates:
+            have = {str(r[0]) for r in conn.execute(
+                "SELECT symbol FROM daily_kline WHERE date = ? AND amount > 0", (d,)).fetchall()}
+            missing |= all_syms - have
+        return missing
+
     def kline_health(self) -> Dict[str, object]:
         from datetime import date, datetime, time
 
@@ -265,7 +300,11 @@ class LocalQuantStore:
         daily_bar_due = now.time() >= time(15, 15)
         ready = kline_symbols >= 500 and bool(latest_complete_date)
         today_complete = today_count >= threshold
-        needs_incremental_sync = bool(ready and today_is_weekday and daily_bar_due and not today_complete)
+        gap_dates = self.whole_day_gap_dates(days=18)
+        needs_incremental_sync = bool(
+            (ready and today_is_weekday and daily_bar_due and not today_complete)
+            or (ready and gap_dates)
+        )
         if not ready:
             status = "empty" if kline_symbols == 0 else "insufficient"
             message = "本地K线不足，请先做一次全量同步。"
@@ -295,6 +334,8 @@ class LocalQuantStore:
             "latest_complete_count": latest_complete_count,
             "today_complete": today_complete,
             "needs_incremental_sync": needs_incremental_sync,
+            "gap_dates": gap_dates,
+            "recent_days": [{"date": str(d), "count": int(c)} for d, c in rows[:10]],
             "message": message,
         }
 

@@ -321,10 +321,17 @@ class MarketSyncService:
                 # 占位符感知：除「近窗真实 bar 数不足」外，凡历史交易日仍是 amount=0 占位 bar 的
                 # 股票也纳入回补，自愈盘中快照遗留的坏数据（否则连板/成交额/情绪持续错）。
                 placeholder_syms = self.store.placeholder_symbols(recent_since)
+                # 整天缺失（如全市场某交易日没同步）时逐股 bar 计数发现不了，
+                # 按日期截面检测并把当日缺 bar 的股票纳入回补目标。
+                try:
+                    gap_dates = self.store.whole_day_gap_dates(days=18)
+                    gap_syms = self.store.symbols_missing_on_dates(gap_dates)
+                except Exception:
+                    gap_syms = set()
                 def has_gap(meta) -> bool:
                     sym = str(meta.get("symbol"))
                     cnt = recent_counts.get(sym) or recent_counts.get(sym.zfill(6)) or 0
-                    return cnt < MIN_RECENT_BARS or sym.zfill(6) in placeholder_syms
+                    return cnt < MIN_RECENT_BARS or sym.zfill(6) in placeholder_syms or sym.zfill(6) in gap_syms
                 targets = [meta for meta in universe if has_gap(meta)]
             self._progress["total"] = len(targets)
             self._progress["done"] = 0

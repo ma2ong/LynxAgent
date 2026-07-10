@@ -18,6 +18,9 @@
         <span>K线 {{ dataHealth.kline_symbols }}</span>
         <span>最新完整 {{ dataHealth.latest_complete_date || '-' }}</span>
         <span>今日 {{ dataHealth.today_count }}/{{ dataHealth.meta_count }}</span>
+        <span v-if="dataHealth.gap_dates?.length" class="gap-warn">
+          缺口日 {{ dataHealth.gap_dates.join('、') }}（已触发自动补齐，统计自动排除）
+        </span>
       </div>
       <div class="health-actions">
         <el-tag v-if="dataHealth.sync_running || syncRunning" type="warning" effect="plain">
@@ -1506,6 +1509,11 @@ const openChart = async (row: any) => {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.gap-warn {
+  color: #cf1322;
+  font-weight: 600;
 }
 
 .quant-tabs {

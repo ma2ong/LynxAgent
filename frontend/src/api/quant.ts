@@ -147,6 +147,8 @@ export interface QuantDataHealth {
   latest_complete_count: number
   today_complete: boolean
   needs_incremental_sync: boolean
+  gap_dates?: string[]
+  recent_days?: { date: string; count: number }[]
   message: string
   sync_running?: boolean
   sync_phase?: string

@@ -465,7 +465,7 @@ class LocalQuantStore:
         from datetime import date as _date, timedelta as _td
         since = (_date.today() - _td(days=max(1, days))).strftime("%Y-%m-%d")
         conn = self._conn()
-        sql = ("SELECT pick_date,pool,symbol,name,score,close,rank FROM picks_history "
+        sql = ("SELECT pick_date,pool,symbol,name,score,close,rank,patterns FROM picks_history "
                "WHERE pick_date >= ?")
         params: List[object] = [since]
         if pool:
@@ -513,7 +513,7 @@ class LocalQuantStore:
         detail: List[Dict[str, object]] = []
         agg: Dict[str, Dict[int, List[float]]] = {}
         ex_agg: Dict[str, Dict[int, List[float]]] = {}
-        for pick_date, pool_name, symbol, name, score, close, rank in picks:
+        for pick_date, pool_name, symbol, name, score, close, rank, patterns_str in picks:
             bars = _bars(str(symbol))
             dates = [b[0] for b in bars]
             idx = bisect.bisect_right(dates, str(pick_date)) - 1
@@ -538,7 +538,8 @@ class LocalQuantStore:
                     rets[f"excess_t{h}"] = None
             detail.append({
                 "pick_date": pick_date, "pool": pool_name, "symbol": symbol, "name": name,
-                "score": _f(score), "rank": int(rank or 0), "base_close": round(base, 2), **rets,
+                "score": _f(score), "rank": int(rank or 0), "base_close": round(base, 2),
+                "patterns": str(patterns_str or ""), **rets,
             })
             bucket = agg.setdefault(str(pool_name), {h: [] for h in horizons})
             ex_bucket = ex_agg.setdefault(str(pool_name), {h: [] for h in horizons})
@@ -571,6 +572,46 @@ class LocalQuantStore:
         return {
             "days": days, "since": since, "total_picks": len(picks),
             "pools": pools_out, "items": detail[:300],
+        }
+
+    def signal_stats(self, pool: str, days: int = 90) -> Dict[str, object]:
+        """信号历史表现：池级（留痕 + 最近回放）与形态级（留痕 T+5 超额）聚合，供入选理由卡。"""
+        stats = self.evaluate_picks(days=days, pool=pool)
+        pool_stat = next((p for p in stats["pools"] if p["pool"] == pool), None)
+        pat_agg: Dict[str, List[float]] = {}
+        for it in stats["items"]:
+            ev = it.get("excess_t5")
+            if ev is None:
+                continue
+            for pname in str(it.get("patterns") or "").split(","):
+                pname = pname.strip()
+                if pname:
+                    pat_agg.setdefault(pname, []).append(float(ev))
+        patterns = [{
+            "name": k, "samples": len(v),
+            "excess_win_rate": round(sum(1 for x in v if x > 0) / len(v), 4),
+            "avg_excess": round(sum(v) / len(v), 2),
+        } for k, v in sorted(pat_agg.items(), key=lambda kv: -len(kv[1]))]
+        replay_stat = None
+        try:
+            from .replay import latest_replay_summary
+            summ = latest_replay_summary(self)
+            if summ:
+                rp = next((p for p in summ.get("pools", []) if p.get("pool") == pool), None)
+                if rp:
+                    replay_stat = {
+                        "picks": rp.get("picks"), "evaluated": rp.get("evaluated"),
+                        "excess_win_rate": rp.get("excess_win_rate"), "avg_excess": rp.get("avg_excess"),
+                        "run_id": summ.get("run_id"), "created_at": summ.get("created_at"),
+                    }
+        except Exception:
+            replay_stat = None
+        return {
+            "pool": pool, "days": days,
+            "live": (pool_stat or {}).get("horizons"),
+            "live_picks": (pool_stat or {}).get("picks", 0),
+            "patterns": patterns,
+            "replay": replay_stat,
         }
 
     # ---- 状态 ----

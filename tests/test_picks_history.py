@@ -142,6 +142,31 @@ def test_evaluate_picks_low_coverage_day_not_ready(store):
     assert smart["horizons"]["t1"]["samples"] == 0
 
 
+def test_signal_stats_pattern_level_excess(store):
+    """signal_stats：按形态名聚合留痕 T+5 超额，供入选理由卡展示信号历史表现。"""
+    up = [10.0 * 1.02 ** i for i in range(10)]
+    flat = [10.0] * 10
+    dates = _seed_kline(store, "600001", up)
+    for sym in ("600002", "600003", "600004"):
+        _seed_kline(store, sym, flat)
+    conn = store._conn()
+    conn.execute(
+        "INSERT OR IGNORE INTO picks_history VALUES (?,?,?,?,?,?,?,?)",
+        (dates[1], "pattern", "600001", "涨股", 88.0, up[1], 1, "金叉,放量突破"),
+    )
+    conn.commit()
+
+    res = store.signal_stats("pattern", days=60)
+    assert res["pool"] == "pattern"
+    assert res["live_picks"] == 1
+    names = {p["name"]: p for p in res["patterns"]}
+    assert set(names) == {"金叉", "放量突破"}
+    expected = (1.02 ** 5 - 1) * 100
+    assert names["金叉"]["samples"] == 1
+    assert names["金叉"]["avg_excess"] == pytest.approx(expected, abs=0.1)
+    assert names["金叉"]["excess_win_rate"] == 1.0
+
+
 def test_backtest_applies_transaction_costs():
     closes = [10.0 * 1.02 ** i for i in range(8)]
     dates = pd.to_datetime(_trading_dates(8))

@@ -187,10 +187,12 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="160" fixed="right">
+              <el-table-column label="操作" width="200" fixed="right">
                 <template #default="{ row }">
                   <el-button type="primary" link size="small" @click="addOneToFavorites(row)">加入自选</el-button>
                   <el-button link type="primary" size="small" @click="openChart(row)">看图</el-button>
+                  <el-button link type="primary" size="small" @click="openWhy(row, 'pattern')">理由</el-button>
+                  <el-button link type="primary" size="small" @click="openWhy(row, 'smart')">理由</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -365,7 +367,7 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="160" fixed="right">
+              <el-table-column label="操作" width="200" fixed="right">
                 <template #default="{ row }">
                   <el-button type="primary" link size="small" @click="addOneToFavorites(row)">加入自选</el-button>
                   <el-button link type="primary" size="small" @click="openChart(row)">看图</el-button>
@@ -698,6 +700,8 @@
         <p class="panel-note">AI 模拟多风格视角生成，仅供参考，非投资建议。</p>
       </template>
     </el-dialog>
+
+    <WhyPickedDrawer v-model="whyVisible" :row="whyRow" :pool="whyPool" />
   </div>
 </template>
 
@@ -708,6 +712,7 @@ import { DataLine, Search, TrendCharts } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { favoritesApi } from '@/api/favorites'
 import KLineProChart from '@/components/KLineProChart.vue'
+import WhyPickedDrawer from '@/components/WhyPickedDrawer.vue'
 import {
   quantApi,
   type BacktestResult,
@@ -745,6 +750,15 @@ const poolLimit = ref(200)
 const poolLoading = ref(false)
 const poolResult = ref<QuantStockPoolResult | null>(null)
 const dataHealth = ref<QuantDataHealth | null>(null)
+
+const whyVisible = ref(false)
+const whyRow = ref<any | null>(null)
+const whyPool = ref<'smart' | 'pattern'>('smart')
+const openWhy = (row: any, pool: 'smart' | 'pattern') => {
+  whyRow.value = row
+  whyPool.value = pool
+  whyVisible.value = true
+}
 const healthLoading = ref(false)
 
 const analysisForm = ref({ symbol: '600519' })

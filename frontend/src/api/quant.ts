@@ -476,6 +476,9 @@ export const quantApi = {
 
   replayResults: async () =>
     unwrap<ReplaySummary>(await ApiClient.get('/api/quant/replay/results', { _ts: nonce() }, { timeout: 60000 })),
+
+  signalStats: async (pool: string, days = 90) =>
+    unwrap<SignalStats>(await ApiClient.get('/api/quant/signal-stats', { pool, days, _ts: nonce() }, { timeout: 120000 })),
 }
 
 export interface MarketContext {
@@ -564,6 +567,29 @@ export interface ReplaySummary {
   created_at?: string
   params?: { months?: number; step?: number; top_n?: number; sessions?: number }
   pools?: ReplayPoolSummary[]
+}
+
+export interface SignalPatternStat {
+  name: string
+  samples: number
+  excess_win_rate: number
+  avg_excess: number
+}
+
+export interface SignalStats {
+  pool: string
+  days: number
+  live: { t1: PicksHorizonStat; t3: PicksHorizonStat; t5: PicksHorizonStat } | null
+  live_picks: number
+  patterns: SignalPatternStat[]
+  replay: {
+    picks: number
+    evaluated: number
+    excess_win_rate: number | null
+    avg_excess: number | null
+    run_id?: string
+    created_at?: string
+  } | null
 }
 
 export interface MLFactorPick {

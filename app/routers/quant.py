@@ -369,6 +369,17 @@ async def quant_picks_stats(days: int = 30, pool: str = ""):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/signal-stats")
+async def quant_signal_stats(pool: str = "smart", days: int = 90):
+    """信号历史表现（入选理由卡）：池级留痕/回放双口径 + 形态级 T+5 超额聚合。"""
+    try:
+        from quantcore.quant.local_store import get_local_store
+        safe_days = max(7, min(days, 180))
+        return await _run_light(get_local_store().signal_stats, pool, safe_days)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/replay/run")
 async def quant_replay_run(months: int = 12, step: int = 5, top_n: int = 20):
     """启动一次选股规则历史回放（后台线程，防重入；结果落库后由 /replay/results 查询）。"""

@@ -191,6 +191,18 @@ def _pattern_score(symbol: str, df: pd.DataFrame) -> Optional[float]:
     return round(pattern_score * 0.52 + quant_score * 0.30 + realtime_score * 0.18 + adx_adj + wyckoff_adj, 1)
 
 
+def _factor_score(df: pd.DataFrame) -> Optional[float]:
+    """smart_fac 实验池：纯结构因子合成分（MACD/布林/动量等，权重同 pattern 池 quant_score 分量）。"""
+    from .factors import composite_score, compute_factor_scores
+
+    if len(df) < MIN_BARS:
+        return None
+    try:
+        return float(composite_score(compute_factor_scores(df)))
+    except Exception:
+        return None
+
+
 def _replay_symbol(payload: Dict[str, object]) -> List[Dict[str, object]]:
     """进程池 worker：单只股票在全部回放期的两池候选评分。顶层函数以便 pickle。"""
     symbol = str(payload["symbol"])
@@ -223,6 +235,11 @@ def _replay_symbol(payload: Dict[str, object]) -> List[Dict[str, object]]:
             s_score = _smart_score_approx(df.tail(30))
             if s_score is not None:
                 out.append({"pool": "smart", "as_of": as_of, "symbol": symbol, "name": name, "score": s_score})
+            # A/B 实验变体：结构因子合成分（与 smart 同轴对比，验证「实时追涨型 vs 结构因子型」谁有超额）
+            if amount >= PATTERN_MIN_AMOUNT:
+                f_score = _factor_score(df.tail(120))
+                if f_score is not None:
+                    out.append({"pool": "smart_fac", "as_of": as_of, "symbol": symbol, "name": name, "score": f_score})
             p_score = _pattern_score(symbol, df.tail(540))
             if p_score is not None:
                 out.append({"pool": "pattern", "as_of": as_of, "symbol": symbol, "name": name, "score": p_score})

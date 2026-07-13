@@ -238,6 +238,7 @@ const POOL_LABELS: Record<string, string> = {
   smart: '智能推荐',
   swing: '短线波段',
   auction: '竞价优选',
+  smart_fac: '因子实验（A/B）',
 }
 const poolLabel = (key: string) => POOL_LABELS[key] || key
 

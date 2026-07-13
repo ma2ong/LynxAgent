@@ -187,6 +187,7 @@ def test_replay_anchor_pins_session_axis(store):
     keys = store._conn().execute(
         "SELECT DISTINCT param_key FROM replay_scan").fetchall()
     assert len(keys) == 1  # 两次运行共用同一断点缓存
+    assert keys[0][0].startswith("v")  # 评分器版本入键：口径变更时旧缓存自动作废
 
     import json as _json
     params = _json.loads(store._conn().execute(

@@ -26,6 +26,9 @@ PATTERN_MIN_STRENGTH = 70.0
 PATTERN_MIN_AMOUNT = 3e7  # 形态分析只跑当日成交额 ≥3000 万的票，贴近实际候选并控算力
 MIN_BARS = 80
 HORIZON = 5
+# 扫描断点缓存的口径版本：_replay_symbol 的评分器集合/公式一旦变化必须 +1，
+# 否则同轴续跑会复用旧口径的候选（实测：加 smart_fac 池后旧缓存里没有它）。
+SCAN_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS replay_runs (
@@ -300,7 +303,7 @@ def run_replay(months: int = 12, step: int = 5, top_n: int = 20,
 
     # 断点续跑：同参数（月数/步长/会话轴指纹）下已扫描过的 symbol 直接用缓存，
     # 进程被杀后重跑只补增量——本 harness 会不定期回收长任务，进度必须只增不减。
-    param_key = f"m{months}-s{step}-{sessions[0]}-{sessions[-1]}-{len(sessions)}"
+    param_key = f"v{SCAN_VERSION}-m{months}-s{step}-{sessions[0]}-{sessions[-1]}-{len(sessions)}"
     cached: Dict[str, str] = {
         str(r[0]): str(r[1]) for r in conn.execute(
             "SELECT symbol, candidates_json FROM replay_scan WHERE param_key=?", (param_key,))

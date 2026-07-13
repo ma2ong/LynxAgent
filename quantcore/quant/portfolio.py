@@ -81,6 +81,31 @@ def add_position(user: str, symbol: str, name: str, price: float,
             "buy_price": price, "cost": cost, "buy_date": today}
 
 
+def add_positions_batch(user: str, items: List[Dict[str, object]], budget: float,
+                        prices: Dict[str, float], names: Dict[str, str],
+                        source: str = "",
+                        store: Optional[LocalQuantStore] = None) -> List[Dict[str, object]]:
+    """整池等权加入组合：逐票整手买入，单票失败（已持有/预算不足/无价格）记录原因不中断。
+
+    回放结论：超额只在组合层面成立（均值靠右尾、单票中位为负），跟池必须整池等权。
+    """
+    store = ensure_tables(store)
+    results: List[Dict[str, object]] = []
+    for it in items:
+        sym6 = str(it.get("symbol") or "").strip().zfill(6)
+        if not sym6.strip("0"):
+            continue
+        price = float(it.get("price") or 0) or float(prices.get(sym6, 0) or 0)
+        name = str(it.get("name") or names.get(sym6) or sym6)
+        try:
+            pos = add_position(user, sym6, name, price, budget, source, store=store)
+            results.append({"symbol": sym6, "name": name, "ok": True,
+                            "shares": pos.get("shares"), "cost": pos.get("cost")})
+        except ValueError as exc:
+            results.append({"symbol": sym6, "name": name, "ok": False, "reason": str(exc)})
+    return results
+
+
 def close_position(user: str, position_id: int, price: float, reason: str = "manual",
                    store: Optional[LocalQuantStore] = None) -> Dict[str, object]:
     store = ensure_tables(store)

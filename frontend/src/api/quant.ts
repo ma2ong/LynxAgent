@@ -869,6 +869,14 @@ export const portfolioApi = {
     const raw = await ApiClient.post<any>('/api/lite/portfolio/add', payload, { timeout: 30000 })
     return (raw as any)?.data
   },
+  addBatch: async (payload: {
+    items: { symbol: string; name?: string; price?: number }[]
+    budget_per_stock?: number
+    source?: string
+  }) => {
+    const raw = await ApiClient.post<any>('/api/lite/portfolio/add-batch', payload, { timeout: 60000 })
+    return (raw as any)?.data as { added: number; skipped: number; results: { symbol: string; name: string; ok: boolean; reason?: string }[] } | null
+  },
   sell: async (id: number, reason = 'manual') => {
     const raw = await ApiClient.post<any>('/api/lite/portfolio/sell', { id, reason }, { timeout: 30000 })
     return (raw as any)?.data

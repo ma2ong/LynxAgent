@@ -28,10 +28,27 @@ let quotaDialogOpen = false
 
 http.interceptors.response.use(
   (response) => response.data,
-  (error) => {
+  async (error) => {
     if (error?.response?.status === 401) {
       localStorage.removeItem(TOKEN_KEY)
       if (location.pathname !== '/login') location.href = '/login'
+    }
+    // 5xx/网络断连：多为后端重启窗口或上游数据源抖动。幂等 GET 静默重试一次，
+    // 仍失败给可行动的中文提示，不把 "Request failed with status code 500" 裸抛给用户。
+    const status = error?.response?.status
+    const cfg = error?.config || {}
+    const transient = (!error.response && error?.code !== 'ERR_CANCELED') || (status >= 500 && status < 600)
+    if (transient && String(cfg.method || '').toLowerCase() === 'get' && !cfg._retried) {
+      cfg._retried = true
+      await new Promise((r) => setTimeout(r, 2000))
+      try {
+        return await http.request(cfg)
+      } catch (e2: any) {
+        error = e2?.config ? e2 : error
+      }
+    }
+    if (transient) {
+      return Promise.reject(new Error('服务暂时不可用（可能正在重启或数据源抖动），请稍后重试'))
     }
     if (error?.response?.status === 402) {
       const detail = error.response.data?.detail

@@ -3950,6 +3950,32 @@ async def lite_portfolio_add(payload: dict[str, Any], user: dict[str, Any] = Dep
     return {"success": True, "data": pos}
 
 
+@app.post("/api/lite/portfolio/add-batch")
+async def lite_portfolio_add_batch(payload: dict[str, Any], user: dict[str, Any] = Depends(get_current_lite_user)):
+    """整池加入组合：回放证明超额只在组合层面成立，单票≈抛硬币，跟池必须整池等权。
+
+    body: {items: [{symbol, name?, price?}], budget_per_stock?, source?}
+    返回逐票结果（成交/跳过原因），部分失败不影响其余。
+    """
+    from quantcore.quant.portfolio import add_positions_batch
+    items = payload.get("items") or []
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=400, detail="缺少股票列表")
+    if len(items) > 50:
+        raise HTTPException(status_code=400, detail="单次最多 50 只")
+    budget = max(2000.0, min(float(payload.get("budget_per_stock") or 10000), 1_000_000.0))
+    source = str(payload.get("source") or "")
+
+    def _run():
+        prices, names = _arena_prices_and_names()
+        return add_positions_batch(user["username"], items, budget, prices, names, source)
+
+    results = await asyncio.to_thread(_run)
+    added = sum(1 for r in results if r["ok"])
+    return {"success": True, "data": {"added": added, "skipped": len(results) - added,
+                                      "results": results}}
+
+
 @app.post("/api/lite/portfolio/sell")
 async def lite_portfolio_sell(payload: dict[str, Any], user: dict[str, Any] = Depends(get_current_lite_user)):
     from quantcore.quant.local_store import get_local_store

@@ -74,7 +74,7 @@
   - 后端 `POST /api/quant/portfolio/add-batch`：body 传 `[{symbol, name, price}]` + `budget_per_stock`（默认 1 万），复用现有单笔加入逻辑（整手、A 股成本），返回逐笔成交/跳过原因（不足一手/价格缺失/已持有）。
   - 前端智能/形态结果表头部「整池加入组合」按钮 → 确认弹窗（列出票数、每票预算、预计总金额）→ 调批量接口 → 汇总提示（成交 X 跳过 Y，跳过原因可见）。
   - 组合页来源标注池名。
-- **留痕去重**：`record_picks` 改为同 (pick_date, pool, symbol) UPSERT（保留最新评分/名次）；评估端按同键去重兜底存量脏数据。测试：同日双扫描同股只留一条。
+- **留痕去重**：核实后撤销——`record_picks` 已按 (pick_date, pool, symbol) 保留首次快照（test_record_picks_keeps_first_snapshot_of_day），复盘页的「重复名次」是同日两次扫描不同股票的并集（每条都是真实展示过的推荐），统计无污染，不改。
 
 ### 批次 D：反馈与降级
 

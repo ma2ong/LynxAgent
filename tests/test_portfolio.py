@@ -7,7 +7,8 @@ import pytest
 from quantcore.quant.backtest import BUY_COST, SELL_COST
 from quantcore.quant.local_store import LocalQuantStore
 from quantcore.quant.portfolio import (
-    add_position, close_position, list_portfolio, nav_series, sell_signals, settle_daily,
+    add_position, add_positions_batch, close_position, list_portfolio, nav_series,
+    sell_signals, settle_daily,
 )
 
 
@@ -55,6 +56,26 @@ def test_add_and_close_position_with_costs(store):
     assert snap["summary"]["closed_count"] == 1
     assert snap["summary"]["closed_win_rate"] == 1.0
     assert snap["closed"][0]["pnl"] > 0
+
+
+def test_add_positions_batch_partial_failures(store):
+    """整池加入：单票失败（已持有/无价格/预算不足一手）记录原因，其余照常成交。"""
+    add_position("u1", "600001", "已持有", price=10.0, budget=10000, store=store)
+    items = [
+        {"symbol": "600001", "name": "已持有", "price": 10.0},   # 已在组合中
+        {"symbol": "600002", "name": "正常票", "price": 10.0},   # 成交
+        {"symbol": "600003", "name": "无价票"},                    # prices 里也没有 → 无有效价格
+        {"symbol": "600004", "name": "贵价票", "price": 200.0},  # 1 万买不起一手
+    ]
+    results = add_positions_batch("u1", items, budget=10000,
+                                  prices={}, names={}, store=store)
+    by_sym = {r["symbol"]: r for r in results}
+    assert not by_sym["600001"]["ok"] and "已在组合" in by_sym["600001"]["reason"]
+    assert by_sym["600002"]["ok"] and by_sym["600002"]["shares"] == 900
+    assert not by_sym["600003"]["ok"]
+    assert not by_sym["600004"]["ok"] and "一手" in by_sym["600004"]["reason"]
+    snap = list_portfolio("u1", {}, store)
+    assert snap["summary"]["open_count"] == 2  # 已持有 + 新成交
 
 
 def test_sell_signals_rules(store):

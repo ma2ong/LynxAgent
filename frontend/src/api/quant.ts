@@ -557,6 +557,16 @@ export interface ReplayOpenEntry {
   median_excess: number | null
 }
 
+export interface ReplayRegimeRow {
+  regime: string
+  sessions: number
+  picks: number
+  excess_win_rate: number
+  avg_excess: number
+  median_excess: number
+  avg_excess_open: number | null
+}
+
 export interface ReplayPoolSummary {
   pool: string
   picks: number
@@ -570,6 +580,7 @@ export interface ReplayPoolSummary {
   p90_excess?: number | null
   limitup_ratio?: number | null
   open_entry?: ReplayOpenEntry
+  regimes?: ReplayRegimeRow[]
   monthly: ReplayMonthly[]
   curve: ReplayCurvePoint[]
 }

@@ -81,6 +81,59 @@ def _limit_up_threshold(symbol: str) -> float:
     return 0.195 if symbol.startswith(("30", "68")) else 0.095
 
 
+REGIME_WINDOW = 5  # 与 engine.market_context 的 recent_returns(window=5) 对齐
+
+
+def _classify_regime(median_pct: float, breadth_up: float) -> str:
+    """大盘环境分类，阈值与 engine.market_context 完全一致（口径必须同源，否则分层结论失真）。"""
+    if median_pct >= 1.0 and breadth_up >= 0.55:
+        return "偏暖"
+    if median_pct <= -1.0 or breadth_up <= 0.40:
+        return "偏冷"
+    return "中性"
+
+
+def _session_regimes(store: LocalQuantStore, sessions: List[str]) -> Dict[str, str]:
+    """每个回放期 as_of 的 point-in-time 大盘环境（近 5 交易日全市场中位涨幅 + 上涨占比）。"""
+    import statistics
+
+    if not sessions:
+        return {}
+    conn = store._conn()
+    since = (date.fromisoformat(min(sessions)) - timedelta(days=40)).strftime("%Y-%m-%d")
+    tdates = [str(r[0]) for r in conn.execute(
+        "SELECT DISTINCT date FROM daily_kline WHERE date>=? AND amount>0 ORDER BY date", (since,))]
+    didx = {d: i for i, d in enumerate(tdates)}
+    need = set()
+    pair: Dict[str, tuple] = {}
+    for s in sessions:
+        i = didx.get(s)
+        if i is None or i < REGIME_WINDOW:
+            continue
+        base = tdates[i - REGIME_WINDOW]
+        pair[s] = (base, s)
+        need.update((base, s))
+    if not pair:
+        return {}
+    by_date: Dict[str, Dict[str, float]] = {}
+    qmarks = ",".join("?" * len(need))
+    for d, sym, c in conn.execute(
+        f"SELECT date, symbol, close FROM daily_kline WHERE date IN ({qmarks}) AND amount>0",
+        sorted(need),
+    ):
+        by_date.setdefault(str(d), {})[str(sym)] = float(c or 0)
+    out: Dict[str, str] = {}
+    for s, (base, cur) in pair.items():
+        m0, m1 = by_date.get(base, {}), by_date.get(cur, {})
+        rets = [(m1[k] / m0[k] - 1) * 100 for k in m0.keys() & m1.keys() if m0[k] > 0]
+        if len(rets) < 10:
+            continue
+        median = statistics.median(rets)
+        breadth = sum(1 for v in rets if v > 0) / len(rets)
+        out[s] = _classify_regime(median, breadth)
+    return out
+
+
 def _smart_score_approx(df: pd.DataFrame) -> Optional[float]:
     """engine.smart_pool v2 评分的日线近似（权重与公式对齐 engine.py:_score）。"""
     from .engine import _anti_chase_score, _stability_from_kline
@@ -377,16 +430,18 @@ def _summarize(store: LocalQuantStore, run_id: str) -> Dict[str, object]:
         "FROM replay_results WHERE run_id=? ORDER BY as_of",
         (run_id,),
     ).fetchall()
+    regimes = _session_regimes(store, sorted({str(r[1]) for r in rows}))
     pools: Dict[str, Dict[str, object]] = {}
     for pool, as_of, ret, excess, excess_open, limitup in rows:
         p = pools.setdefault(str(pool), {"picks": 0, "rets": [], "excesses": [],
                                          "excesses_open": [], "limitups": 0,
-                                         "monthly": {}, "curve": {}})
+                                         "monthly": {}, "curve": {}, "by_regime": {}})
         p["picks"] += 1
         if limitup:
             p["limitups"] += 1
         if ret is not None:
             p["rets"].append(float(ret))
+        regime = regimes.get(str(as_of))
         if excess_open is not None:
             p["excesses_open"].append(float(excess_open))
         if excess is not None:
@@ -394,6 +449,13 @@ def _summarize(store: LocalQuantStore, run_id: str) -> Dict[str, object]:
             month = str(as_of)[:7]
             p["monthly"].setdefault(month, []).append(float(excess))
             p["curve"].setdefault(str(as_of), []).append(float(excess))
+            if regime:
+                r = p["by_regime"].setdefault(regime, {"sessions": set(), "excesses": [],
+                                                       "excesses_open": []})
+                r["sessions"].add(str(as_of))
+                r["excesses"].append(float(excess))
+                if excess_open is not None:
+                    r["excesses_open"].append(float(excess_open))
     out: Dict[str, object] = {"pools": []}
     for pool, p in sorted(pools.items()):
         exs: List[float] = sorted(p["excesses"])
@@ -414,10 +476,27 @@ def _summarize(store: LocalQuantStore, run_id: str) -> Dict[str, object]:
             "avg_excess": round(sum(exs_o) / len(exs_o), 2) if exs_o else None,
             "median_excess": round(statistics.median(exs_o), 2) if exs_o else None,
         }
+        regime_rows = []
+        for rname in ("偏暖", "中性", "偏冷"):
+            r = p["by_regime"].get(rname)
+            if not r or not r["excesses"]:
+                continue
+            rex: List[float] = r["excesses"]
+            rex_o: List[float] = r["excesses_open"]
+            regime_rows.append({
+                "regime": rname,
+                "sessions": len(r["sessions"]),
+                "picks": len(rex),
+                "excess_win_rate": round(sum(1 for x in rex if x > 0) / len(rex), 4),
+                "avg_excess": round(sum(rex) / len(rex), 2),
+                "median_excess": round(statistics.median(rex), 2),
+                "avg_excess_open": round(sum(rex_o) / len(rex_o), 2) if rex_o else None,
+            })
         out["pools"].append({
             "pool": pool,
             "picks": p["picks"],
             "evaluated": len(exs),
+            "regimes": regime_rows,
             "win_rate": round(sum(1 for x in p["rets"] if x > 0) / len(p["rets"]), 4) if p["rets"] else None,
             "avg_return": round(sum(p["rets"]) / len(p["rets"]), 2) if p["rets"] else None,
             "excess_win_rate": round(sum(1 for x in exs if x > 0) / len(exs), 4) if exs else None,

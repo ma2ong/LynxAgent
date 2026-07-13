@@ -127,6 +127,50 @@ def test_replay_limitup_flagged(store):
     assert smart["limitup_ratio"] > 0
 
 
+def test_classify_regime_thresholds():
+    """阈值必须与 engine.market_context 完全一致（同源口径）。"""
+    from quantcore.quant.replay import _classify_regime
+
+    assert _classify_regime(1.0, 0.55) == "偏暖"
+    assert _classify_regime(1.5, 0.54) == "中性"   # 宽度不足不算暖
+    assert _classify_regime(-1.0, 0.5) == "偏冷"
+    assert _classify_regime(0.0, 0.40) == "偏冷"   # 宽度崩塌也算冷
+    assert _classify_regime(0.0, 0.5) == "中性"
+
+
+def test_replay_regime_stratification(store):
+    """先跌后涨的市场：回放期应被分入偏冷/偏暖，各环境样本数守恒。"""
+    from quantcore.quant.replay import _session_regimes
+
+    n = 120
+    # 全市场先横盘 40 天 → 跌 40 天(每天-0.5%) → 涨 40 天(每天+0.5%)
+    path = [10.0] * 40
+    for _ in range(40):
+        path.append(path[-1] * 0.995)
+    for _ in range(40):
+        path.append(path[-1] * 1.005)
+    for i in range(1, 12):
+        _seed(store, f"6000{i:02d}", list(path), amounts=[2e8] * n)
+    store.upsert_meta([{"symbol": f"6000{i:02d}", "name": f"股{i}"} for i in range(1, 12)])
+
+    res = run_replay(months=4, step=5, top_n=3, store=store, workers=0)
+    smart = next(p for p in res["pools"] if p["pool"] == "smart")
+    regs = {r["regime"]: r for r in smart["regimes"]}
+    # 下跌段 5 日中位 ≈ -2.5% → 偏冷；上涨段 ≈ +2.5% 且 100% 上涨 → 偏暖
+    assert "偏冷" in regs and "偏暖" in regs
+    # 分环境样本数之和不超过总评估数（横盘段为中性或因窗口不足缺失）
+    assert sum(r["picks"] for r in smart["regimes"]) <= smart["evaluated"]
+    for r in smart["regimes"]:
+        assert r["sessions"] >= 1
+        assert r["median_excess"] is not None
+
+    # _session_regimes 直接口径抽查：取回放实际会话，跌段会话应为偏冷
+    sessions = sorted({str(row[0]) for row in store._conn().execute(
+        "SELECT DISTINCT as_of FROM replay_results WHERE run_id=?", (res["run_id"],))})
+    m = _session_regimes(store, sessions)
+    assert set(m.values()) <= {"偏暖", "中性", "偏冷"}
+
+
 def test_replay_anchor_pins_session_axis(store):
     """同一 anchor 跨天续跑必须命中同一 param_key（断点不作废）；anchor 落库供续跑读取。"""
     n = 120

@@ -36,6 +36,7 @@
       <b>大盘环境：{{ marketCtx.state }}</b>
       <span>近5日{{ marketCtx.as_of ? `(截至 ${marketCtx.as_of})` : '' }}全市场中位 {{ (marketCtx.median_5d_pct ?? 0) > 0 ? '+' : '' }}{{ marketCtx.median_5d_pct }}% · 上涨占比 {{ Math.round((marketCtx.breadth_up || 0) * 100) }}%</span>
       <span class="ctx-advice">{{ marketCtx.advice }}</span>
+      <span v-if="coldEvidence" class="ctx-advice ctx-evidence">{{ coldEvidence }}</span>
     </section>
 
     <el-alert
@@ -1101,6 +1102,24 @@ const ctxTone = computed(() => {
   return s === '偏暖' ? 'warm' : s === '偏冷' ? 'cold' : 'flat'
 })
 
+// 偏冷时给回放证据：历史上偏冷期两池超额如何（接口有缓存，<0.1s）
+const coldEvidence = ref('')
+const loadColdEvidence = async () => {
+  if (marketCtx.value?.state !== '偏冷') return
+  try {
+    const rep = await quantApi.replayResults()
+    const parts: string[] = []
+    for (const p of rep?.pools || []) {
+      const cold = (p.regimes || []).find((r) => r.regime === '偏冷')
+      if (cold) {
+        const label = p.pool === 'pattern' ? '形态池' : p.pool === 'smart' ? '智能池' : p.pool
+        parts.push(`${label} ${cold.avg_excess > 0 ? '+' : ''}${cold.avg_excess}pp（中位 ${cold.median_excess}pp，${cold.picks} 样本）`)
+      }
+    }
+    if (parts.length) coldEvidence.value = `历史回放偏冷期 T+5 超额：${parts.join('；')}——建议轻仓或只跟不买。`
+  } catch { /* 无回放结果时不展示 */ }
+}
+
 // 各池近30日 T+5 真实胜率（来自选股留痕），样本不足时提示积累中
 const poolStats = ref<Record<string, { win_rate: number | null; samples: number }>>({})
 const poolWinText = (pool: string) => {
@@ -1110,7 +1129,7 @@ const poolWinText = (pool: string) => {
 }
 
 onMounted(async () => {
-  quantApi.marketContext().then((ctx) => { marketCtx.value = ctx || null }).catch(() => {})
+  quantApi.marketContext().then((ctx) => { marketCtx.value = ctx || null; loadColdEvidence() }).catch(() => {})
   quantApi.picksStats(30).then((res) => {
     const map: Record<string, { win_rate: number | null; samples: number }> = {}
     for (const p of res?.pools || []) {
@@ -1542,6 +1561,7 @@ const openChart = async (row: any) => {
   b { font-size: 14px; }
   span { color: var(--el-text-color-secondary); font-size: 12px; }
   .ctx-advice { color: var(--el-text-color-regular); }
+  .ctx-evidence { font-size: 12px; opacity: 0.85; }
 }
 
 .ctx-warm {

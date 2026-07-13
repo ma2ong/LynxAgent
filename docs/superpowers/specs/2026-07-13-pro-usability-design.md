@@ -87,6 +87,19 @@
 - `docs/superpowers/specs/2026-07-13-replay-validation-report.md`：三池结论（有效/无效/存疑）、双口径全表、月度分布、与实盘留痕差异的解释、局限（存活偏差/近似口径/无换手成本）。
 - README 功能清单同步；侧边栏分组（看盘/选股/验证跟踪/系统，纯 el-menu-group 不改路由）。
 
+### 批次 F：大盘环境分层统计（弱市停跟验证）
+
+回放结论的后续动作：近 30 天实盘负超额疑似环境所致，用回放数据直接验证「偏冷期该不该停跟」。
+
+- `replay.py` 新增：
+  - `_classify_regime(median, breadth)`：与 `engine.market_context` 完全同阈值（偏暖=中位≥1%且宽度≥55%；偏冷=中位≤-1%或宽度≤40%；否则中性），纯函数可测。
+  - `_session_regimes(store, sessions)`：每个回放期 as_of 的 point-in-time 大盘环境——全市场 close(as_of)/close(as_of−5交易日) 的中位与上涨占比（amount>0 截面），按上述阈值分类。
+  - `_summarize` 每池增加 `regimes` 块：各环境的期数/样本/平均超额/中位/胜率（收盘口径）+ 可成交口径均值；不加表列，汇总时按 as_of 现算（52 期 × 2 个日期的截面查询，秒级）。
+- 老 run 兼容：对 run 20260713-091616 重算 summary 回填。
+- 前端 Review 回放区：每池「分环境表现」小表；若偏冷期平均超额 < 0，结论卡追加「偏冷期建议停跟/轻仓」行。
+- 前端选股页：大盘环境横幅在「偏冷」时追加回放证据（「历史回放：偏冷期智能池平均超额 Xpp（N 样本）」），数据取自已缓存的 replay results 接口（实测 <0.1s）。
+- 测试：`_classify_regime` 阈值边界；构造先跌后涨行情验证 `_session_regimes` 分类与 regimes 块期数守恒。
+
 ## 共性约定
 
 - 外部数据 float 一律 `x == x` 判 NaN 再入 JSON；ALTER TABLE 幂等；长任务防重入不变。

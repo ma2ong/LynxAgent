@@ -158,6 +158,16 @@
                 <b :class="retClass(p.open_entry.median_excess)">{{ fmtExcess(p.open_entry.median_excess) }}</b>
               </div>
             </div>
+            <div v-if="p.regimes?.length" class="regime-table">
+              <div class="regime-head">分大盘环境表现（入选时点的近5日全市场结构）</div>
+              <div v-for="r in p.regimes" :key="r.regime" class="regime-row">
+                <span class="regime-name" :class="'regime-' + regimeKey(r.regime)">{{ r.regime }}</span>
+                <span>{{ r.sessions }} 期 · {{ r.picks }} 样本</span>
+                <b :class="retClass(r.avg_excess)">均 {{ fmtExcess(r.avg_excess) }}</b>
+                <b :class="retClass(r.median_excess)">中位 {{ fmtExcess(r.median_excess) }}</b>
+                <span :class="rateClass(r.excess_win_rate)">胜 {{ fmtRate(r.excess_win_rate) }}</span>
+              </div>
+            </div>
           </div>
         </div>
         <div ref="replayChartEl" class="replay-chart" />
@@ -333,17 +343,36 @@ const verdictStats = (p: ReplayPoolSummary) => {
   return { avg: p.avg_excess, med: p.median_excess ?? null, win: p.excess_win_rate, caliber: '收盘回测口径' }
 }
 
+const regimeKey = (name: string) => (name === '偏暖' ? 'warm' : name === '偏冷' ? 'cold' : 'neutral')
+
+// 环境建议：偏冷期均值<0 → 建议停跟；仍为正但不足偏暖一半 → 建议轻仓
+const regimeAdvice = (p: ReplayPoolSummary) => {
+  const regs = p.regimes || []
+  const cold = regs.find((r) => r.regime === '偏冷')
+  const warm = regs.find((r) => r.regime === '偏暖')
+  if (!cold) return ''
+  if (cold.avg_excess <= 0) {
+    return `大盘偏冷期该池平均超额 ${cold.avg_excess}pp（${cold.picks} 样本）——弱市建议停跟。`
+  }
+  if (warm && cold.avg_excess < warm.avg_excess / 2) {
+    return `环境敏感：偏暖期均 +${warm.avg_excess}pp、偏冷期缩至 +${cold.avg_excess}pp（中位 ${cold.median_excess}pp）——大盘偏冷时建议轻仓或观望。`
+  }
+  return ''
+}
+
 const verdictText = (p: ReplayPoolSummary) => {
   const { avg, med, win, caliber } = verdictStats(p)
   if (avg == null) return '样本不足，暂无法下结论。'
   const months = replay.value?.params?.months || 12
   const head = `过去 ${months} 个月每期等权买入整池，T+5 平均超额 ${avg > 0 ? '+' : ''}${avg}pp/期（${caliber}）`
+  const tail = regimeAdvice(p)
   if (avg <= 0) return `${head}——该池规则未跑赢全市场中位，判为无效，不建议跟随。`
   if ((med ?? 0) <= 0) {
     return `${head}，但单票中位 ${med}pp、胜率 ${win != null ? Math.round(win * 100) : '-'}%：` +
-      '收益依赖整池分散接住少数大涨股，单买一两只大概率跑输——要跟就整池等权跟，不适合单票押注。'
+      '收益依赖整池分散接住少数大涨股，单买一两只大概率跑输——要跟就整池等权跟，不适合单票押注。' +
+      (tail ? ` ${tail}` : '')
   }
-  return `${head}，中位 +${med}pp、胜率 ${win != null ? Math.round(win * 100) : '-'}%，组合与单票口径均为正。`
+  return `${head}，中位 +${med}pp、胜率 ${win != null ? Math.round(win * 100) : '-'}%，组合与单票口径均为正。${tail ? ` ${tail}` : ''}`
 }
 
 const verdictClass = (p: ReplayPoolSummary) => {
@@ -561,6 +590,33 @@ onBeforeUnmount(() => {
   &.verdict-mixed { border-color: #ffd591; background: #fffbe6; }
   &.verdict-bad { border-color: #ffccc7; background: #fff2f0; }
   &.verdict-unknown { background: #fafbfc; }
+}
+
+.regime-table {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed #e5e8ef;
+  font-size: 12px;
+
+  .regime-head {
+    color: #8a93a6;
+    margin-bottom: 4px;
+  }
+
+  .regime-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 2px 0;
+
+    .regime-name {
+      width: 40px;
+      font-weight: 600;
+    }
+    .regime-warm { color: #cf1322; }
+    .regime-cold { color: #0958d9; }
+    .regime-neutral { color: #8a93a6; }
+  }
 }
 
 .replay-note {

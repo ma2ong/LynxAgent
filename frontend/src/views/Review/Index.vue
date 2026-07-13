@@ -111,11 +111,16 @@
           回放 {{ replay.params?.months || 12 }} 个月 · 每 {{ replay.params?.step || 5 }} 个交易日一期 ·
           每期 top{{ replay.params?.top_n || 20 }} · 统计 T+5 相对全市场中位的超额 · 完成于 {{ replay.created_at }}
         </p>
+        <div v-for="p in replay.pools" :key="'verdict-' + p.pool" class="replay-verdict" :class="verdictClass(p)">
+          <b>{{ poolLabel(p.pool) }}：</b>{{ verdictText(p) }}
+        </div>
         <div class="pool-grid">
           <div v-for="p in replay.pools" :key="p.pool" class="pool-card">
             <div class="pool-title">
               <b>{{ poolLabel(p.pool) }}</b>
-              <small>{{ p.evaluated }}/{{ p.picks }} 样本</small>
+              <small>{{ p.evaluated }}/{{ p.picks }} 样本
+                <template v-if="(p.limitup_ratio ?? 0) > 0.05"> · {{ fmtRate(p.limitup_ratio) }} 入选时已涨停</template>
+              </small>
             </div>
             <div class="horizon-row replay-row">
               <div class="horizon-cell">
@@ -127,8 +132,30 @@
                 <b :class="retClass(p.avg_excess)">{{ fmtExcess(p.avg_excess) }}</b>
               </div>
               <div class="horizon-cell">
+                <span>中位超额</span>
+                <b :class="retClass(p.median_excess ?? null)">{{ fmtExcess(p.median_excess ?? null) }}</b>
+              </div>
+              <div class="horizon-cell">
                 <span>累计超额</span>
                 <b :class="retClass(cumExcess(p))">{{ fmtExcess(cumExcess(p)) }}</b>
+              </div>
+            </div>
+            <div v-if="p.open_entry?.evaluated" class="horizon-row replay-row open-entry-row">
+              <div class="horizon-cell">
+                <span>可成交口径（次日开盘买入）</span>
+                <b />
+              </div>
+              <div class="horizon-cell">
+                <span>超额胜率</span>
+                <b :class="rateClass(p.open_entry.excess_win_rate)">{{ fmtRate(p.open_entry.excess_win_rate) }}</b>
+              </div>
+              <div class="horizon-cell">
+                <span>平均超额</span>
+                <b :class="retClass(p.open_entry.avg_excess)">{{ fmtExcess(p.open_entry.avg_excess) }}</b>
+              </div>
+              <div class="horizon-cell">
+                <span>中位超额</span>
+                <b :class="retClass(p.open_entry.median_excess)">{{ fmtExcess(p.open_entry.median_excess) }}</b>
               </div>
             </div>
           </div>
@@ -163,6 +190,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import { quantApi, type MarketContext, type PicksPoolStat, type PicksStatsItem, type QuantDataHealth, type ReplayPoolSummary, type ReplayStatus, type ReplaySummary } from '@/api/quant'
 import { echarts, type ECharts } from '@/utils/echarts'
 
@@ -299,7 +327,40 @@ const pollReplay = () => {
   }, 5000)
 }
 
+// ---- 结论卡：用可成交口径（缺失时退回收盘口径）把回放数据翻成人话 ----
+const verdictStats = (p: ReplayPoolSummary) => {
+  if (p.open_entry?.evaluated) return { avg: p.open_entry.avg_excess, med: p.open_entry.median_excess, win: p.open_entry.excess_win_rate, caliber: '次日开盘可成交口径' }
+  return { avg: p.avg_excess, med: p.median_excess ?? null, win: p.excess_win_rate, caliber: '收盘回测口径' }
+}
+
+const verdictText = (p: ReplayPoolSummary) => {
+  const { avg, med, win, caliber } = verdictStats(p)
+  if (avg == null) return '样本不足，暂无法下结论。'
+  const months = replay.value?.params?.months || 12
+  const head = `过去 ${months} 个月每期等权买入整池，T+5 平均超额 ${avg > 0 ? '+' : ''}${avg}pp/期（${caliber}）`
+  if (avg <= 0) return `${head}——该池规则未跑赢全市场中位，判为无效，不建议跟随。`
+  if ((med ?? 0) <= 0) {
+    return `${head}，但单票中位 ${med}pp、胜率 ${win != null ? Math.round(win * 100) : '-'}%：` +
+      '收益依赖整池分散接住少数大涨股，单买一两只大概率跑输——要跟就整池等权跟，不适合单票押注。'
+  }
+  return `${head}，中位 +${med}pp、胜率 ${win != null ? Math.round(win * 100) : '-'}%，组合与单票口径均为正。`
+}
+
+const verdictClass = (p: ReplayPoolSummary) => {
+  const { avg, med } = verdictStats(p)
+  if (avg == null) return 'verdict-unknown'
+  if (avg <= 0) return 'verdict-bad'
+  return (med ?? 0) <= 0 ? 'verdict-mixed' : 'verdict-good'
+}
+
 const startReplay = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '重跑将全量扫描本地历史日线（约 10 分钟，期间 CPU 占用较高），完成后覆盖当前回放结论。确定重跑？',
+      '重跑历史回放',
+      { confirmButtonText: '重跑', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
   replayStarting.value = true
   try {
     replayStat.value = await quantApi.replayRun()
@@ -474,7 +535,32 @@ onBeforeUnmount(() => {
 }
 
 .replay-row {
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.open-entry-row {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #e5e8ef;
+
+  .horizon-cell:first-child span {
+    font-weight: 600;
+    color: #475069;
+  }
+}
+
+.replay-verdict {
+  margin: 0 0 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.7;
+  border: 1px solid #e5e8ef;
+
+  &.verdict-good { border-color: #a7d4b4; background: #f0fff4; }
+  &.verdict-mixed { border-color: #ffd591; background: #fffbe6; }
+  &.verdict-bad { border-color: #ffccc7; background: #fff2f0; }
+  &.verdict-unknown { background: #fafbfc; }
 }
 
 .replay-note {

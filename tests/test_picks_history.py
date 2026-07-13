@@ -167,6 +167,28 @@ def test_signal_stats_pattern_level_excess(store):
     assert names["金叉"]["excess_win_rate"] == 1.0
 
 
+def test_signal_stats_cached_within_day(store, monkeypatch):
+    """signal_stats 全量重算约 20s：同日同数据版本必须命中缓存，refresh=True 强制重算。"""
+    _seed_kline(store, "600001", [10.0 * 1.02 ** i for i in range(8)])
+    store.record_picks("smart", [{"symbol": "600001", "name": "涨股", "score": 90, "close": 10.0}])
+
+    calls = {"n": 0}
+    orig = LocalQuantStore.evaluate_picks
+
+    def counting(self, *a, **kw):
+        calls["n"] += 1
+        return orig(self, *a, **kw)
+
+    monkeypatch.setattr(LocalQuantStore, "evaluate_picks", counting)
+    first = store.signal_stats("smart")
+    second = store.signal_stats("smart")
+    assert calls["n"] == 1  # 第二次命中缓存
+    assert second["pool"] == first["pool"] and second["live_picks"] == first["live_picks"]
+
+    store.signal_stats("smart", refresh=True)
+    assert calls["n"] == 2  # 强制重算
+
+
 def test_backtest_applies_transaction_costs():
     closes = [10.0 * 1.02 ** i for i in range(8)]
     dates = pd.to_datetime(_trading_dates(8))

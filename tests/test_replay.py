@@ -23,11 +23,11 @@ def _trading_dates(n: int):
     return out
 
 
-def _seed(store, symbol, closes, amounts=None):
+def _seed(store, symbol, closes, amounts=None, opens=None):
     n = len(closes)
     dates = _trading_dates(n)
     df = pd.DataFrame({
-        "date": dates, "open": closes, "high": closes, "low": closes, "close": closes,
+        "date": dates, "open": opens or closes, "high": closes, "low": closes, "close": closes,
         "volume": [1e6] * n, "amount": amounts or [1e8] * n,
     })
     store.upsert_kline(symbol, df)
@@ -70,6 +70,61 @@ def test_replay_smart_pool_end_to_end(store):
         "SELECT COUNT(*) FROM replay_results WHERE run_id=?", (res["run_id"],)
     ).fetchone()[0]
     assert rows == smart["picks"] + sum(p["picks"] for p in res["pools"] if p["pool"] != "smart")
+
+
+def test_replay_open_entry_caliber_and_distribution(store):
+    """次日开盘可成交口径：entry=open(as_of+1)，与收盘口径并存；汇总含中位数/涨停占比。"""
+    n = 120
+    up = [10.0 * 1.005 ** i for i in range(n)]
+    # 开盘价 = 当日收盘 × 0.99（每天低开 1%）→ open 口径收益应高于 close 口径
+    _seed(store, "600001", up, amounts=[2e8] * n, opens=[c * 0.99 for c in up])
+    for i in range(2, 31):
+        _seed(store, f"6000{i:02d}", [10.0] * n)
+    store.upsert_meta([{"symbol": f"6000{i:02d}", "name": f"股{i}"} for i in range(1, 31)])
+
+    res = run_replay(months=4, step=5, top_n=3, store=store, workers=0)
+    smart = next(p for p in res["pools"] if p["pool"] == "smart")
+    # 新字段齐备
+    assert smart["median_excess"] is not None
+    assert smart["p10_excess"] <= smart["median_excess"] <= smart["p90_excess"]
+    assert smart["limitup_ratio"] == 0  # 日涨 0.5%，无涨停
+    oe = smart["open_entry"]
+    assert oe["evaluated"] > 0
+    # 600001 每天低开 1%：open 口径买得更便宜 → 平均超额高于 close 口径
+    assert oe["avg_excess"] > smart["avg_excess"]
+
+    # 落库数值抽查：ret_t5_open = close(t5)/open(t1) - 1
+    row = store._conn().execute(
+        "SELECT as_of, ret_t5, ret_t5_open FROM replay_results "
+        "WHERE run_id=? AND symbol='600001' AND ret_t5_open IS NOT NULL LIMIT 1",
+        (res["run_id"],),
+    ).fetchone()
+    assert row is not None
+    # open 口径入场价 = close(as_of)×1.005×0.99 < close(as_of) → 收益更高；
+    # 精确换算：(1+ret_close)/(1.005×0.99) - 1
+    assert row[2] > row[1]
+    expected = ((1 + row[1] / 100) / (1.005 * 0.99) - 1) * 100
+    assert row[2] == pytest.approx(expected, abs=0.15)
+
+
+def test_replay_limitup_flagged(store):
+    """as_of 收盘涨停的票要打 limitup_at_close 标记（10cm 主板阈值）。"""
+    n = 120
+    # 平盘直到最后每个采样日前都拉一次涨停无法精确对齐采样日；
+    # 改为：全程每天 +9.8%（天天涨停）→ 所有入选期都应标涨停
+    up = [10.0 * 1.098 ** i for i in range(n)]
+    _seed(store, "600001", up, amounts=[2e8] * n)
+    for i in range(2, 12):
+        _seed(store, f"6000{i:02d}", [10.0] * n)
+    store.upsert_meta([{"symbol": f"6000{i:02d}", "name": f"股{i}"} for i in range(1, 12)])
+    res = run_replay(months=4, step=5, top_n=3, store=store, workers=0)
+    flags = store._conn().execute(
+        "SELECT DISTINCT limitup_at_close FROM replay_results WHERE run_id=? AND symbol='600001'",
+        (res["run_id"],),
+    ).fetchall()
+    assert flags == [(1,)]
+    smart = next(p for p in res["pools"] if p["pool"] == "smart")
+    assert smart["limitup_ratio"] > 0
 
 
 def test_replay_anchor_pins_session_axis(store):

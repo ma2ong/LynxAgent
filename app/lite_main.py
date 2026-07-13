@@ -205,6 +205,28 @@ async def _start_ml_factor_scheduler() -> None:
         id="replay_resume", name="历史回放断点自愈",
         replace_existing=True, misfire_grace_time=300,
     )
+
+    # 信号统计预热：收盘结算后重算各池 signal-stats 缓存（冷算约 20s/池），
+    # 用户点开理由卡「历史表现」时直接命中缓存秒开。
+    async def _job_signal_stats_preheat() -> None:
+        if not await _is_trading_day_now():
+            return
+        def _preheat() -> None:
+            from quantcore.quant.local_store import get_local_store
+            store = get_local_store()
+            for pool in ("smart", "pattern", "swing", "auction"):
+                try:
+                    store.signal_stats(pool, refresh=True)
+                except Exception:
+                    continue
+        await asyncio.to_thread(_preheat)
+
+    _ml_factor_scheduler.add_job(
+        _job_signal_stats_preheat,
+        CronTrigger.from_crontab(os.getenv("SIGNAL_STATS_CRON", "55 15 * * 1-5"), timezone=tz),
+        id="signal_stats_preheat", name="信号统计缓存预热",
+        replace_existing=True, misfire_grace_time=3600,
+    )
     _ml_factor_scheduler.start()
 
 

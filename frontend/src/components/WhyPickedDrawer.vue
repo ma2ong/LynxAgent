@@ -34,7 +34,9 @@
 
       <section>
         <h4>该信号的历史表现</h4>
-        <div v-if="loading" class="muted">加载中…</div>
+        <div v-if="loading" class="muted">
+          加载中…<template v-if="loadingSlow">首次统计约需 20 秒（当日会缓存，之后秒开），可先看上方因子与交易计划。</template>
+        </div>
         <template v-else-if="stats">
           <div class="hist-grid">
             <div class="hist-cell">
@@ -88,6 +90,8 @@ const factorRows = computed(() => {
 const statsCache = new Map<string, SignalStats>()
 const stats = ref<SignalStats | null>(null)
 const loading = ref(false)
+const loadingSlow = ref(false)
+let slowTimer = 0
 
 const liveT5 = computed(() => stats.value?.live?.t5 || null)
 
@@ -105,6 +109,8 @@ watch(
       return
     }
     loading.value = true
+    loadingSlow.value = false
+    slowTimer = window.setTimeout(() => { loadingSlow.value = true }, 3000)
     try {
       const res = await quantApi.signalStats(pool)
       statsCache.set(pool, res)
@@ -112,7 +118,9 @@ watch(
     } catch {
       stats.value = null
     } finally {
+      window.clearTimeout(slowTimer)
       loading.value = false
+      loadingSlow.value = false
     }
   },
   { immediate: true },

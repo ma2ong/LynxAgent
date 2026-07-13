@@ -550,6 +550,13 @@ export interface ReplayCurvePoint {
   cum_excess: number
 }
 
+export interface ReplayOpenEntry {
+  evaluated: number
+  excess_win_rate: number | null
+  avg_excess: number | null
+  median_excess: number | null
+}
+
 export interface ReplayPoolSummary {
   pool: string
   picks: number
@@ -558,6 +565,11 @@ export interface ReplayPoolSummary {
   avg_return: number | null
   excess_win_rate: number | null
   avg_excess: number | null
+  median_excess?: number | null
+  p10_excess?: number | null
+  p90_excess?: number | null
+  limitup_ratio?: number | null
+  open_entry?: ReplayOpenEntry
   monthly: ReplayMonthly[]
   curve: ReplayCurvePoint[]
 }

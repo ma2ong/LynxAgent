@@ -46,6 +46,9 @@ CREATE TABLE IF NOT EXISTS replay_results (
     score REAL,
     ret_t5 REAL,
     excess_t5 REAL,
+    ret_t5_open REAL,
+    excess_t5_open REAL,
+    limitup_at_close INTEGER,
     PRIMARY KEY (run_id, pool, as_of, symbol)
 );
 CREATE TABLE IF NOT EXISTS replay_scan (
@@ -63,7 +66,19 @@ _progress: Dict[str, object] = {"running": False, "run_id": "", "phase": "", "do
 def _ensure_tables(store: LocalQuantStore) -> None:
     conn = store._conn()
     conn.executescript(_SCHEMA)
+    # 老库升级：次日开盘可成交口径列（幂等，旧 run 的新列为 null）
+    for col, typ in (("ret_t5_open", "REAL"), ("excess_t5_open", "REAL"),
+                     ("limitup_at_close", "INTEGER")):
+        try:
+            conn.execute(f"ALTER TABLE replay_results ADD COLUMN {col} {typ}")
+        except Exception:
+            pass
     conn.commit()
+
+
+def _limit_up_threshold(symbol: str) -> float:
+    """按板块近似涨停幅度：创业板/科创板 20cm，其余 10cm（ST 5% 无法从代码判别，接受近似）。"""
+    return 0.195 if symbol.startswith(("30", "68")) else 0.095
 
 
 def _smart_score_approx(df: pd.DataFrame) -> Optional[float]:
@@ -265,13 +280,20 @@ def run_replay(months: int = 12, step: int = 5, top_n: int = 20,
                 picks.append({**it, "rank": rank})
 
         # T+5 收益与全市场中位基准（复用完整交易日轴对齐）
+        # 双口径：回测口径 close(as_of)→close(t5)；可成交口径 open(as_of+1)→close(t5)
         didx = {d: i for i, d in enumerate(tdates)}
         need_dates = set()
+        open_dates = set()
         for s in sessions:
             need_dates.add(s)
-            j = didx[s] + HORIZON
+            i = didx[s]
+            if i > 0:
+                need_dates.add(tdates[i - 1])  # 前收盘：判 as_of 是否涨停
+            j = i + HORIZON
             if j < len(tdates):
                 need_dates.add(tdates[j])
+            if i + 1 < len(tdates):
+                open_dates.add(tdates[i + 1])
         by_date: Dict[str, Dict[str, float]] = {}
         qmarks = ",".join("?" * len(need_dates))
         for d, sym, c in conn.execute(
@@ -279,33 +301,58 @@ def run_replay(months: int = 12, step: int = 5, top_n: int = 20,
             sorted(need_dates),
         ):
             by_date.setdefault(str(d), {})[str(sym)] = float(c or 0)
+        open_by_date: Dict[str, Dict[str, float]] = {}
+        if open_dates:
+            qmarks_o = ",".join("?" * len(open_dates))
+            for d, sym, o in conn.execute(
+                f"SELECT date, symbol, open FROM daily_kline WHERE date IN ({qmarks_o}) AND amount>0",
+                sorted(open_dates),
+            ):
+                open_by_date.setdefault(str(d), {})[str(sym)] = float(o or 0)
 
         import statistics
         bench: Dict[str, Optional[float]] = {}
+        bench_open: Dict[str, Optional[float]] = {}
         for s in sessions:
-            j = didx[s] + HORIZON
+            i = didx[s]
+            j = i + HORIZON
             if j >= len(tdates):
-                bench[s] = None
+                bench[s] = bench_open[s] = None
                 continue
             m0, m1 = by_date.get(s, {}), by_date.get(tdates[j], {})
             rets = [(m1[k] / m0[k] - 1) * 100 for k in m0.keys() & m1.keys() if m0[k] > 0]
             bench[s] = round(statistics.median(rets), 4) if rets else None
+            mo = open_by_date.get(tdates[i + 1], {}) if i + 1 < len(tdates) else {}
+            rets_o = [(m1[k] / mo[k] - 1) * 100 for k in mo.keys() & m1.keys() if mo[k] > 0]
+            bench_open[s] = round(statistics.median(rets_o), 4) if rets_o else None
 
         rows_out = []
         for p in picks:
             s = str(p["as_of"])
-            j = didx[s] + HORIZON
+            sym = str(p["symbol"])
+            i = didx[s]
+            j = i + HORIZON
             tgt = tdates[j] if j < len(tdates) else None
-            c0 = by_date.get(s, {}).get(str(p["symbol"]), 0.0)
-            c1 = by_date.get(tgt, {}).get(str(p["symbol"]), 0.0) if tgt else 0.0
+            c0 = by_date.get(s, {}).get(sym, 0.0)
+            c1 = by_date.get(tgt, {}).get(sym, 0.0) if tgt else 0.0
             ret = round((c1 / c0 - 1) * 100, 2) if c0 > 0 and c1 > 0 else None
             b = bench.get(s)
             excess = round(ret - b, 2) if ret is not None and b is not None else None
-            rows_out.append((run_id, p["pool"], s, p["symbol"], p["name"], p["rank"],
-                             float(p["score"]), ret, excess))
+            # 可成交口径：次日开盘买入
+            o1 = open_by_date.get(tdates[i + 1], {}).get(sym, 0.0) if i + 1 < len(tdates) else 0.0
+            ret_open = round((c1 / o1 - 1) * 100, 2) if o1 > 0 and c1 > 0 else None
+            bo = bench_open.get(s)
+            excess_open = round(ret_open - bo, 2) if ret_open is not None and bo is not None else None
+            # as_of 收盘是否涨停（买不到回测价的近似标记）
+            cprev = by_date.get(tdates[i - 1], {}).get(sym, 0.0) if i > 0 else 0.0
+            limitup = 1 if (cprev > 0 and c0 > 0
+                            and c0 / cprev - 1 >= _limit_up_threshold(sym)) else 0
+            rows_out.append((run_id, p["pool"], s, sym, p["name"], p["rank"],
+                             float(p["score"]), ret, excess, ret_open, excess_open, limitup))
         conn.executemany(
-            "INSERT OR REPLACE INTO replay_results(run_id,pool,as_of,symbol,name,rank,score,ret_t5,excess_t5) "
-            "VALUES(?,?,?,?,?,?,?,?,?)", rows_out)
+            "INSERT OR REPLACE INTO replay_results(run_id,pool,as_of,symbol,name,rank,score,"
+            "ret_t5,excess_t5,ret_t5_open,excess_t5_open,limitup_at_close) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", rows_out)
         summary = _summarize(store, run_id)
         conn.execute("UPDATE replay_runs SET status='done', progress=1, summary_json=? WHERE run_id=?",
                      (json.dumps(summary, ensure_ascii=False), run_id))
@@ -322,18 +369,26 @@ def run_replay(months: int = 12, step: int = 5, top_n: int = 20,
 
 
 def _summarize(store: LocalQuantStore, run_id: str) -> Dict[str, object]:
+    import statistics
+
     conn = store._conn()
     rows = conn.execute(
-        "SELECT pool, as_of, ret_t5, excess_t5 FROM replay_results WHERE run_id=? ORDER BY as_of",
+        "SELECT pool, as_of, ret_t5, excess_t5, excess_t5_open, limitup_at_close "
+        "FROM replay_results WHERE run_id=? ORDER BY as_of",
         (run_id,),
     ).fetchall()
     pools: Dict[str, Dict[str, object]] = {}
-    for pool, as_of, ret, excess in rows:
+    for pool, as_of, ret, excess, excess_open, limitup in rows:
         p = pools.setdefault(str(pool), {"picks": 0, "rets": [], "excesses": [],
+                                         "excesses_open": [], "limitups": 0,
                                          "monthly": {}, "curve": {}})
         p["picks"] += 1
+        if limitup:
+            p["limitups"] += 1
         if ret is not None:
             p["rets"].append(float(ret))
+        if excess_open is not None:
+            p["excesses_open"].append(float(excess_open))
         if excess is not None:
             p["excesses"].append(float(excess))
             month = str(as_of)[:7]
@@ -341,7 +396,7 @@ def _summarize(store: LocalQuantStore, run_id: str) -> Dict[str, object]:
             p["curve"].setdefault(str(as_of), []).append(float(excess))
     out: Dict[str, object] = {"pools": []}
     for pool, p in sorted(pools.items()):
-        exs: List[float] = p["excesses"]
+        exs: List[float] = sorted(p["excesses"])
         monthly = [{"month": m, "picks": len(v),
                     "excess_win_rate": round(sum(1 for x in v if x > 0) / len(v), 4),
                     "avg_excess": round(sum(v) / len(v), 2)}
@@ -352,6 +407,13 @@ def _summarize(store: LocalQuantStore, run_id: str) -> Dict[str, object]:
             avg = sum(v) / len(v)
             cum += avg
             curve.append({"as_of": d, "avg_excess": round(avg, 2), "cum_excess": round(cum, 2)})
+        exs_o: List[float] = p["excesses_open"]
+        open_entry = {
+            "evaluated": len(exs_o),
+            "excess_win_rate": round(sum(1 for x in exs_o if x > 0) / len(exs_o), 4) if exs_o else None,
+            "avg_excess": round(sum(exs_o) / len(exs_o), 2) if exs_o else None,
+            "median_excess": round(statistics.median(exs_o), 2) if exs_o else None,
+        }
         out["pools"].append({
             "pool": pool,
             "picks": p["picks"],
@@ -360,6 +422,11 @@ def _summarize(store: LocalQuantStore, run_id: str) -> Dict[str, object]:
             "avg_return": round(sum(p["rets"]) / len(p["rets"]), 2) if p["rets"] else None,
             "excess_win_rate": round(sum(1 for x in exs if x > 0) / len(exs), 4) if exs else None,
             "avg_excess": round(sum(exs) / len(exs), 2) if exs else None,
+            "median_excess": round(statistics.median(exs), 2) if exs else None,
+            "p10_excess": round(exs[int(len(exs) * 0.1)], 2) if exs else None,
+            "p90_excess": round(exs[int(len(exs) * 0.9)], 2) if exs else None,
+            "limitup_ratio": round(p["limitups"] / p["picks"], 4) if p["picks"] else None,
+            "open_entry": open_entry,
             "monthly": monthly,
             "curve": curve,
         })

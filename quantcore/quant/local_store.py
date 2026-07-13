@@ -99,6 +99,12 @@ CREATE TABLE IF NOT EXISTS arena_nav (
     comment TEXT,
     PRIMARY KEY (date, persona)
 );
+CREATE TABLE IF NOT EXISTS signal_stats_cache (
+    cache_key TEXT PRIMARY KEY,
+    stamp TEXT,
+    payload_json TEXT,
+    created_at TEXT
+);
 """
 
 _COLS = ["date", "open", "high", "low", "close", "volume", "amount"]
@@ -574,8 +580,28 @@ class LocalQuantStore:
             "pools": pools_out, "items": detail[:300],
         }
 
-    def signal_stats(self, pool: str, days: int = 90) -> Dict[str, object]:
-        """信号历史表现：池级（留痕 + 最近回放）与形态级（留痕 T+5 超额）聚合，供入选理由卡。"""
+    def signal_stats(self, pool: str, days: int = 90, refresh: bool = False) -> Dict[str, object]:
+        """信号历史表现：池级（留痕 + 最近回放）与形态级（留痕 T+5 超额）聚合，供入选理由卡。
+
+        全量重算要扫 90 天留痕 ×全市场收盘矩阵（实测约 20 秒），结果按
+        (pool, days, 最新日线日, 自然日) 缓存——T+N 统计只在新交易日数据落库后才变化，
+        当日新增留痕只是「待更新」行，不影响已结算统计。
+        """
+        import json as _json
+        from datetime import date as _date
+
+        cache_key = f"{pool}:{days}"
+        stamp = f"{_date.today().isoformat()}|{self.latest_real_bar_date() or ''}"
+        conn = self._conn()
+        if not refresh:
+            row = conn.execute(
+                "SELECT payload_json FROM signal_stats_cache WHERE cache_key=? AND stamp=?",
+                (cache_key, stamp)).fetchone()
+            if row:
+                try:
+                    return _json.loads(row[0])
+                except Exception:
+                    pass
         stats = self.evaluate_picks(days=days, pool=pool)
         pool_stat = next((p for p in stats["pools"] if p["pool"] == pool), None)
         pat_agg: Dict[str, List[float]] = {}
@@ -606,13 +632,22 @@ class LocalQuantStore:
                     }
         except Exception:
             replay_stat = None
-        return {
+        out = {
             "pool": pool, "days": days,
             "live": (pool_stat or {}).get("horizons"),
             "live_picks": (pool_stat or {}).get("picks", 0),
             "patterns": patterns,
             "replay": replay_stat,
         }
+        from datetime import datetime as _dt
+        conn.execute(
+            "INSERT INTO signal_stats_cache(cache_key,stamp,payload_json,created_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(cache_key) DO UPDATE SET stamp=excluded.stamp, "
+            "payload_json=excluded.payload_json, created_at=excluded.created_at",
+            (cache_key, stamp, _json.dumps(out, ensure_ascii=False),
+             _dt.now().isoformat(timespec="seconds")))
+        conn.commit()
+        return out
 
     # ---- 状态 ----
     def set_state(self, key: str, value: str) -> None:

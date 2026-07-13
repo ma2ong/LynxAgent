@@ -176,16 +176,22 @@ def _complete_trading_dates(store: LocalQuantStore, since: str) -> List[str]:
 
 
 def run_replay(months: int = 12, step: int = 5, top_n: int = 20,
-               store: Optional[LocalQuantStore] = None, workers: int = 6) -> Dict[str, object]:
-    """执行一次回放（同步，耗时数分钟）。workers<=0 时串行（测试用）。"""
+               store: Optional[LocalQuantStore] = None, workers: int = 6,
+               anchor: Optional[str] = None) -> Dict[str, object]:
+    """执行一次回放（同步，耗时数分钟）。workers<=0 时串行（测试用）。
+
+    anchor：会话轴锚定日（YYYY-MM-DD，默认今天）。跨天断点续跑必须传原 run 的
+    anchor，否则 since/cutoff 随"今天"漂移 → param_key 变化 → 全部断点作废。
+    """
     store = store or get_local_store()
     _ensure_tables(store)
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
-    since = (date.today() - timedelta(days=int(months * 30.5) + 40)).strftime("%Y-%m-%d")
+    anchor_day = date.fromisoformat(anchor) if anchor else date.today()
+    since = (anchor_day - timedelta(days=int(months * 30.5) + 40)).strftime("%Y-%m-%d")
     tdates = _complete_trading_dates(store, since)
-    # 轴尾截断到 9 天前：近期日期可能被增量补数据改变「完整日」判定，
+    # 轴尾截断到锚定日 9 天前：近期日期可能被增量补数据改变「完整日」判定，
     # 导致断点续跑的会话轴漂移、缓存作废；旧数据是稳定的。
-    cutoff = (date.today() - timedelta(days=9)).strftime("%Y-%m-%d")
+    cutoff = (anchor_day - timedelta(days=9)).strftime("%Y-%m-%d")
     tdates = [d for d in tdates if d <= cutoff]
     # 采样期：每 step 个交易日一期；末尾留足 T+5 前向窗口
     sessions = [d for idx, d in enumerate(tdates[:-HORIZON]) if idx % max(1, step) == 0]
@@ -199,7 +205,8 @@ def run_replay(months: int = 12, step: int = 5, top_n: int = 20,
         "INSERT OR REPLACE INTO replay_runs(run_id, created_at, params_json, status, progress) "
         "VALUES(?,?,?,?,0)",
         (run_id, datetime.now().isoformat(timespec="seconds"),
-         json.dumps({"months": months, "step": step, "top_n": top_n, "sessions": len(sessions)}), "running"),
+         json.dumps({"months": months, "step": step, "top_n": top_n, "sessions": len(sessions),
+                     "anchor": anchor_day.isoformat()}), "running"),
     )
     conn.commit()
 
@@ -359,21 +366,22 @@ def _summarize(store: LocalQuantStore, run_id: str) -> Dict[str, object]:
     return out
 
 
-def start_replay_async(months: int = 12, step: int = 5, top_n: int = 20, workers: int = 6) -> Dict[str, object]:
+def start_replay_async(months: int = 12, step: int = 5, top_n: int = 20, workers: int = 6,
+                       anchor: Optional[str] = None) -> Dict[str, object]:
     """后台线程启动回放（防重入）。"""
     with _run_lock:
         if _progress.get("running"):
             return {"started": False, "reason": "已有回放在运行", **replay_status()}
         _progress.update({"running": True, "phase": "starting", "done": 0, "total": 0})
     threading.Thread(
-        target=lambda: _safe_run(months, step, top_n, workers), daemon=True,
+        target=lambda: _safe_run(months, step, top_n, workers, anchor), daemon=True,
     ).start()
     return {"started": True, **replay_status()}
 
 
-def _safe_run(months: int, step: int, top_n: int, workers: int) -> None:
+def _safe_run(months: int, step: int, top_n: int, workers: int, anchor: Optional[str] = None) -> None:
     try:
-        run_replay(months=months, step=step, top_n=top_n, workers=workers)
+        run_replay(months=months, step=step, top_n=top_n, workers=workers, anchor=anchor)
     except Exception:
         pass  # 失败状态已写入 replay_runs
 

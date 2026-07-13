@@ -184,14 +184,18 @@ async def _start_ml_factor_scheduler() -> None:
             if replay_status().get("running"):
                 return
             row = get_local_store()._conn().execute(
-                "SELECT params_json FROM replay_runs WHERE status='running' "
+                "SELECT params_json, created_at FROM replay_runs WHERE status='running' "
                 "ORDER BY created_at DESC LIMIT 1").fetchone()
             if not row:
                 return
             params = json.loads(row[0] or "{}")
+            # 续跑必须沿用原 run 的会话轴锚定日，否则 since/cutoff 随今天漂移，
+            # param_key 变化会作废全部 replay_scan 断点（老 run 无 anchor 时退回建单日）
+            anchor = params.get("anchor") or str(row[1] or "")[:10] or None
             start_replay_async(months=int(params.get("months", 12)),
                                step=int(params.get("step", 5)),
-                               top_n=int(params.get("top_n", 20)))
+                               top_n=int(params.get("top_n", 20)),
+                               anchor=anchor)
         except Exception as exc:  # noqa: BLE001
             import warnings
             warnings.warn(f"replay resume failed: {exc}", RuntimeWarning, stacklevel=1)

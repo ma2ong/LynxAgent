@@ -72,6 +72,27 @@ def test_replay_smart_pool_end_to_end(store):
     assert rows == smart["picks"] + sum(p["picks"] for p in res["pools"] if p["pool"] != "smart")
 
 
+def test_replay_anchor_pins_session_axis(store):
+    """同一 anchor 跨天续跑必须命中同一 param_key（断点不作废）；anchor 落库供续跑读取。"""
+    n = 120
+    _seed(store, "600001", [10.0 * 1.005 ** i for i in range(n)], amounts=[2e8] * n)
+    for i in range(2, 12):
+        _seed(store, f"6000{i:02d}", [10.0] * n)
+    store.upsert_meta([{"symbol": f"6000{i:02d}", "name": f"股{i}"} for i in range(1, 12)])
+
+    anchor = date.today().strftime("%Y-%m-%d")
+    run_replay(months=4, step=5, top_n=3, store=store, workers=0, anchor=anchor)
+    run_replay(months=4, step=5, top_n=3, store=store, workers=0, anchor=anchor)
+    keys = store._conn().execute(
+        "SELECT DISTINCT param_key FROM replay_scan").fetchall()
+    assert len(keys) == 1  # 两次运行共用同一断点缓存
+
+    import json as _json
+    params = _json.loads(store._conn().execute(
+        "SELECT params_json FROM replay_runs ORDER BY created_at DESC LIMIT 1").fetchone()[0])
+    assert params["anchor"] == anchor
+
+
 def test_replay_point_in_time_no_lookahead(store):
     """留痕期只允许使用 as_of 及以前的数据：把未来 bar 全删后重放同期结果一致。"""
     n = 100

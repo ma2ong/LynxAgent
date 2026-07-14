@@ -3080,6 +3080,78 @@ async def lite_smart_pool_task_status(task_id: str):
     return {"success": True, "data": task, "message": "ok"}
 
 
+# ---- 形态扫描：后台任务化 ----
+# 全市场形态扫描要 90 秒。同步返回意味着：① 用户对着转圈干等 ② 任何反向代理都会把它
+# 掐断（Vercel 边缘约 30s、Cloudflare 100s——90s 是压着线过的）。改成「起任务 + 轮询」，
+# 与智能选股同一套模式，代理只看到几十毫秒的短请求。
+lite_pattern_pool_tasks: dict[str, dict[str, Any]] = {}
+
+
+def _pattern_task_cleanup(keep: int = 12) -> None:
+    finished = [(t.get("finished_at") or "", tid) for tid, t in lite_pattern_pool_tasks.items()
+                if t.get("status") in ("completed", "failed")]
+    for _, tid in sorted(finished)[:-keep] if len(finished) > keep else []:
+        lite_pattern_pool_tasks.pop(tid, None)
+
+
+async def _run_lite_pattern_pool_task(task_id: str, limit: int, universe_limit: int,
+                                      min_strength: float, exclude_fundamental: bool) -> None:
+    task = lite_pattern_pool_tasks[task_id]
+    try:
+        task.update({"status": "running", "progress": 5, "phase": "scan",
+                     "message": "全市场形态扫描中（约 1-2 分钟）"})
+        result = await run_scan(lite_quant_engine.pattern_pool, limit, universe_limit,
+                                min_strength, exclude_fundamental)
+        items = result.get("items") if isinstance(result, dict) else None
+        if items:
+            try:
+                from quantcore.quant import industry as _industry
+                await asyncio.to_thread(_industry.enrich_industries, items)
+            except Exception:
+                pass
+        task.update({"status": "completed", "progress": 100, "phase": "completed",
+                     "message": "形态扫描完成", "result": result,
+                     "finished_at": datetime.now().astimezone().isoformat()})
+    except Exception as exc:  # noqa: BLE001
+        task.update({"status": "failed", "progress": 100, "phase": "failed",
+                     "message": f"形态扫描失败：{exc}", "error": str(exc),
+                     "finished_at": datetime.now().astimezone().isoformat()})
+
+
+@app.post("/api/lite/pattern-pool/tasks")
+async def start_lite_pattern_pool_task(limit: int = 20, universe_limit: int = 5000,
+                                       min_strength: float = 70.0, exclude_fundamental: bool = True):
+    safe_limit = max(5, min(limit, 50))
+    safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
+    # 连点去重：同参数任务在跑就复用，避免堆叠多个全市场扫描
+    for existing in lite_pattern_pool_tasks.values():
+        if (existing.get("status") in ("queued", "running")
+                and existing.get("limit") == safe_limit
+                and existing.get("universe_limit") == safe_universe
+                and existing.get("min_strength") == min_strength):
+            return {"success": True, "data": existing, "message": "reused"}
+    _pattern_task_cleanup()
+    task_id = "pattern_" + secrets.token_hex(8)
+    now = datetime.now().astimezone().isoformat()
+    lite_pattern_pool_tasks[task_id] = {
+        "task_id": task_id, "status": "queued", "progress": 1, "phase": "queued",
+        "message": "后台形态扫描任务已创建",
+        "limit": safe_limit, "universe_limit": safe_universe, "min_strength": min_strength,
+        "created_at": now, "updated_at": now,
+    }
+    asyncio.create_task(_run_lite_pattern_pool_task(
+        task_id, safe_limit, safe_universe, min_strength, exclude_fundamental))
+    return {"success": True, "data": lite_pattern_pool_tasks[task_id], "message": "started"}
+
+
+@app.get("/api/lite/pattern-pool/tasks/{task_id}")
+async def lite_pattern_pool_task_status(task_id: str):
+    task = lite_pattern_pool_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="形态扫描任务不存在或已过期")
+    return {"success": True, "data": task, "message": "ok"}
+
+
 @app.get("/api/lite/sector-leaders")
 async def lite_sector_leaders():
     """个股深研「按赛道浏览龙头股」：策划赛道 + 龙头实时行情，点击即进深研报告。"""

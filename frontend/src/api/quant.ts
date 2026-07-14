@@ -135,6 +135,21 @@ export interface QuantPatternPoolResult {
   scanned?: number
 }
 
+export interface QuantPatternPoolTask {
+  task_id: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  progress: number
+  phase: string
+  message: string
+  limit: number
+  universe_limit: number
+  created_at?: string
+  updated_at?: string
+  finished_at?: string
+  error?: string
+  result?: QuantPatternPoolResult
+}
+
 export interface QuantDataHealth {
   status: string
   ready: boolean
@@ -313,6 +328,34 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
   }
 }
 
+const normalizePatternPoolResult = (raw: any): QuantPatternPoolResult => {
+  const items = (raw?.items || []).map((item: any) => ({
+    ...item,
+    symbol: item.symbol || item.code,
+    code: item.code || item.symbol,
+    score: Number(item.score ?? item.quant_score ?? item.pattern_score ?? 0),
+    quant_score: Number(item.quant_score ?? item.score ?? item.pattern_score ?? 0),
+    pattern_score: Number(item.pattern_score ?? item.score ?? 0),
+    market: item.market || 'A股',
+    industry: item.industry || item.board || '',
+    board: item.board || item.industry || '',
+    patterns: item.patterns || item.matched_patterns || [],
+    matched_patterns: item.matched_patterns || item.patterns || [],
+  }))
+  return {
+    source: raw?.source || 'pre-lift-pattern-pool',
+    universe_size: raw?.universe_size || items.length,
+    analyzed: raw?.analyzed || raw?.universe_size || items.length,
+    matched: raw?.matched || items.length,
+    items,
+    errors: raw?.errors || {},
+    pattern_model: raw?.pattern_model || [],
+    excluded: raw?.excluded,
+    excluded_reasons: raw?.excluded_reasons,
+    scanned: raw?.scanned,
+  }
+}
+
 export const quantApi = {
   capabilities: async () =>
     unwrap<QuantCapabilitiesResult>(await ApiClient.get('/api/quant/capabilities', undefined, { timeout: 60000 })),
@@ -334,6 +377,24 @@ export const quantApi = {
       task.result = normalizeSmartPoolResult(unwrap<any>(task.result))
     }
     return task as QuantSmartPoolTask
+  },
+
+  // 形态扫描：后台任务 + 轮询（全市场约 90 秒，同步请求会被反向代理掐断，也会让用户干等）
+  startPatternPoolTask: async (limit = 20, universeLimit = 5000, minStrength = 70, excludeFundamental = true) =>
+    unwrap<QuantPatternPoolTask>(await ApiClient.post('/api/lite/pattern-pool/tasks', undefined, {
+      params: {
+        limit, universe_limit: universeLimit, min_strength: minStrength,
+        exclude_fundamental: excludeFundamental, _ts: nonce(),
+      },
+      timeout: 15000,
+    })),
+
+  patternPoolTask: async (taskId: string) => {
+    const task = unwrap<any>(await ApiClient.get(`/api/lite/pattern-pool/tasks/${taskId}`, { _ts: nonce() }, { timeout: 15000 }))
+    if (task?.result) {
+      task.result = normalizePatternPoolResult(unwrap<any>(task.result))
+    }
+    return task as QuantPatternPoolTask
   },
 
   patternPool: async (limit = 20, universeLimit = 500, minStrength = 70, excludeFundamental = true) => {

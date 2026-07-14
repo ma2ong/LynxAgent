@@ -1108,6 +1108,7 @@ onMounted(async () => {
 onUnmounted(() => {
   if (syncTimer) window.clearTimeout(syncTimer)
   stopSmartTaskPolling()
+  stopPatternPolling()
   stopSmartProgress()
   Object.values(panelTimers).forEach(t => window.clearTimeout(t))
 })
@@ -1251,27 +1252,63 @@ const formatScore = (value?: number | null) => Number(value ?? 0).toFixed(1)
 
 const displayScore = (row: QuantSmartPoolItem) => formatScore(row.quant_score ?? row.score)
 
+// 形态扫描走后台任务 + 轮询：全市场约 90 秒，同步请求会被反向代理掐断（Vercel 边缘约
+// 30s、Cloudflare 100s），也会让用户对着转圈干等。与「一键智能推荐」同一套模式。
+let patternPollTimer = 0
+
+const stopPatternPolling = () => {
+    window.clearInterval(patternPollTimer)
+    patternPollTimer = 0
+}
+
+const pollPatternPoolTask = (taskId: string) => {
+    stopPatternPolling()
+    patternPollTimer = window.setInterval(async () => {
+        try {
+            const task = await quantApi.patternPoolTask(taskId)
+            if (task.status === 'completed') {
+                stopPatternPolling()
+                patternPoolResult.value = task.result || null
+                selectedPatternRows.value = []
+                loadPanelScores('pattern')
+                stopSmartProgress()
+                patternPoolLoading.value = false
+            } else if (task.status === 'failed') {
+                stopPatternPolling()
+                ElMessage.error(task.error || task.message || '形态扫描失败，请重试')
+                patternPoolResult.value = null
+                stopSmartProgress()
+                patternPoolLoading.value = false
+            }
+        } catch { /* 轮询失败下一轮重试；任务仍在后台跑 */ }
+    }, 3000)
+}
+
 const loadPatternPool = async () => {
     patternPoolLoading.value = true
     smartPoolTask.value = null
+    patternPoolResult.value = null
     startSmartProgress()
     try {
-        if (!(await ensureDataBeforeScan())) return
-        patternPoolResult.value = await quantApi.patternPool(
+        if (!(await ensureDataBeforeScan())) {
+            stopSmartProgress()
+            patternPoolLoading.value = false
+            return
+        }
+        const task = await quantApi.startPatternPoolTask(
             patternPoolForm.value.limit,
             patternPoolForm.value.universe_limit,
-            patternPoolForm.value.min_strength
+            patternPoolForm.value.min_strength,
         )
-        selectedPatternRows.value = []
-        loadPanelScores('pattern')
+        ElMessage.success('形态扫描已转入后台任务，完成后自动展示结果')
+        pollPatternPoolTask(task.task_id)
     } catch (error: any) {
-        ElMessage.error(error?.message || '形态扫描失败，请重试')
-        patternPoolResult.value = null
-    } finally {
         stopSmartProgress()
         patternPoolLoading.value = false
+        ElMessage.error(error?.message || '启动形态扫描失败')
+        patternPoolResult.value = null
     }
-    }
+}
 
 const handlePatternSelectionChange = (rows: QuantPatternPoolItem[]) => {
   selectedPatternRows.value = rows

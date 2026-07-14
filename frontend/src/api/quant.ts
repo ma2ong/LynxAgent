@@ -397,40 +397,6 @@ export const quantApi = {
     return task as QuantPatternPoolTask
   },
 
-  patternPool: async (limit = 20, universeLimit = 500, minStrength = 70, excludeFundamental = true) => {
-    const raw = unwrap<any>(await ApiClient.get('/api/quant/pattern-pool', {
-      limit,
-      universe_limit: universeLimit,
-      min_strength: minStrength,
-      exclude_fundamental: excludeFundamental,
-      _ts: nonce()
-    }, { timeout: 300000 }))
-    const items = (raw.items || []).map((item: any) => ({
-      ...item,
-      symbol: item.symbol || item.code,
-      code: item.code || item.symbol,
-      score: Number(item.score ?? item.quant_score ?? item.pattern_score ?? 0),
-      quant_score: Number(item.quant_score ?? item.score ?? item.pattern_score ?? 0),
-      pattern_score: Number(item.pattern_score ?? item.score ?? 0),
-      market: item.market || 'A股',
-      industry: item.industry || item.board || '',
-      board: item.board || item.industry || '',
-      patterns: item.patterns || item.matched_patterns || [],
-      matched_patterns: item.matched_patterns || item.patterns || []
-    }))
-    return {
-      source: raw.source || 'pre-lift-pattern-pool',
-      universe_size: raw.universe_size || items.length,
-      analyzed: raw.analyzed || raw.universe_size || items.length,
-      matched: raw.matched || items.length,
-      items,
-      errors: raw.errors || {},
-      pattern_model: raw.pattern_model || [],
-      excluded: raw.excluded,
-      excluded_reasons: raw.excluded_reasons,
-      scanned: raw.scanned
-    } as QuantPatternPoolResult
-  },
 
   analyze: async (payload: { symbol: string; start_date?: string; end_date?: string }) =>
     unwrap<QuantAnalysisResult>(await ApiClient.post('/api/quant/analyze', payload, { timeout: 120000 })),

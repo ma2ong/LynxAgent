@@ -14,6 +14,9 @@
       </div>
     </div>
 
+    <el-alert v-if="staleNotice" type="warning" :closable="false" show-icon
+              :title="staleNotice" />
+
     <el-alert v-if="report && !report.llm" type="info" :closable="false" show-icon
               title="当前为纯数据版盘报（未配置 LLM 密钥），配置后可获得 AI 解读。" />
 
@@ -42,6 +45,22 @@ const generating = ref(false)
 
 const datesForKind = computed(() =>
   [...new Set(available.value.filter(d => d.kind === kind.value).map(d => d.date))])
+
+// 陈旧提示：盘报缺失时接口会退回「最近一篇」，页面若不说破，用户会把 4 天前的
+// 「盘前看点」当成今天的（实测 07-13 整天、07-10 收盘版都缺过）。
+const todayStr = new Date().toLocaleDateString('sv-SE') // YYYY-MM-DD（本地时区）
+const staleNotice = computed(() => {
+  const r = report.value
+  if (!r?.date || r.date === todayStr) return ''
+  const isTradingHourPassed = kind.value === 'premarket'
+    ? new Date().getHours() * 60 + new Date().getMinutes() >= 9 * 60 + 26
+    : new Date().getHours() * 60 + new Date().getMinutes() >= 15 * 60 + 35
+  const label = kind.value === 'premarket' ? '盘前看点' : '收盘复盘'
+  if (!isTradingHourPassed) {
+    return `以下是 ${r.date} 的${label}存档。今日${label}将在${kind.value === 'premarket' ? ' 9:26 竞价结束后' : ' 15:35 收盘后'}自动生成。`
+  }
+  return `⚠ 今日（${todayStr}）的${label}尚未生成，以下是 ${r.date} 的存档，不代表今日行情。可点「立即生成」补出今日版本（非交易日无需生成）。`
+})
 
 let loadSeq = 0 // 快速切 tab/日期时，只让最后一次请求的结果落地
 

@@ -51,6 +51,20 @@ def _stub_facts(monkeypatch, store):
     monkeypatch.setattr(report_daily, "get_local_store", lambda: store)
 
 
+def test_reports_due_windows():
+    """盘报追补窗口：后端错过 cron 时刻（重启/崩溃）也要补出报告，但不能拿盘中数据
+    伪造一篇「盘前看点」。实测缺失：07-13 整天、07-10 收盘版。"""
+    from app.lite_main import reports_due_at
+
+    assert reports_due_at("09:00") == []                    # 竞价未结束，还没得生成
+    assert reports_due_at("09:26") == ["premarket"]         # cron 时刻
+    assert reports_due_at("09:40") == ["premarket"]         # 后端晚起也能补
+    assert reports_due_at("12:00") == []                    # 中午补「盘前看点」= 造假，不补
+    assert reports_due_at("15:00") == []                    # 未收盘，收盘复盘还不成立
+    assert reports_due_at("15:35") == ["close"]             # cron 时刻
+    assert reports_due_at("22:00") == ["close"]             # 收盘后快照仍是收盘价，可补
+
+
 def test_generate_close_report_without_llm(monkeypatch, store):
     _stub_facts(monkeypatch, store)
     monkeypatch.setattr(report_daily.llm, "chat_json", lambda *a, **k: None)

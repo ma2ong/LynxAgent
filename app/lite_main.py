@@ -206,6 +206,30 @@ async def _start_ml_factor_scheduler() -> None:
         replace_existing=True, misfire_grace_time=300,
     )
 
+    # 盘报追补：后端若在 9:26 / 15:35 那一刻没跑（重启、崩溃、机器休眠），cron 不会补发，
+    # 那天的盘报就永远缺失（实测 07-13 整天、07-10 收盘版都缺）。每 10 分钟检查一次：
+    # 缺了就在「数据仍然成立」的窗口内补生成——盘前只在早盘窗口补（中午拿盘中数据生成
+    # 「盘前看点」是造假），收盘版收盘后到当日结束都可补（快照即收盘价）。
+    async def _job_reports_catchup() -> None:
+        try:
+            if not await _is_trading_day_now():
+                return
+            from quantcore.quant.local_store import get_local_store
+            store_c = get_local_store()
+            today = datetime.now().strftime("%Y-%m-%d")
+            for kind in reports_due_at(datetime.now().strftime("%H:%M")):
+                if await asyncio.to_thread(store_c.load_daily_report, today, kind) is None:
+                    await _generate_daily_report(kind)
+        except Exception as exc:  # noqa: BLE001
+            import warnings
+            warnings.warn(f"reports catchup failed: {exc}", RuntimeWarning, stacklevel=1)
+
+    _ml_factor_scheduler.add_job(
+        _job_reports_catchup, "interval", minutes=10,
+        id="reports_catchup", name="每日盘报缺失追补",
+        replace_existing=True, misfire_grace_time=300,
+    )
+
     # 信号统计预热：收盘结算后重算各池 signal-stats 缓存（冷算约 20s/池），
     # 用户点开理由卡「历史表现」时直接命中缓存秒开。
     async def _job_signal_stats_preheat() -> None:
@@ -3665,6 +3689,22 @@ async def _is_trading_day_now() -> bool:
     if not quote_dates:
         return True
     return datetime.now().strftime("%Y-%m-%d") in quote_dates
+
+
+def reports_due_at(now_hm: str) -> list[str]:
+    """当前时刻可以「诚实补生成」的盘报种类（now_hm = "HH:MM"）。
+
+    两种盘报都用调用当时的实时数据组装，所以补生成有效性窗口不同：
+    - premarket：内容是竞价推导的盘前看点，只有早盘窗口内的数据还成立；
+      中午拿盘中数据生成一篇「盘前看点」等于造假，宁可缺失并在页面标注。
+    - close：收盘后快照即当日收盘价，当天任何时候补都成立。
+    """
+    kinds: list[str] = []
+    if "09:26" <= now_hm <= "09:45":
+        kinds.append("premarket")
+    if now_hm >= "15:35":
+        kinds.append("close")
+    return kinds
 
 
 async def _generate_daily_report(kind: str) -> dict[str, Any]:

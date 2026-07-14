@@ -241,6 +241,7 @@ const POOL_LABELS: Record<string, string> = {
   auction: '竞价优选',
   // 换评分公式必须换池名：旧公式的战绩不能挂在新公式名下（2026-07-14 v2→v3）
   smart_v2: '智能推荐 v2（已退役）',
+  smart_fac: '因子实验（已转正为 v3）',
 }
 const poolLabel = (key: string) => POOL_LABELS[key] || key
 

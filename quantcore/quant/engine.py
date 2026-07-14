@@ -469,6 +469,8 @@ class QuantEngine:
             it["trade_plan"] = trade_plan(_safe_float(it.get("close"), 0), atr)
 
         # 留痕当日推荐（首次快照），供复盘页统计真实 T+N 胜率。
+        # 池名与评分公式绑定：改公式必须改池名（v2 追涨公式的留痕已迁到 smart_v2），
+        # 否则新公式会继承旧公式的战绩，复盘胜率失去意义。
         try:
             get_local_store().record_picks("smart", final_items)
         except Exception:

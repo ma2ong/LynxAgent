@@ -75,7 +75,7 @@ defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
 
 const FACTOR_LABELS: Record<string, string> = {
   trend: '趋势', momentum: '动量', rsi: 'RSI', risk_control: '风控',
-  liquidity: '流动性', anti_chase: '反追涨', macd: 'MACD', bollinger: '布林位置', capital_flow: '资金流',
+  liquidity: '流动性', macd: 'MACD', bollinger: '布林位置', capital_flow: '资金流',
 }
 
 const title = computed(() => (props.row ? `为什么入选：${props.row.name || ''} ${props.row.symbol || ''}` : '为什么入选'))

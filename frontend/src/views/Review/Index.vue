@@ -183,8 +183,9 @@
           </el-table-column>
         </el-table>
         <p class="foot-note replay-note">
-          回放口径：pattern 池形态/因子严格 point-in-time；smart 池实时行情输入用日线近似重建（量比≈当日量/前5日均量，换手率缺失），
-          critic 融合层跳过；排除规则使用当前股票名称。近似口径下结果偏乐观/悲观的方向不定，主要看趋势与月度稳定性。
+          回放口径：pattern 与 smart 两池的评分函数与线上选股完全同源（严格 point-in-time，无近似重建）；
+          排除规则使用当前股票名称（历史 ST 状态无法还原），回放宇宙不含期间退市股（存活偏差方向为高估）。
+          回放统计信号层收益、不计换手成本；实盘成本以模拟组合为准。
         </p>
       </template>
       <el-empty v-else-if="!replayRunning" description="还没有回放结果。点「重跑回放」用本地历史日线验证选股规则的真实超额表现。" :image-size="80" />
@@ -238,7 +239,8 @@ const POOL_LABELS: Record<string, string> = {
   smart: '智能推荐',
   swing: '短线波段',
   auction: '竞价优选',
-  smart_fac: '因子实验（A/B）',
+  // 换评分公式必须换池名：旧公式的战绩不能挂在新公式名下（2026-07-14 v2→v3）
+  smart_v2: '智能推荐 v2（已退役）',
 }
 const poolLabel = (key: string) => POOL_LABELS[key] || key
 

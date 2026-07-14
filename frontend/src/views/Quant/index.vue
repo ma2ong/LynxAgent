@@ -1067,14 +1067,22 @@ const loadColdEvidence = async () => {
   try {
     const rep = await quantApi.replayResults()
     const parts: string[] = []
+    let bestCold: { label: string; avg: number } | null = null
     for (const p of rep?.pools || []) {
       const cold = (p.regimes || []).find((r) => r.regime === '偏冷')
       if (cold) {
         const label = p.pool === 'pattern' ? '形态池' : p.pool === 'smart' ? '智能池' : p.pool
         parts.push(`${label} ${cold.avg_excess > 0 ? '+' : ''}${cold.avg_excess}pp（中位 ${cold.median_excess}pp，${cold.picks} 样本）`)
+        if (!bestCold || cold.avg_excess > bestCold.avg) bestCold = { label, avg: cold.avg_excess }
       }
     }
-    if (parts.length) coldEvidence.value = `历史回放偏冷期 T+5 超额：${parts.join('；')}——建议轻仓或只跟不买。`
+    if (!parts.length) return
+    // 建议必须跟着数据走：v3 结构因子池在偏冷期仍有正超额，一律劝「停跟」就是在撒谎。
+    // 阈值 +0.5pp：低于此视为贴零（扣掉双边交易成本后不剩什么）。
+    const advice = bestCold && bestCold.avg >= 0.5
+      ? `——弱市里${bestCold.label}历史上仍有正超额，但仓位仍应克制；其余池贴零或为负，优先只跟${bestCold.label}。`
+      : '——各池弱市均无有效超额，建议轻仓或观望。'
+    coldEvidence.value = `历史回放偏冷期 T+5 超额：${parts.join('；')}${advice}`
   } catch { /* 无回放结果时不展示 */ }
 }
 

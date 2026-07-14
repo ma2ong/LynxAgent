@@ -709,24 +709,6 @@ export interface DailyReport {
   sections: DailyReportSection[]
 }
 
-export const reportsApi = {
-  latest: async (kind: 'premarket' | 'close') => {
-    const raw = await ApiClient.get<any>('/api/lite/reports/latest', { kind })
-    return (raw as any)?.data as DailyReport | null
-  },
-  byDate: async (date: string, kind: 'premarket' | 'close') => {
-    const raw = await ApiClient.get<any>('/api/lite/reports', { date, kind })
-    return (raw as any)?.data as DailyReport | null
-  },
-  available: async () => {
-    const raw = await ApiClient.get<any>('/api/lite/reports')
-    return ((raw as any)?.data?.available ?? []) as { date: string; kind: string }[]
-  },
-  generate: async (kind: 'premarket' | 'close') => {
-    const raw = await ApiClient.post<any>(`/api/lite/reports/generate?kind=${kind}`, undefined, { timeout: 180000 })
-    return (raw as any)?.data as DailyReport | null
-  },
-}
 
 export interface PanelVerdict {
   persona: string
@@ -817,20 +799,6 @@ export interface ArenaTrade {
   reason: string
 }
 
-export const arenaApi = {
-  board: async () => {
-    const raw = await ApiClient.get<any>('/api/lite/arena')
-    return (raw as any)?.data as { board: ArenaBoardRow[]; series: Record<string, ArenaNavPoint[]> } | null
-  },
-  detail: async (persona: string) => {
-    const raw = await ApiClient.get<any>('/api/lite/arena/detail', { persona })
-    return (raw as any)?.data as { persona: string; cash: number; positions: ArenaPosition[]; trades: ArenaTrade[] } | null
-  },
-  run: async () => {
-    const raw = await ApiClient.post<any>('/api/lite/arena/run', undefined, { timeout: 180000 })
-    return (raw as any)?.data
-  },
-}
 
 export interface PortfolioSignal { key: string; label: string; detail: string }
 
@@ -873,32 +841,6 @@ export interface PortfolioNavPoint {
   bench_cum_pct: number
 }
 
-export const portfolioApi = {
-  list: async () => {
-    const raw = await ApiClient.get<any>('/api/lite/portfolio', { _ts: nonce() })
-    return (raw as any)?.data as { open: PortfolioPosition[]; closed: PortfolioPosition[]; summary: PortfolioSummary } | null
-  },
-  add: async (payload: { symbol: string; name?: string; source?: string; budget?: number }) => {
-    const raw = await ApiClient.post<any>('/api/lite/portfolio/add', payload, { timeout: 30000 })
-    return (raw as any)?.data
-  },
-  addBatch: async (payload: {
-    items: { symbol: string; name?: string; price?: number }[]
-    budget_per_stock?: number
-    source?: string
-  }) => {
-    const raw = await ApiClient.post<any>('/api/lite/portfolio/add-batch', payload, { timeout: 60000 })
-    return (raw as any)?.data as { added: number; skipped: number; results: { symbol: string; name: string; ok: boolean; reason?: string }[] } | null
-  },
-  sell: async (id: number, reason = 'manual') => {
-    const raw = await ApiClient.post<any>('/api/lite/portfolio/sell', { id, reason }, { timeout: 30000 })
-    return (raw as any)?.data
-  },
-  nav: async () => {
-    const raw = await ApiClient.get<any>('/api/lite/portfolio/nav', { _ts: nonce() })
-    return (raw as any)?.data as PortfolioNavPoint[] | null
-  },
-}
 
 export interface SmartSeatRow {
   seat: string
@@ -928,17 +870,3 @@ export interface FundHoldRow {
   change_pct: number
 }
 
-export const smartMoneyApi = {
-  seats: async (days = 30) => {
-    const raw = await ApiClient.get<any>('/api/quant/smart-money/seats', { days }, { timeout: 60000 })
-    return raw as { empty: boolean; message?: string; rows: SmartSeatRow[] }
-  },
-  winrate: async () => {
-    const raw = await ApiClient.get<any>('/api/quant/smart-money/seat-winrate', undefined, { timeout: 60000 })
-    return raw as { empty: boolean; message?: string; rows: SeatWinrateRow[] }
-  },
-  fund: async () => {
-    const raw = await ApiClient.get<any>('/api/quant/smart-money/fund-consensus', undefined, { timeout: 60000 })
-    return raw as { empty: boolean; message?: string; quarter?: string; rows: FundHoldRow[] }
-  },
-}

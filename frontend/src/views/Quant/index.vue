@@ -126,9 +126,6 @@
                 <el-button size="small" type="success" plain @click="addAllSmartToFavorites">
                   一键全选加入自选
                 </el-button>
-                <el-button size="small" type="warning" plain @click="addPoolToPortfolio(smartPoolResult.items, 'smart')">
-                  整池加入组合
-                </el-button>
               </div>
             </div>
             <el-alert
@@ -206,7 +203,6 @@
                   <el-button type="primary" link size="small" @click="addOneToFavorites(row)">加入自选</el-button>
                   <el-button link type="primary" size="small" @click="openChart(row)">看图</el-button>
                   <el-button link type="primary" size="small" @click="openWhy(row, 'smart')">理由</el-button>
-                  <el-button link type="warning" size="small" @click="addToPortfolio(row, 'smart')">+组合</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -314,9 +310,6 @@
                 <el-button size="small" type="success" plain @click="addAllPatternsToFavorites">
                   一键全选加入自选
                 </el-button>
-                <el-button size="small" type="warning" plain @click="addPoolToPortfolio(patternPoolResult.items, 'pattern')">
-                  整池加入组合
-                </el-button>
               </div>
             </div>
             <el-table
@@ -393,7 +386,6 @@
                   <el-button type="primary" link size="small" @click="addOneToFavorites(row)">加入自选</el-button>
                   <el-button link type="primary" size="small" @click="openChart(row)">看图</el-button>
                   <el-button link type="primary" size="small" @click="openWhy(row, 'pattern')">理由</el-button>
-                  <el-button link type="warning" size="small" @click="addToPortfolio(row, 'pattern')">+组合</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -754,7 +746,7 @@ import {
   type QuantStockPoolResult,
   type MarketContext
 } from '@/api/quant'
-import { panelApi, portfolioApi, type PanelScore } from '@/api/quant'
+import { panelApi, type PanelScore } from '@/api/quant'
 
 const route = useRoute()
 const routeInitialTab = () => String(route.meta.initialTab || route.query.tab || 'screen')
@@ -783,53 +775,6 @@ const openWhy = (row: any, pool: 'smart' | 'pattern') => {
   whyVisible.value = true
 }
 
-const addToPortfolio = async (row: any, source: 'smart' | 'pattern') => {
-  try {
-    const pos = await portfolioApi.add({ symbol: row.symbol, name: row.name, source })
-    ElMessage.success(`已加入模拟组合：${row.name} ${pos?.shares || ''}股，可到「模拟组合」页跟踪`)
-  } catch (e: any) {
-    ElMessage.warning(e?.message || '加入组合失败')
-  }
-}
-
-// 整池等权加入：回放数据表明超额只在组合层面成立（均值靠右尾、单票中位为负），
-// 跟池必须整池买、不能只挑一两只——把这个结论变成一键动作。
-const POOL_BUDGET = 10000
-const addPoolToPortfolio = async (items: any[], source: 'smart' | 'pattern') => {
-  const rows = (items || []).filter((r) => r?.symbol)
-  if (!rows.length) return
-  const limitUps = rows.filter((r) => r.limit_up).length
-  try {
-    await ElMessageBox.confirm(
-      `将把当前 ${rows.length} 只候选按每票 ¥${POOL_BUDGET.toLocaleString()} 预算整手买入模拟组合` +
-      `（预计动用约 ¥${(rows.length * POOL_BUDGET).toLocaleString()}，含 A 股交易成本）。` +
-      '历史回放显示该池收益依赖整池分散，单票胜率约五成——建议整池跟踪而非单票押注。' +
-      (limitUps
-        ? `注意：其中 ${limitUps} 只当前已涨停，模拟组合按现价成交，实盘只能次日开盘入场、成本更高。`
-        : '') +
-      '确认加入？',
-      '整池加入模拟组合',
-      { confirmButtonText: '整池买入', cancelButtonText: '取消', type: 'warning' },
-    )
-  } catch { return }
-  try {
-    const res = await portfolioApi.addBatch({
-      items: rows.map((r) => ({ symbol: r.symbol, name: r.name, price: Number(r.close) || undefined })),
-      budget_per_stock: POOL_BUDGET,
-      source,
-    })
-    if (!res) throw new Error('无返回')
-    const skippedReasons = res.results.filter((r) => !r.ok).slice(0, 3)
-      .map((r) => `${r.name}(${r.reason})`).join('、')
-    if (res.skipped > 0) {
-      ElMessage.warning(`已买入 ${res.added} 只，跳过 ${res.skipped} 只：${skippedReasons}${res.skipped > 3 ? ' 等' : ''}`)
-    } else {
-      ElMessage.success(`已整池买入 ${res.added} 只，可到「模拟组合」页跟踪盈亏与卖出信号`)
-    }
-  } catch (e: any) {
-    ElMessage.warning(e?.message || '整池加入失败')
-  }
-}
 const healthLoading = ref(false)
 
 const analysisForm = ref({ symbol: '600519' })

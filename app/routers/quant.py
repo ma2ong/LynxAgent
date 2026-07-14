@@ -23,11 +23,6 @@ from quantcore.quant.dragon_tiger import dragon_tiger_list, dragon_tiger_seats
 from quantcore.quant.calendar_events import financial_calendar
 from quantcore.quant.investor_panel import investor_panel, run_panel_batch
 from quantcore.quant.red_flags import red_flag_scan
-from quantcore.quant.weighted_sentiment import (
-    stock_sentiment,
-    market_weighted_sentiment,
-    sector_weighted_sentiment_rank,
-)
 
 
 router = APIRouter(prefix="/api/quant", tags=["quant"])
@@ -434,22 +429,6 @@ async def dragon_tiger_seat_detail(symbol: str, date: str = ""):
 
 
 # ---- 聪明钱：活跃席位 / 席位胜率 / 基金重仓（akshare，6h 缓存，不计费）----
-@router.get("/smart-money/seats")
-async def quant_smart_money_seats(days: int = 30):
-    from quantcore.quant.smart_money import active_seats
-    return await asyncio.to_thread(active_seats, max(7, min(days, 90)))
-
-
-@router.get("/smart-money/seat-winrate")
-async def quant_smart_money_winrate():
-    from quantcore.quant.smart_money import seat_winrate
-    return await asyncio.to_thread(seat_winrate)
-
-
-@router.get("/smart-money/fund-consensus")
-async def quant_smart_money_fund():
-    from quantcore.quant.smart_money import fund_consensus
-    return await asyncio.to_thread(fund_consensus)
 
 
 @router.get("/calendar")
@@ -501,16 +480,4 @@ async def quant_red_flags(symbol: str, user: dict = require_quota("red_flags")):
 
 
 # ---- 加权情绪：个股 / 大盘 / 板块（纯本地，无 LLM，不计费）----
-@router.get("/stock/sentiment")
-async def quant_stock_sentiment(symbol: str):
-    return await asyncio.to_thread(stock_sentiment, symbol)
 
-
-@router.get("/market/weighted-sentiment")
-async def quant_market_weighted_sentiment():
-    return await asyncio.to_thread(market_weighted_sentiment)
-
-
-@router.get("/sector/sentiment-rank")
-async def quant_sector_sentiment_rank(limit: int = 20):
-    return await asyncio.to_thread(sector_weighted_sentiment_rank, limit)

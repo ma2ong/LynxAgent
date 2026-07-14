@@ -26,23 +26,17 @@
       >
         <el-menu-item-group title="看盘">
           <el-menu-item index="/today"><el-icon><Calendar /></el-icon><span>今日</span></el-menu-item>
-          <el-menu-item index="/reports"><el-icon><Notebook /></el-icon><span>每日盘报</span></el-menu-item>
-          <el-menu-item index="/market/sentiment"><el-icon><Odometer /></el-icon><span>市场雷达</span></el-menu-item>
           <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
           <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
           <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
-          <el-menu-item index="/smart-money"><el-icon><Wallet /></el-icon><span>聪明钱</span></el-menu-item>
           <el-menu-item index="/insights/capital"><el-icon><Coin /></el-icon><span>资金面板</span></el-menu-item>
-          <el-menu-item index="/insights/kol"><el-icon><Bell /></el-icon><span>KOL日报</span></el-menu-item>
         </el-menu-item-group>
         <el-menu-item-group title="选股">
           <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
           <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
-          <el-menu-item index="/arena"><el-icon><Trophy /></el-icon><span>AI擂台</span></el-menu-item>
         </el-menu-item-group>
         <el-menu-item-group title="验证与跟踪">
           <el-menu-item index="/review"><el-icon><DataAnalysis /></el-icon><span>选股复盘</span></el-menu-item>
-          <el-menu-item index="/portfolio"><el-icon><Briefcase /></el-icon><span>模拟组合</span></el-menu-item>
           <el-menu-item index="/favorites"><el-icon><Star /></el-icon><span>我的自选股</span></el-menu-item>
         </el-menu-item-group>
         <el-menu-item-group title="系统">
@@ -71,9 +65,9 @@
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  Odometer, TrendCharts, Star, SwitchButton,
+  TrendCharts, Star, SwitchButton,
   DocumentChecked, Coin, Calendar, Menu,
-  Bell, MagicStick, Medal, Setting, DataLine, Sunrise, DataAnalysis, Notebook, Histogram, Trophy, Wallet, Briefcase,
+  MagicStick, Medal, Setting, DataLine, Sunrise, DataAnalysis, Histogram,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'

@@ -22,10 +22,10 @@
         <el-button text @click="dismissOnboarding">收起</el-button>
       </div>
       <div class="onboarding-steps">
-        <button @click="router.push('/market/sentiment')">
+        <button @click="router.push('/quant')">
           <b>1</b>
-          <span>看市场温度</span>
-          <small>先判断今天适合进攻还是观察。</small>
+          <span>跑一次智能选股</span>
+          <small>全市场结构因子评分，选出当前候选池。</small>
         </button>
         <button @click="router.push('/favorites')">
           <b>2</b>

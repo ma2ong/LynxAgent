@@ -57,6 +57,25 @@ def _json_safe(value):
     return value
 
 
+def board_limit_pct(symbol: str) -> float:
+    """日涨跌幅上限：科创688/689、创业300/301 = 20%；北交 8/4/920 = 30%；主板 = 10%。"""
+    sym = str(symbol or "")
+    if sym.startswith(("688", "689", "300", "301")):
+        return 20.0
+    if sym.startswith(("8", "4", "920")):
+        return 30.0
+    return 10.0
+
+
+def is_limit_up(symbol: str, pct_chg: float) -> bool:
+    """当前是否封在涨停（含接近涨停）。
+
+    回放数据：形态池 42.6% 的入选票入选当日已涨停——按展示的收盘价根本买不到。
+    标注出来，用户才知道这些票要按次日开盘价入场（历史上超额仍在，但会缩水）。
+    """
+    return _safe_float(pct_chg, 0) >= board_limit_pct(symbol) * 0.98
+
+
 # 历史 K 线按 (symbol, 天数, 当日) 缓存，让形态扫描的重复运行秒级返回（冷启动仍需逐只抓取）
 _HIST_CACHE: Dict[str, Tuple[str, "pd.DataFrame"]] = {}
 
@@ -222,6 +241,7 @@ def _pattern_scan_one(payload: Dict[str, object]) -> Optional[Dict[str, object]]
             "signal": signal_from_score(score), "close": price, "pct_chg": pct_chg, "amount": amount,
             "factors": factors, "risk": risk, "patterns": matched, "matched_patterns": matched,
             "wyckoff": wyckoff,
+            "limit_up": is_limit_up(symbol, pct_chg),
             "trade_plan": trade_plan(price, latest_atr(data)),
             "reasons": list(dict.fromkeys(reasons))[:8],
         }
@@ -387,6 +407,7 @@ class QuantEngine:
                 "close": close_price,
                 "pct_chg": _safe_float(quote.get("pct_chg"), 0),
                 "amount": rt_amount or float(scored["amount_local"] or 0),
+                "limit_up": is_limit_up(symbol, _safe_float(quote.get("pct_chg"), 0)),
                 "factors": factors,
                 "risk": {"volatility": 0, "max_drawdown": 0, "sharpe": 0},
                 "forecast": {
@@ -631,6 +652,7 @@ class QuantEngine:
                 "signal": signal_from_score(score), "close": price, "pct_chg": pct_chg, "amount": amount,
                 "factors": factors, "risk": risk, "patterns": matched, "matched_patterns": matched,
                 "wyckoff": wyckoff,
+                "limit_up": is_limit_up(symbol, pct_chg),
                 "trade_plan": trade_plan(price, latest_atr(data)),
                 "reasons": list(dict.fromkeys(reasons))[:8],
             }
@@ -770,6 +792,7 @@ class QuantEngine:
                 "swing_dims": swing.get("dims") or {},
                 "signal": signal_from_score(score), "close": price, "pct_chg": pct_chg, "amount": amount,
                 "hold_hint": "1-3 日",
+                "limit_up": is_limit_up(symbol, pct_chg),
                 "trade_plan": trade_plan(price, latest_atr(data)),
                 "reasons": list(dict.fromkeys(reasons))[:8],
             }

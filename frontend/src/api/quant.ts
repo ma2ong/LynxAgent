@@ -84,6 +84,8 @@ export interface QuantSmartPoolItem {
   patterns?: PatternRecognitionResult['patterns']
   forecast?: ForecastResult
   trade_plan?: TradePlan
+  /** 当前已封涨停：展示的收盘买入价实际买不到，实盘只能次日开盘入场 */
+  limit_up?: boolean
 }
 
 export interface QuantSmartPoolResult {

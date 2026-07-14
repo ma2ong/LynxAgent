@@ -2512,6 +2512,10 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
         symbol = str(item.get("symbol") or item.get("code") or "").zfill(6)
         quote = quotes.get(symbol)
         _apply_realtime_quote(item, quote)
+        # 涨停标记跟着实时涨跌幅走：缓存命中时价格会刷新，扫描那一刻的旧标记会撒谎。
+        if item.get("pct_chg") is not None:
+            from quantcore.quant.engine import is_limit_up as _is_limit_up
+            item["limit_up"] = _is_limit_up(symbol, item.get("pct_chg"))
         # 实时价刷新后按同一 ATR 重算交易计划，保持买点贴合现价。
         tp = item.get("trade_plan")
         if isinstance(tp, dict) and tp.get("buy_price") and item.get("close"):
@@ -2635,9 +2639,11 @@ async def _compute_lite_smart_pool(
 ) -> dict[str, Any]:
     preset = SMART_POOL_RECOMMENDER
     safe_limit = max(5, min(limit, 50))
-    # Keep the interactive scan responsive; full-universe data sync is handled separately.
-    safe_universe = max(safe_limit * 2, min(universe_limit, 1200))
-    cache_key = f"smart-pool:attack-v18-tradeplan:{strategy}:{safe_limit}:{safe_universe}"
+    # 全市场评分（与回放口径一致：回放在全市场上取每期 top-N）。v3 结构因子分走进程池，
+    # 3700 只约 32 秒，5000 只的上限扛得住；旧的 1200 截断会让线上池和回放验证的池不是一回事。
+    safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
+    # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
+    cache_key = f"smart-pool:factor-v3:{strategy}:{safe_limit}:{safe_universe}"
     _smart_pool_task_update(task_id, progress=5, phase="cache", message="检查最近智能推荐缓存")
     cached = _cache_get(cache_key, 900)
     if cached:
@@ -2683,8 +2689,10 @@ async def _compute_lite_smart_pool(
             if not re.fullmatch(r"\d{6}", symbol):
                 continue
             score = to_float(raw.get("score") or raw.get("quant_score"), 0)
-            if score < 80:
-                continue
+            # 不设绝对分数闸门：回放验证的策略是「每期买评分 top-N」，不是「买分数 >X 的」。
+            # 绑死绝对刻度的阈值一换评分公式就失效——v3 结构因子分上限约 80，旧的 <80 过滤
+            # 会把整池清空（用户点一键推荐什么都看不到）。排序取前 N 由引擎负责，弱市该少买
+            # 由大盘环境横幅提示，不靠隐藏结果。
             close = to_float(raw.get("close"), 0)
             pct_chg = to_float(raw.get("pct_chg"), 0)
             amount = to_float(raw.get("amount"), 0)
@@ -2721,6 +2729,7 @@ async def _compute_lite_smart_pool(
                 "liquidity_score": to_float(factors.get("liquidity"), 0),
                 "grade": "核心候选" if display_score >= 90 else "高质量候选" if display_score >= 85 else "重点观察",
                 "signal": raw.get("signal") or "",
+                "limit_up": bool(raw.get("limit_up")),
                 "reasons": reasons[:8],
                 "latest_events": raw.get("latest_events") or [],
                 "forecast": raw.get("forecast") or {},
@@ -3069,7 +3078,8 @@ async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int, uni
 @app.post("/api/lite/smart-pool/tasks")
 async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 30, universe_limit: int = 500):
     safe_limit = max(5, min(limit, 50))
-    safe_universe = max(safe_limit * 2, min(universe_limit, 1200))
+    # 与 _compute_lite_smart_pool 同口径：全市场评分，才和回放验证的池是同一个池
+    safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
     # 去重：同参数任务已在排队/运行则直接复用，避免连点堆叠多个全市场扫描把线程池占满。
     for existing in lite_smart_pool_tasks.values():
         if (

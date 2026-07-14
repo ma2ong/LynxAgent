@@ -24,26 +24,18 @@
         class="menu"
         @select="mobileMenuOpen = false"
       >
-        <el-menu-item-group title="看盘">
-          <el-menu-item index="/today"><el-icon><Calendar /></el-icon><span>今日</span></el-menu-item>
-          <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
-          <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
-          <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
-          <el-menu-item index="/insights/capital"><el-icon><Coin /></el-icon><span>资金面板</span></el-menu-item>
-        </el-menu-item-group>
-        <el-menu-item-group title="选股">
-          <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
-          <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
-        </el-menu-item-group>
-        <el-menu-item-group title="验证与跟踪">
-          <el-menu-item index="/review"><el-icon><DataAnalysis /></el-icon><span>选股复盘</span></el-menu-item>
-          <el-menu-item index="/favorites"><el-icon><Star /></el-icon><span>我的自选股</span></el-menu-item>
-        </el-menu-item-group>
-        <el-menu-item-group title="系统">
-          <el-menu-item index="/account/membership"><el-icon><Medal /></el-icon><span>会员与用量</span></el-menu-item>
-          <el-menu-item v-if="currentUser?.is_admin" index="/admin/users"><el-icon><Setting /></el-icon><span>用户管理</span></el-menu-item>
-          <el-menu-item index="/data-center"><el-icon><DataLine /></el-icon><span>数据中心</span></el-menu-item>
-        </el-menu-item-group>
+        <el-menu-item index="/today"><el-icon><Calendar /></el-icon><span>今日</span></el-menu-item>
+        <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
+        <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
+        <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
+        <el-menu-item index="/insights/capital"><el-icon><Coin /></el-icon><span>资金面板</span></el-menu-item>
+        <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
+        <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
+        <el-menu-item index="/review"><el-icon><DataAnalysis /></el-icon><span>选股复盘</span></el-menu-item>
+        <el-menu-item index="/favorites"><el-icon><Star /></el-icon><span>我的自选股</span></el-menu-item>
+        <el-menu-item index="/account/membership"><el-icon><Medal /></el-icon><span>会员与用量</span></el-menu-item>
+        <el-menu-item v-if="currentUser?.is_admin" index="/admin/users"><el-icon><Setting /></el-icon><span>用户管理</span></el-menu-item>
+        <el-menu-item index="/data-center"><el-icon><DataLine /></el-icon><span>数据中心</span></el-menu-item>
       </el-menu>
       <div class="sidebar-foot">
         <div v-if="billingInfo" class="quota-chip" @click="$router.push('/account/membership')">

@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 import jwt
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 
@@ -345,18 +345,49 @@ async def get_current_lite_user(authorization: Optional[str] = Header(default=No
     return store.to_user_dict(user)
 
 
+# 登录限流：公网暴露后，未限流的登录端点等于把口令交给撞库脚本。
+# 同一 IP 连续失败 8 次锁 15 分钟；成功即清零。内存态足够——单进程部署，重启即释放。
+_LOGIN_FAILS: dict[str, list[float]] = {}
+_LOGIN_MAX_FAILS = 8
+_LOGIN_WINDOW_SEC = 900
+
+
+def _login_blocked(client_ip: str) -> bool:
+    import time
+    fails = [t for t in _LOGIN_FAILS.get(client_ip, []) if time.time() - t < _LOGIN_WINDOW_SEC]
+    _LOGIN_FAILS[client_ip] = fails
+    return len(fails) >= _LOGIN_MAX_FAILS
+
+
+def _record_login_fail(client_ip: str) -> None:
+    import time
+    _LOGIN_FAILS.setdefault(client_ip, []).append(time.time())
+
+
 @router.post("/login")
-async def login(data: LoginRequest):
+async def login(data: LoginRequest, request: Request):
+    client_ip = request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "-")
+    if _login_blocked(client_ip):
+        raise HTTPException(status_code=429, detail="登录失败次数过多，请 15 分钟后再试")
     user = store.authenticate(data.username, data.password)
     if not user:
+        _record_login_fail(client_ip)
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
+    _LOGIN_FAILS.pop(client_ip, None)
     tokens = issue_tokens(user["username"])
     return {"success": True, "data": {**tokens, "user": user}, "message": "登录成功"}
 
 
+# 邀请制：公网默认关闭自助注册（ALLOW_REGISTRATION=true 才开放）。
+# 账号由管理员在「用户管理」里开——公开注册意味着任何人都能拿到全市场扫描算力。
+ALLOW_REGISTRATION = os.getenv("ALLOW_REGISTRATION", "false").lower() in ("1", "true", "yes")
+
+
 @router.post("/register")
 async def register(data: RegisterRequest):
+    if not ALLOW_REGISTRATION:
+        raise HTTPException(status_code=403, detail="本站为邀请制，暂不开放注册。请联系管理员开通账号。")
     if data.confirm_password and data.confirm_password != data.password:
         raise HTTPException(status_code=400, detail="两次输入的密码不一致")
     user = store.create_user(data.username, str(data.email), data.password, is_admin=False)

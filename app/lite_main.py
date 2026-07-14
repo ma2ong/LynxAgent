@@ -13,8 +13,12 @@ from typing import Any
 import requests
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from pathlib import Path
+
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -44,10 +48,19 @@ from quantcore.trading import EasyTraderBridge, EasyTraderOrder
 from quantcore.shared.disclaimer import attach_disclaimer
 
 
+# 公网部署（LYNX_PUBLIC=true）：关掉 /docs 与 openapi.json——邀请制站点没必要把完整
+# API 面摆给未登录访客；本地开发仍保留，便于调试。
+# 变量名带 LYNX_ 前缀：Windows 自带一个系统级 PUBLIC=C:\Users\Public，而 load_dotenv
+# 默认不覆盖已存在的环境变量，用 PUBLIC 会被系统变量吃掉、开关永远不生效。
+LYNX_PUBLIC = os.getenv("LYNX_PUBLIC", "false").lower() in ("1", "true", "yes")
+
 app = FastAPI(
     title="LynxAgent SaaS Lite",
     version="0.1.0",
     description="Local SaaS Lite runtime with SQLite auth and protected quant APIs.",
+    docs_url=None if LYNX_PUBLIC else "/docs",
+    redoc_url=None if LYNX_PUBLIC else "/redoc",
+    openapi_url=None if LYNX_PUBLIC else "/openapi.json",
 )
 
 app.add_middleware(
@@ -60,6 +73,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
 
 app.include_router(lite_auth_router)
 app.include_router(quant_router, dependencies=[Depends(get_current_lite_user)])
@@ -624,13 +646,13 @@ except Exception as _init_err:
     _w.warn(f"SQLite DB init failed at startup: {_init_err}", RuntimeWarning, stacklevel=1)
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def root():
-    return {
-        "name": "LynxAgent SaaS Lite",
-        "status": "running",
-        "docs_url": "/docs",
-    }
+    # 生产（前端已构建）：根路径直接给应用；否则退回 API banner，便于本地探活。
+    index = Path(__file__).resolve().parent.parent / "frontend" / "dist" / "index.html"
+    if index.is_file():
+        return FileResponse(str(index))
+    return {"name": "LynxAgent SaaS Lite", "status": "running"}
 
 
 @app.get("/api/health")
@@ -6375,3 +6397,21 @@ async def stock_analysis(symbol: str, current_user=Depends(get_current_lite_user
     except Exception:
         pass
     return {"success": True, "data": report}
+
+
+# ---- 前端静态托管（生产：单一来源，隧道只需暴露一个端口）----
+# 必须放在所有 API 路由之后：SPA 兜底路由会吞掉未匹配路径，提前挂载会遮住 /api/*。
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _spa_fallback(full_path: str):
+        """SPA 兜底：/api/* 与已注册路由不会走到这里；其余路径一律返回 index.html
+        （前端 history 路由自行解析），静态文件存在则直接返回。"""
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        candidate = _FRONTEND_DIST / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(_FRONTEND_DIST / "index.html"))

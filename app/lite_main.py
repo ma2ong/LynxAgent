@@ -158,8 +158,13 @@ async def _start_ml_factor_scheduler() -> None:
 
             def _run():
                 prices, names = _arena_prices_and_names()
-                run_arena_daily(today, _arena_candidates(today), prices, names)
-                # 用户模拟组合每日快照（幂等），共用收盘快照价
+                # 两件独立的事各自兜底：曾经共用一个 try，Arena 调仓一抛异常，
+                # 用户的模拟组合就再也不结算（实测组合净值 0/12 个交易日）。
+                try:
+                    run_arena_daily(today, _arena_candidates(today), prices, names)
+                except Exception as exc:  # noqa: BLE001
+                    import warnings
+                    warnings.warn(f"arena rebalance failed: {exc}", RuntimeWarning, stacklevel=1)
                 from quantcore.quant.portfolio import settle_daily
                 settle_daily(today, prices)
 
@@ -228,6 +233,23 @@ async def _start_ml_factor_scheduler() -> None:
         _job_reports_catchup, "interval", minutes=10,
         id="reports_catchup", name="每日盘报缺失追补",
         replace_existing=True, misfire_grace_time=300,
+    )
+
+    # 组合净值追补：15:40 结算 cron 错过即永不补发，净值曲线整段空白（实测 0/12 个交易日）。
+    # 持仓股数 × 当日收盘价是确定性历史事实，从本地日线重算是如实还原，可补任意历史交易日。
+    async def _job_portfolio_backfill() -> None:
+        try:
+            from quantcore.quant.portfolio import backfill_nav
+            await asyncio.to_thread(backfill_nav)
+        except Exception as exc:  # noqa: BLE001
+            import warnings
+            warnings.warn(f"portfolio nav backfill failed: {exc}", RuntimeWarning, stacklevel=1)
+
+    _ml_factor_scheduler.add_job(
+        _job_portfolio_backfill, "interval", minutes=30,
+        id="portfolio_backfill", name="模拟组合净值追补",
+        replace_existing=True, misfire_grace_time=600,
+        next_run_time=datetime.now(tz) + timedelta(seconds=20),  # 启动即补一次
     )
 
     # 信号统计预热：收盘结算后重算各池 signal-stats 缓存（冷算约 20s/池），

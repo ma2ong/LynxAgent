@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from .backtest import BUY_COST, SELL_COST
-from .local_store import LocalQuantStore, get_local_store
+from .local_store import MIN_MARKET_COVERAGE, LocalQuantStore, get_local_store
 
 DEFAULT_BUDGET = 10000.0
 STOP_LOSS_PCT = -8.0       # 止损线（相对每股成本）
@@ -252,6 +252,67 @@ def _market_median_pct(store: LocalQuantStore, date: str) -> Optional[float]:
         (date, str(prev))).fetchall()
     rets = [(float(c) / float(p) - 1) * 100 for c, p in rows if p and float(p) > 0]
     return round(statistics.median(rets), 4) if len(rets) >= 100 else None
+
+
+def backfill_nav(store: Optional[LocalQuantStore] = None) -> int:
+    """用本地日线补齐历史缺失的净值快照（幂等）。
+
+    15:40 的结算 cron 一旦错过（后端重启/崩溃/机器休眠）就永不补发，净值曲线整段是空的
+    （实测 0/12 个交易日）。持仓股数 × 当日收盘价是确定性的历史事实，从日线重算是如实
+    还原、不是编造——因此可以补任意历史交易日，与「盘前看点不能补」性质不同。
+
+    只补有持仓覆盖的交易日（首笔买入日之后、且该股当日有真实 bar）。
+    """
+    store = ensure_tables(store)
+    conn = store._conn()
+    users = [r[0] for r in conn.execute("SELECT DISTINCT user FROM portfolio_positions")]
+    if not users:
+        return 0
+    filled = 0
+    for user in users:
+        first_buy = conn.execute(
+            "SELECT MIN(buy_date) FROM portfolio_positions WHERE user=?", (user,)).fetchone()[0]
+        if not first_buy:
+            continue
+        # 完整交易日 = 截面覆盖率达峰值 MIN_MARKET_COVERAGE 的日子（同 replay 口径）。
+        # 不能写死「>1000 只」这种绝对阈值：它绑死了库的规模。
+        day_counts = conn.execute(
+            "SELECT date, COUNT(*) FROM daily_kline WHERE date>=? AND amount>0 "
+            "GROUP BY date ORDER BY date", (first_buy,)).fetchall()
+        peak = max((int(c) for _d, c in day_counts), default=0)
+        tdays = [str(d) for d, c in day_counts if peak and int(c) >= peak * MIN_MARKET_COVERAGE]
+        have = {r[0] for r in conn.execute(
+            "SELECT date FROM portfolio_nav WHERE user=?", (user,))}
+        for day in tdays:
+            if day in have:
+                continue
+            closes = {str(r[0]): float(r[1]) for r in conn.execute(
+                "SELECT symbol, close FROM daily_kline WHERE date=? AND amount>0", (day,))}
+            if not closes:
+                continue
+            # 该日的持仓 = 买入日 <= day 且（未卖出 或 卖出日 > day）
+            rows = conn.execute(
+                "SELECT symbol, shares, cost FROM portfolio_positions "
+                "WHERE user=? AND buy_date<=? AND (status='open' OR sell_date>?)",
+                (user, day, day)).fetchall()
+            if not rows:
+                continue
+            market_value = sum(int(sh) * closes[str(sym)] for sym, sh, _c in rows if str(sym) in closes)
+            cost_value = sum(int(sh) * float(c) for _s, sh, c in rows)
+            # 已实现盈亏口径与 list_portfolio 一致：(卖出净价 − 成本) × 股数
+            realized = sum(
+                (float(sp or 0) * (1 - SELL_COST) - float(c)) * int(sh)
+                for sp, c, sh in conn.execute(
+                    "SELECT sell_price, cost, shares FROM portfolio_positions "
+                    "WHERE user=? AND status='closed' AND sell_date<=?", (user, day)))
+            conn.execute(
+                "INSERT OR REPLACE INTO portfolio_nav(user,date,market_value,cost_value,realized_pnl,bench_pct) "
+                "VALUES(?,?,?,?,?,?)",
+                (user, day, round(market_value, 2), round(cost_value, 2),
+                 round(float(realized or 0), 2), _market_median_pct(store, day)))
+            filled += 1
+    conn.commit()
+    return filled
 
 
 def nav_series(user: str, store: Optional[LocalQuantStore] = None) -> List[Dict[str, object]]:

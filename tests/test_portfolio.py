@@ -7,8 +7,8 @@ import pytest
 from quantcore.quant.backtest import BUY_COST, SELL_COST
 from quantcore.quant.local_store import LocalQuantStore
 from quantcore.quant.portfolio import (
-    add_position, add_positions_batch, close_position, list_portfolio, nav_series,
-    sell_signals, settle_daily,
+    add_position, add_positions_batch, backfill_nav, close_position, list_portfolio,
+    nav_series, sell_signals, settle_daily,
 )
 
 
@@ -93,6 +93,36 @@ def test_sell_signals_rules(store):
     dates2 = _seed(store, "600003", closes_up)
     sigs2 = sell_signals(store, "600003", cost=10.0, buy_date=dates2[-3], latest_price=closes_up[-1])
     assert sigs2 == []
+
+
+def test_backfill_nav_reconstructs_missed_days(store):
+    """15:40 结算错过后，净值曲线整段空白（实测 0/12 交易日）。
+    持仓股数 × 当日收盘价是确定性历史事实，必须能从本地日线如实补回，且幂等。"""
+    n = 30
+    prices = [10.0 * 1.01 ** i for i in range(n)]  # 每日 +1%
+    dates = _seed(store, "600004", prices)
+    for i in range(120):  # 基准中位需要 >=100 只
+        _seed(store, f"7{i:05d}", [10.0] * n)
+
+    # 在第 25 个交易日买入，之后一天都没结算过
+    buy_day = dates[-6]
+    pos = add_position("u3", "600004", "股", price=prices[-6], budget=100000, store=store)
+    store._conn().execute("UPDATE portfolio_positions SET buy_date=? WHERE id=?", (buy_day, pos["id"]))
+    store._conn().commit()
+    assert nav_series("u3", store=store) == []  # 曲线空白
+
+    filled = backfill_nav(store=store)
+    assert filled >= 5  # 买入日起的每个交易日都补上
+    series = nav_series("u3", store=store)
+    assert [s["date"] for s in series] == dates[-6:]
+    # 最后一日市值 = 股数 × 当日收盘
+    last = series[-1]
+    assert float(last["market_value"]) == pytest.approx(pos["shares"] * prices[-1], abs=0.5)
+    assert last["pnl_pct"] > 0  # 持有期间每日 +1%
+
+    # 幂等：再补一次不新增、不改写
+    assert backfill_nav(store=store) == 0
+    assert len(nav_series("u3", store=store)) == len(series)
 
 
 def test_settle_daily_and_nav(store):

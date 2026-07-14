@@ -168,7 +168,7 @@ def _pattern_score(symbol: str, df: pd.DataFrame) -> Optional[float]:
 
 
 def _factor_score(df: pd.DataFrame) -> Optional[float]:
-    """smart_fac 实验池：纯结构因子合成分（MACD/布林/动量等，权重同 pattern 池 quant_score 分量）。"""
+    """smart 池 v3 评分：结构因子合成分（与线上 engine.smart_pool 同一函数）。"""
     from .factors import composite_score, compute_factor_scores
 
     if len(df) < MIN_BARS:
@@ -179,8 +179,46 @@ def _factor_score(df: pd.DataFrame) -> Optional[float]:
         return None
 
 
+def _parent_alive() -> bool:
+    """父进程是否还在（查不了就当活着，不误杀）。"""
+    try:
+        from multiprocessing import parent_process
+        parent = parent_process()
+        return parent is None or parent.is_alive()
+    except Exception:
+        return True
+
+
+_watchdog_started = False
+
+
+def _ensure_orphan_watchdog(interval: float = 5.0) -> None:
+    """worker 内守护线程：父进程一死就硬退出。
+
+    后端被强杀（TerminateProcess）时子进程收不到通知：任务队列断了，worker 既取不到
+    新任务、也不会退出，实测 6 个 worker 各烧掉一个多小时 CPU，拖垮整机（接口 20s→110s、
+    后端起不来）。守卫不能放在任务里——父进程死后任务根本不会再被派发；必须由独立线程
+    定时检查。os._exit 而非 sys.exit：父进程已死，正常关闭路径本身也走不通。
+    """
+    global _watchdog_started
+    if _watchdog_started:
+        return
+    _watchdog_started = True
+
+    def _watch() -> None:
+        import os
+        import time as _time
+        while True:
+            _time.sleep(interval)
+            if not _parent_alive():
+                os._exit(0)
+
+    threading.Thread(target=_watch, daemon=True).start()
+
+
 def _replay_symbol(payload: Dict[str, object]) -> List[Dict[str, object]]:
     """进程池 worker：单只股票在全部回放期的两池候选评分。顶层函数以便 pickle。"""
+    _ensure_orphan_watchdog()
     symbol = str(payload["symbol"])
     name = str(payload.get("name") or symbol)
     sessions: List[str] = list(payload["sessions"])

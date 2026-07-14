@@ -214,6 +214,12 @@ async def _start_ml_factor_scheduler() -> None:
         def _preheat() -> None:
             from quantcore.quant.local_store import get_local_store
             store = get_local_store()
+            # 复盘页三个时间窗（冷算 20-110s，不预热则页面首开必超时）
+            for days in (7, 30, 90):
+                try:
+                    store.evaluate_picks(days=days, refresh=True)
+                except Exception:
+                    continue
             for pool in ("smart", "pattern", "swing", "auction"):
                 try:
                     store.signal_stats(pool, refresh=True)

@@ -167,6 +167,24 @@ def test_signal_stats_pattern_level_excess(store):
     assert names["金叉"]["excess_win_rate"] == 1.0
 
 
+def test_evaluate_picks_cache_invalidates_on_new_picks(store):
+    """留痕统计缓存：同数据版本命中缓存；新留痕写入后必须失效（否则新票永远不进统计）。"""
+    _seed_kline(store, "600001", [10.0 * 1.02 ** i for i in range(8)])
+    _seed_kline(store, "600002", [10.0 * 0.98 ** i for i in range(8)])
+    store.record_picks("smart", [{"symbol": "600001", "name": "涨股", "score": 90, "close": 10.0}])
+
+    first = store.evaluate_picks(days=30)
+    assert first["total_picks"] == 1
+    cached = store.evaluate_picks(days=30)
+    assert cached["total_picks"] == 1  # 命中缓存，结果一致
+
+    # 新留痕落库 → 缓存 key 变化 → 统计必须包含新票
+    store.record_picks("smart", [{"symbol": "600002", "name": "跌股", "score": 80, "close": 10.0}])
+    after = store.evaluate_picks(days=30)
+    assert after["total_picks"] == 2
+    assert {i["symbol"] for i in after["items"]} == {"600001", "600002"}
+
+
 def test_signal_stats_cached_within_day(store, monkeypatch):
     """signal_stats 全量重算约 20s：同日同数据版本必须命中缓存，refresh=True 强制重算。"""
     _seed_kline(store, "600001", [10.0 * 1.02 ** i for i in range(8)])

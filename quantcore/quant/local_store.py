@@ -461,16 +461,36 @@ class LocalQuantStore:
         conn.commit()
         return len(rows)
 
-    def evaluate_picks(self, days: int = 30, pool: Optional[str] = None) -> Dict[str, object]:
+    def evaluate_picks(self, days: int = 30, pool: Optional[str] = None,
+                       refresh: bool = False) -> Dict[str, object]:
         """复盘最近 days 天的选股留痕：按池统计 T+1/T+3/T+5 胜率与平均收益。
 
         基准价 = 留痕时的价格（扫描当时用户看到的价格）；缺失时退回 pick_date 当日
         （或之前最近）的真实日线收盘。T+N = pick_date 之后第 N 根真实日线（amount>0）的收盘。
+
+        全量重算要为每个 horizon 扫全市场收盘截面（实测空闲 20s、机器繁忙时 110s，
+        超过前端 30s 超时 → 复盘页留痕区整块消失）。按 (days, pool, 最新真实 bar 日,
+        留痕条数) 缓存：新交易日数据落库或新留痕写入都会换 key，统计不会读到陈旧值。
         """
         import bisect
-        from datetime import date as _date, timedelta as _td
+        import json as _json
+        from datetime import date as _date, datetime as _dt, timedelta as _td
         since = (_date.today() - _td(days=max(1, days))).strftime("%Y-%m-%d")
         conn = self._conn()
+
+        picks_n = conn.execute(
+            "SELECT COUNT(*) FROM picks_history WHERE pick_date >= ?", (since,)).fetchone()[0]
+        cache_key = f"picks:{days}:{pool or '*'}"
+        stamp = f"{self.latest_real_bar_date()}|{picks_n}"
+        if not refresh:
+            row = conn.execute(
+                "SELECT payload_json FROM signal_stats_cache WHERE cache_key=? AND stamp=?",
+                (cache_key, stamp)).fetchone()
+            if row:
+                try:
+                    return _json.loads(row[0])
+                except Exception:
+                    pass
         sql = ("SELECT pick_date,pool,symbol,name,score,close,rank,patterns FROM picks_history "
                "WHERE pick_date >= ?")
         params: List[object] = [since]
@@ -575,10 +595,18 @@ class LocalQuantStore:
                 "picks": sum(1 for p in detail if p["pool"] == pool_name),
                 "horizons": stats,
             })
-        return {
+        out = {
             "days": days, "since": since, "total_picks": len(picks),
             "pools": pools_out, "items": detail[:300],
         }
+        conn.execute(
+            "INSERT INTO signal_stats_cache(cache_key,stamp,payload_json,created_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(cache_key) DO UPDATE SET stamp=excluded.stamp, "
+            "payload_json=excluded.payload_json, created_at=excluded.created_at",
+            (cache_key, stamp, _json.dumps(out, ensure_ascii=False),
+             _dt.now().isoformat(timespec="seconds")))
+        conn.commit()
+        return out
 
     def signal_stats(self, pool: str, days: int = 90, refresh: bool = False) -> Dict[str, object]:
         """信号历史表现：池级（留痕 + 最近回放）与形态级（留痕 T+5 超额）聚合，供入选理由卡。

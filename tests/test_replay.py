@@ -47,8 +47,6 @@ def test_replay_smart_pool_end_to_end(store):
     assert res["status"] == "done"
     pools = {p["pool"]: p for p in res["pools"]}
     assert "smart" in pools
-    # A/B 实验池：成交额过门槛（种子 1e8/2e8 ≥ 3000 万）时同轴产出结构因子池
-    assert "smart_fac" in pools and pools["smart_fac"]["picks"] > 0
     smart = pools["smart"]
     assert smart["picks"] > 0
     assert smart["evaluated"] > 0

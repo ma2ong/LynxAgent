@@ -193,6 +193,41 @@ def composite_score(factors: Dict[str, float]) -> float:
     return round(_clip_score(score), 2)
 
 
+def smart_factor_chunk(payload: Dict[str, object]) -> list:
+    """进程池 worker：一段股票的结构因子评分（绕开 GIL；线程池实测 3700 只近乎串行 4 分钟）。
+
+    顶层函数以便 pickle；放在本轻量模块避免子进程 import 重型 engine 链。
+    payload: {db_path, cutoff, min_amount, symbols, rt_amounts}
+    """
+    from .local_store import LocalQuantStore
+
+    store = LocalQuantStore(str(payload["db_path"]))
+    conn = store._conn()
+    min_amount = float(payload["min_amount"])
+    rt_amounts: Dict[str, float] = payload.get("rt_amounts") or {}
+    out = []
+    for sym in payload["symbols"]:
+        rows = conn.execute(
+            "SELECT date, open, high, low, close, volume, amount FROM daily_kline "
+            "WHERE symbol=? AND date>=? AND amount>0 ORDER BY date",
+            (sym, payload["cutoff"])).fetchall()
+        if len(rows) < 80:
+            continue
+        df = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume", "amount"])
+        local_amount = float(df["amount"].iloc[-1] or 0)
+        if max(float(rt_amounts.get(sym) or 0), local_amount) < min_amount:
+            continue
+        try:
+            factors = compute_factor_scores(df)
+            score = composite_score(factors)
+        except Exception:
+            continue
+        out.append({"symbol": sym, "score": score, "factors": factors,
+                    "close_local": float(df["close"].iloc[-1] or 0),
+                    "amount_local": local_amount})
+    return out
+
+
 def risk_metrics(df: pd.DataFrame) -> Dict[str, float]:
     data = enrich_indicators(df)
     returns = data["ret"].dropna()

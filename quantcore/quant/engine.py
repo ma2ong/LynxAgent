@@ -57,9 +57,6 @@ def _json_safe(value):
     return value
 
 
-# 稳定性画像（MA20/波动/月内暴涨/乖离）按 (symbol, 当日) 缓存，避免全市场扫描重复抓取
-_STAB_CACHE: Dict[str, Tuple[str, Optional[Dict[str, float]]]] = {}
-
 # 历史 K 线按 (symbol, 天数, 当日) 缓存，让形态扫描的重复运行秒级返回（冷启动仍需逐只抓取）
 _HIST_CACHE: Dict[str, Tuple[str, "pd.DataFrame"]] = {}
 
@@ -80,60 +77,6 @@ def _hist_dataframe(symbol: str, days: int) -> "pd.DataFrame":
     _HIST_CACHE[key] = (today, df)
     return df
 
-
-def _stability_from_kline(df: "pd.DataFrame") -> Optional[Dict[str, float]]:
-    """近 20 根日线的稳定性画像：MA20、日收益率波动、月内最大单日涨幅、MA20 乖离。"""
-    try:
-        if df is None or df.empty or len(df) < 21:
-            return None
-        closes = df["close"].astype(float).tail(21).reset_index(drop=True)
-        rets = closes.pct_change().dropna() * 100
-        ma20 = float(closes.tail(20).mean())
-        close = float(closes.iloc[-1])
-        return {
-            "ma20": ma20,
-            "vol20": float(rets.std()),
-            "max_gain20": float(rets.max()),
-            "bias20": (close / ma20 - 1) * 100 if ma20 else 0.0,
-        }
-    except Exception:
-        return None
-
-
-def _anti_chase_score(stab: Optional[Dict[str, float]]) -> float:
-    """反追涨评分（0-100，无数据=50 中性）。
-
-    A 股横截面证据（券商研报复现口径）：低波动、月内最大单日涨幅低（反彩票）、
-    温和乖离的组合为正 IC；追当日涨幅方向相反。故低波动加分，月内暴涨与高乖离惩罚。
-    """
-    if not stab:
-        return 50.0
-    vol_comp = max(0.0, min(100.0, 90 - float(stab.get("vol20") or 0) * 14))
-    lottery_comp = max(0.0, min(100.0, 85 - float(stab.get("max_gain20") or 0) * 5.5))
-    bias = float(stab.get("bias20") or 0)
-    bias_comp = max(0.0, min(100.0, 80 - max(0.0, bias) * 4 - max(0.0, -bias) * 1.5))
-    return round(vol_comp * 0.4 + lottery_comp * 0.35 + bias_comp * 0.25, 1)
-
-
-def _get_stability_for_symbol(symbol: str) -> Optional[Dict[str, float]]:
-    """取稳定性画像（含 MA20）。失败返回 None，评分按中性处理。"""
-    today = date.today().isoformat()
-    cached = _STAB_CACHE.get(symbol)
-    if cached and cached[0] == today:
-        return cached[1]
-    value: Optional[Dict[str, float]] = None
-    try:
-        # 60 天覆盖 21+ 个交易日；直连 akshare，失败即跳过，避免落入缓慢的 yfinance 回退
-        start = (date.today() - timedelta(days=60)).strftime("%Y-%m-%d")
-        end = date.today().strftime("%Y-%m-%d")
-        df = load_local_kline(symbol, days=60)
-        if df is None or df.empty:
-            df = normalize_ohlcv(_fetch_from_akshare(symbol, start, end))
-        value = _stability_from_kline(df)
-    except Exception:
-        value = None
-    _STAB_CACHE[symbol] = (today, value)
-    return value
 
 
 def _fetch_tencent_quote_chunk(chunk: List[str]) -> Dict[str, Dict[str, object]]:
@@ -403,69 +346,36 @@ class QuantEngine:
             "errors": errors,
         }
 
+    # v3 评分：纯结构因子合成（MACD/布林/趋势/动量/资金流，日线口径）。
+    # 依据 2026-07-14 回放 A/B（run 20260714-001726，130 期同轴）：结构因子池可成交口径
+    # 平均超额 +1.99pp/期、中位 +0.43、无重叠 t≈3.44、偏冷期仍 +1.97；
+    # 旧实时追涨评分 +0.55pp、中位为负、不显著。评分与回放共用同一函数，实盘完全可回放。
+    SMART_MIN_AMOUNT = 3e7  # 与回放口径一致：成交额 <3000 万不入候选
+
     def smart_pool(self, limit: int = 20, universe_limit: int = 300, exclude_fundamental: bool = True) -> Dict[str, object]:
         safe_limit = max(1, min(limit, 50))
-        # 全市场最多约 5000 只；评分主要来自批量实时行情，可覆盖全市场
+        # 全市场最多约 5000 只；结构评分来自本地日线，实时行情用于排除与展示
         safe_universe_limit = max(safe_limit, min(universe_limit, 5000))
         pool, pool_source = self._scan_pool(safe_universe_limit)
         errors: Dict[str, str] = {}
         symbols = [str(meta.get("symbol") or "").strip().zfill(6) for meta in pool]
         quote_map = _fetch_tencent_quotes(symbols)
 
-        def _score(meta: Dict[str, object], stab: Optional[Dict[str, float]]) -> Dict[str, object]:
-            symbol = str(meta.get("symbol") or "").strip().zfill(6)
+        _FACTOR_LABELS = {"trend": "趋势", "momentum": "动量", "macd": "MACD",
+                          "bollinger": "布林位置", "capital_flow": "资金流",
+                          "rsi": "RSI", "risk_control": "风控", "liquidity": "流动性"}
+
+        def _build_item(meta: Dict[str, object], scored: Dict[str, object]) -> Dict[str, object]:
+            symbol = str(scored["symbol"])
             quote = quote_map.get(symbol, {})
-            pct_chg = _safe_float(quote.get("pct_chg"), 0)
-            amount = _safe_float(quote.get("amount"), 0)
-            turnover = _safe_float(quote.get("turnover_rate"), 0)
-            volume_ratio = _safe_float(quote.get("volume_ratio"), 0)
-            close_price = _safe_float(quote.get("price"), 0)
-            ma20 = stab.get("ma20") if stab else None
-            ma20_adj = 0.0
-            if ma20 and close_price > 0:
-                ma20_adj = 6.0 if close_price > ma20 else -6.0
-            trend_score = max(0.0, min(100.0, 55 + pct_chg * 5.2 + min(amount / 100000000, 8) * 2.6 + ma20_adj))
-            momentum_score = max(0.0, min(100.0, 50 + pct_chg * 6.0 + min(volume_ratio, 3) * 9.0))
-            liquidity_score = max(0.0, min(100.0, 45 + min(amount / 100000000, 12) * 4.0))
-            rsi_score = max(0.0, min(100.0, 50 + pct_chg * 3.0))
-            risk_score = max(0.0, min(100.0, 78 - abs(pct_chg) * 2.8 + min(turnover, 8)))
-            anti_chase = _anti_chase_score(stab)
-            # v2 权重：降当日涨幅类权重，引入反追涨维度（低波动/反彩票/乖离），合计 1.0
-            smart_score = round(
-                trend_score * 0.26
-                + momentum_score * 0.22
-                + liquidity_score * 0.16
-                + rsi_score * 0.10
-                + risk_score * 0.10
-                + anti_chase * 0.16,
-                1,
-            )
-            factors = {
-                "trend": round(trend_score, 1),
-                "momentum": round(momentum_score, 1),
-                "rsi": round(rsi_score, 1),
-                "risk_control": round(risk_score, 1),
-                "liquidity": round(liquidity_score, 1),
-                "anti_chase": round(anti_chase, 1),
-            }
-            patterns = []
-            if trend_score >= 75:
-                patterns.append({"key": "realtime_trend", "name": "实时趋势强", "active": True, "strength": round(trend_score, 1), "reason": "涨幅、成交额和流动性共同抬升"})
-            if momentum_score >= 75:
-                patterns.append({"key": "realtime_momentum", "name": "短线动量强", "active": True, "strength": round(momentum_score, 1), "reason": "实时涨跌幅和量比显示短线动量"})
-            reasons = [
-                f"实时涨跌幅 {pct_chg:+.2f}%",
-                f"成交额 {amount / 100000000:.2f}亿",
-                f"趋势 {trend_score:.0f}",
-                f"动量 {momentum_score:.0f}",
-                f"流动性 {liquidity_score:.0f}",
-            ]
-            if stab is not None:
-                if anti_chase >= 65:
-                    reasons.append(f"低波动/反彩票加分 {anti_chase:.0f}")
-                elif anti_chase <= 40:
-                    reasons.append("月内暴涨或高乖离，降权")
-            reasons.extend([str(item.get("name")) for item in patterns[:3] if item.get("name")])
+            rt_amount = _safe_float(quote.get("amount"), 0)
+            smart_score = float(scored["score"])
+            factors: Dict[str, float] = scored["factors"]
+            close_price = _safe_float(quote.get("price"), 0) or float(scored["close_local"] or 0)
+            top_factors = sorted(factors.items(), key=lambda kv: -kv[1])[:3]
+            reasons = [f"结构因子分 {smart_score:.0f}（回放验证口径）"]
+            reasons += [f"{_FACTOR_LABELS.get(k, k)} {v:.0f}" for k, v in top_factors]
+            reasons.append(f"成交额 {max(rt_amount, float(scored['amount_local'] or 0)) / 1e8:.2f}亿")
             return {
                 "symbol": symbol,
                 "code": symbol,
@@ -475,16 +385,16 @@ class QuantEngine:
                 "quant_score": smart_score,
                 "signal": signal_from_score(smart_score),
                 "close": close_price,
-                "pct_chg": pct_chg,
-                "amount": amount,
+                "pct_chg": _safe_float(quote.get("pct_chg"), 0),
+                "amount": rt_amount or float(scored["amount_local"] or 0),
                 "factors": factors,
                 "risk": {"volatility": 0, "max_drawdown": 0, "sharpe": 0},
                 "forecast": {
-                    "engine": "realtime-fast-proxy",
-                    "trend_score": round(trend_score, 1),
+                    "engine": "factor-composite-v3",
+                    "trend_score": factors.get("trend", 50.0),
                     "upside_probability": round(max(0.05, min(0.95, 0.5 + (smart_score - 70) / 100)), 4),
                 },
-                "patterns": patterns,
+                "patterns": [],
                 "reasons": list(dict.fromkeys(reasons))[:8],
             }
 
@@ -496,7 +406,7 @@ class QuantEngine:
             except Exception:
                 bad_fundamentals = set()
 
-        # 第一段：先按名称+实时行情+基本面做第一层排除，再用批量行情给剩余股打分
+        # 第一段：名称+实时行情+基本面第一层排除
         metas = []
         for meta in pool:
             symbol = str(meta.get("symbol") or "").strip().zfill(6)
@@ -509,44 +419,42 @@ class QuantEngine:
             if symbol in bad_fundamentals:
                 continue
             metas.append(meta)
-        items = [_score(meta, None) for meta in metas]
 
-        # 第二段：只对预筛 top 候选取稳定性画像精修（MA20 ±6 微调 + 反追涨维度替换中性 50 分）
-        order = sorted(range(len(items)), key=lambda i: float(items[i]["score"]), reverse=True)
-        refine_n = min(len(order), max(safe_limit * 4, 100))
-        top_idx = order[:refine_n]
-        with ThreadPoolExecutor(max_workers=24) as executor:
-            stab_results = list(executor.map(lambda i: (i, _get_stability_for_symbol(items[i]["symbol"])), top_idx))
-        for i, stab in stab_results:
-            items[i] = _score(metas[i], stab)
-
-        items.sort(key=lambda item: float(item["score"]), reverse=True)
-
-        # 第三段：用多路策略 + critic 对 top 候选做本地 K 线验证，融合提升准确性
-        # 仅在本地有 K 线缓存时生效；无本地数据时跳过，不降低原有速度
+        # 第二段：结构因子进程池评分（pandas 因子计算持 GIL，线程池实测 3700 只要 4 分钟；
+        # 6 进程约 40-60 秒）。不做实时精修与 critic 融合——「实盘评分 = 回放评分」严格同源。
+        from .factors import smart_factor_chunk
+        meta_by_symbol: Dict[str, Dict[str, object]] = {}
+        gated_symbols: List[str] = []
+        rt_amounts: Dict[str, float] = {}
+        for meta in metas:
+            symbol = str(meta.get("symbol") or "").strip().zfill(6)
+            rt_amount = _safe_float(quote_map.get(symbol, {}).get("amount"), 0)
+            if 0 < rt_amount < self.SMART_MIN_AMOUNT:
+                continue  # 实时成交额已明确低于门槛，直接剪枝
+            meta_by_symbol[symbol] = meta
+            gated_symbols.append(symbol)
+            rt_amounts[symbol] = rt_amount
+        cutoff = (date.today() - timedelta(days=200)).strftime("%Y-%m-%d")
+        db_path = get_local_store().db_path
+        workers = min(6, max(1, os.cpu_count() or 4))
+        chunk_size = max(1, (len(gated_symbols) + workers - 1) // workers)
+        payloads = [{
+            "db_path": db_path, "cutoff": cutoff, "min_amount": self.SMART_MIN_AMOUNT,
+            "symbols": gated_symbols[i:i + chunk_size],
+            "rt_amounts": {s: rt_amounts[s] for s in gated_symbols[i:i + chunk_size]},
+        } for i in range(0, len(gated_symbols), chunk_size)]
+        scored_rows: List[Dict[str, object]] = []
         try:
-            from .pipeline.orchestrator import quick_critic_batch
-            top_symbols = [it["symbol"] for it in items[:max(safe_limit * 3, 60)]]
-            critic_result = quick_critic_batch(top_symbols)
-            critic_scores: Dict[str, float] = {
-                sym: v["score"] for sym, v in critic_result.get("scores", {}).items()
-            }
-            if critic_scores:
-                for it in items:
-                    c = critic_scores.get(it["symbol"])
-                    if c is None:
-                        continue
-                    # critic 0-10 折算到 0-100，与现有分 7:3 融合
-                    base = float(it["score"])
-                    blended = round(base * 0.7 + c * 10 * 0.3, 1)
-                    it["score"] = blended
-                    it["quant_score"] = blended
-                    # critic 通过的加入 reasons；不通过的附注警示
-                    if c >= 6.0 and "AI策略验证通过" not in it.get("reasons", []):
-                        it.setdefault("reasons", []).append(f"AI策略验证 {c:.1f}/10")
-                items.sort(key=lambda item: float(item["score"]), reverse=True)
+            from concurrent.futures import ProcessPoolExecutor
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                for part in executor.map(smart_factor_chunk, payloads):
+                    scored_rows.extend(part)
         except Exception:
-            pass  # pipeline 不可用时静默降级，不影响结果
+            # 进程池不可用（如受限环境）时串行兜底，功能不缺失只是慢
+            for p in payloads:
+                scored_rows.extend(smart_factor_chunk(p))
+        items = [_build_item(meta_by_symbol.get(str(r["symbol"]), {}), r) for r in scored_rows]
+        items.sort(key=lambda item: float(item["score"]), reverse=True)
 
         # 仅为最终展示的标的附交易计划：优先本地 K 线算 ATR，无本地数据则按比例兜底。
         final_items = items[:safe_limit]
@@ -567,7 +475,7 @@ class QuantEngine:
             pass
 
         return _json_safe({
-            "source": f"quant-engine-smart-pool-v2-antichase:{pool_source}",
+            "source": f"quant-engine-smart-pool-v3-factor:{pool_source}",
             "universe_size": len(pool),
             "analyzed": len(items),
             "items": final_items,

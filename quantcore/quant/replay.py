@@ -3,11 +3,11 @@
 用本地日线把 pattern / smart 两池规则回放到过去（默认 12 个月、每 5 个交易日一期），
 每期取 top-N，统计 T+5 相对全市场中位的超额收益 → 回答「这套选股规则有没有效」。
 
-口径说明（近似之处，结果解读时必须记住）：
+口径说明（结果解读时必须记住）：
 - pattern 池：形态识别/因子/威科夫全部用截断到 as_of 的日线，严格 point-in-time；
   实时分量（realtime_score）用当日 bar 的涨跌幅/成交额，与收盘后扫描等价。
-- smart 池：生产版输入是实时行情（量比/换手率），回放用日线近似重建
-  （volume_ratio=当日量/前5日均量，turnover 缺失取 0），critic 融合层跳过。
+- smart 池（v3，2026-07-14 起）：结构因子合成分，与线上 engine.smart_pool 共用同一
+  评分函数（compute_factor_scores + composite_score，成交额 ≥3000 万门槛），无近似差。
 - 排除规则用「当前」股票名称（ST/退市标记随时间变化，历史时点无法还原）。
 """
 from __future__ import annotations
@@ -28,7 +28,8 @@ MIN_BARS = 80
 HORIZON = 5
 # 扫描断点缓存的口径版本：_replay_symbol 的评分器集合/公式一旦变化必须 +1，
 # 否则同轴续跑会复用旧口径的候选（实测：加 smart_fac 池后旧缓存里没有它）。
-SCAN_VERSION = 2
+# v3：smart 评分切换为结构因子合成（原 smart_fac 实验转正），smart_fac 池移除。
+SCAN_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS replay_runs (
@@ -137,34 +138,6 @@ def _session_regimes(store: LocalQuantStore, sessions: List[str]) -> Dict[str, s
     return out
 
 
-def _smart_score_approx(df: pd.DataFrame) -> Optional[float]:
-    """engine.smart_pool v2 评分的日线近似（权重与公式对齐 engine.py:_score）。"""
-    from .engine import _anti_chase_score, _stability_from_kline
-
-    if len(df) < 6:
-        return None
-    closes = df["close"].astype(float)
-    close = float(closes.iloc[-1])
-    prev = float(closes.iloc[-2])
-    if close <= 0 or prev <= 0:
-        return None
-    pct_chg = (close / prev - 1) * 100
-    amount = float(df["amount"].iloc[-1] or 0)
-    vols = df["volume"].astype(float)
-    prev5 = float(vols.iloc[-6:-1].mean() or 0)
-    volume_ratio = float(vols.iloc[-1]) / prev5 if prev5 > 0 else 0.0
-    ma20 = float(closes.tail(20).mean()) if len(closes) >= 20 else 0.0
-    ma20_adj = (6.0 if close > ma20 else -6.0) if ma20 else 0.0
-    trend = max(0.0, min(100.0, 55 + pct_chg * 5.2 + min(amount / 1e8, 8) * 2.6 + ma20_adj))
-    momentum = max(0.0, min(100.0, 50 + pct_chg * 6.0 + min(volume_ratio, 3) * 9.0))
-    liquidity = max(0.0, min(100.0, 45 + min(amount / 1e8, 12) * 4.0))
-    rsi_s = max(0.0, min(100.0, 50 + pct_chg * 3.0))
-    risk_s = max(0.0, min(100.0, 78 - abs(pct_chg) * 2.8))  # turnover 历史不可得，取 0
-    anti = _anti_chase_score(_stability_from_kline(df))
-    return round(trend * 0.26 + momentum * 0.22 + liquidity * 0.16
-                 + rsi_s * 0.10 + risk_s * 0.10 + anti * 0.16, 1)
-
-
 def _pattern_score(symbol: str, df: pd.DataFrame) -> Optional[float]:
     """engine._pattern_scan_one 的 point-in-time 版（实时分量用当日 bar）。"""
     from .factors import composite_score, compute_factor_scores, latest_adx
@@ -235,14 +208,11 @@ def _replay_symbol(payload: Dict[str, object]) -> List[Dict[str, object]]:
             amount = float(df["amount"].iloc[-1] or 0)
             if exclusion_reason(name, close, amount):
                 continue
-            s_score = _smart_score_approx(df.tail(30))
-            if s_score is not None:
-                out.append({"pool": "smart", "as_of": as_of, "symbol": symbol, "name": name, "score": s_score})
-            # A/B 实验变体：结构因子合成分（与 smart 同轴对比，验证「实时追涨型 vs 结构因子型」谁有超额）
+            # smart v3：结构因子合成分（与线上 engine.smart_pool 同一评分函数与门槛）
             if amount >= PATTERN_MIN_AMOUNT:
-                f_score = _factor_score(df.tail(120))
-                if f_score is not None:
-                    out.append({"pool": "smart_fac", "as_of": as_of, "symbol": symbol, "name": name, "score": f_score})
+                s_score = _factor_score(df.tail(120))
+                if s_score is not None:
+                    out.append({"pool": "smart", "as_of": as_of, "symbol": symbol, "name": name, "score": s_score})
             p_score = _pattern_score(symbol, df.tail(540))
             if p_score is not None:
                 out.append({"pool": "pattern", "as_of": as_of, "symbol": symbol, "name": name, "score": p_score})

@@ -55,7 +55,7 @@
           <section class="smart-hero compact-smart-hero">
             <div>
               <h2>一键智能推荐股票池</h2>
-              <p>系统自动综合量化分、趋势、动量、RSI、均线结构、突破信号、成交活跃度、预测因子和风险控制，直接生成当前更值得跟踪的候选股票。</p>
+              <p>基于本地日线的结构因子评分（MACD、布林位置、趋势、动量、资金流等合成），评分公式与 12 个月历史回放完全同源、经同轴 A/B 验证；实时行情用于排除停牌/ST 与展示现价。</p>
             </div>
             <div class="smart-inline-settings">
               <label class="strategy-pick">

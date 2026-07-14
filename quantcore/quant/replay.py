@@ -189,6 +189,38 @@ def _parent_alive() -> bool:
         return True
 
 
+def _lower_priority() -> None:
+    """把 worker 降到低优先级：回放是后台批量任务，不能和用户请求抢 CPU。
+
+    站点公网化后实测：6 个满负荷 worker 把整机吃到 100%，页面响应掉到 1.5 秒。
+    降优先级后 CPU 仍被用满（回放照常推进），但操作系统会优先调度处理请求的线程。
+    """
+    try:
+        import os
+        import sys
+        if sys.platform == "win32":
+            import ctypes
+            BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+            ctypes.windll.kernel32.SetPriorityClass(
+                ctypes.windll.kernel32.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS)
+        else:
+            os.nice(10)
+    except Exception:
+        pass  # 降级失败不影响回放本身
+
+
+_priority_lowered = False
+
+
+def _ensure_low_priority() -> None:
+    """每个 worker 进程只降一次优先级。"""
+    global _priority_lowered
+    if _priority_lowered:
+        return
+    _priority_lowered = True
+    _lower_priority()
+
+
 _watchdog_started = False
 
 
@@ -219,6 +251,7 @@ def _ensure_orphan_watchdog(interval: float = 5.0) -> None:
 def _replay_symbol(payload: Dict[str, object]) -> List[Dict[str, object]]:
     """进程池 worker：单只股票在全部回放期的两池候选评分。顶层函数以便 pickle。"""
     _ensure_orphan_watchdog()
+    _ensure_low_priority()
     symbol = str(payload["symbol"])
     name = str(payload.get("name") or symbol)
     sessions: List[str] = list(payload["sessions"])

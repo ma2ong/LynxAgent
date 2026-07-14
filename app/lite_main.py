@@ -649,9 +649,10 @@ except Exception as _init_err:
 @app.get("/", include_in_schema=False)
 async def root():
     # 生产（前端已构建）：根路径直接给应用；否则退回 API banner，便于本地探活。
+    # index.html 必须 no-cache：发版后若用户拿到缓存的旧壳子，它引用的哈希 JS 已不存在。
     index = Path(__file__).resolve().parent.parent / "frontend" / "dist" / "index.html"
     if index.is_file():
-        return FileResponse(str(index))
+        return FileResponse(str(index), headers={"Cache-Control": "no-cache"})
     return {"name": "LynxAgent SaaS Lite", "status": "running"}
 
 
@@ -6402,8 +6403,21 @@ async def stock_analysis(symbol: str, current_user=Depends(get_current_lite_user
 # ---- 前端静态托管（生产：单一来源，隧道只需暴露一个端口）----
 # 必须放在所有 API 路由之后：SPA 兜底路由会吞掉未匹配路径，提前挂载会遮住 /api/*。
 _FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+# 隧道回源的每一跳都要跨公网（实测本机 12ms、经边缘 800ms+），静态资源必须让
+# Cloudflare 边缘缓存住。vite 产物文件名带内容哈希，改了内容就换名字，可以放心长缓存；
+# index.html 绝不能缓存，否则发版后用户一直拿到旧壳子、引用已不存在的旧 JS。
+_ASSET_CACHE = "public, max-age=31536000, immutable"
+_HTML_CACHE = "no-cache"
+
 if _FRONTEND_DIST.is_dir():
-    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
+    class _CachedAssets(StaticFiles):
+        def file_response(self, *args, **kwargs):  # type: ignore[override]
+            resp = super().file_response(*args, **kwargs)
+            resp.headers["Cache-Control"] = _ASSET_CACHE
+            return resp
+
+    app.mount("/assets", _CachedAssets(directory=str(_FRONTEND_DIST / "assets")), name="assets")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def _spa_fallback(full_path: str):
@@ -6413,5 +6427,6 @@ if _FRONTEND_DIST.is_dir():
             raise HTTPException(status_code=404, detail="Not Found")
         candidate = _FRONTEND_DIST / full_path
         if full_path and candidate.is_file():
-            return FileResponse(str(candidate))
-        return FileResponse(str(_FRONTEND_DIST / "index.html"))
+            return FileResponse(str(candidate), headers={"Cache-Control": _ASSET_CACHE})
+        return FileResponse(str(_FRONTEND_DIST / "index.html"),
+                            headers={"Cache-Control": _HTML_CACHE})

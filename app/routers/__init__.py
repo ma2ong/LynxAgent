@@ -1,1 +1,1 @@
-"""API route handlers for LynxAgent."""
+"""API route handlers for AStockPick."""

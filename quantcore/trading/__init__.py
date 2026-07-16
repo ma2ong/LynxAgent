@@ -1,4 +1,4 @@
-"""Trading execution adapters for LynxAgent."""
+"""Trading execution adapters for AStockPick."""
 
 from .easytrader_adapter import EasyTraderBridge, EasyTraderOrder, EasyTraderStatus
 

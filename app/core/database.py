@@ -1,4 +1,4 @@
-"""MongoDB handle for LynxAgent (optional, enrichment-only).
+"""MongoDB handle for AStockPick (optional, enrichment-only).
 
 Authentication and favorites live in SQLite (``app/lite_main.py``). Mongo is
 used only by the quant router to attach industry/sector metadata to results,

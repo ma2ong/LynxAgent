@@ -1,7 +1,7 @@
 <template>
   <div class="login-wrap">
     <el-card class="login-card">
-      <h2 class="title">LynxAgent {{ mode === 'login' ? '登录' : '注册' }}</h2>
+      <h2 class="title">AStockPick {{ mode === 'login' ? '登录' : '注册' }}</h2>
 
       <!-- Login form -->
       <el-form v-if="mode === 'login'" @submit.prevent="onSubmit">

@@ -5,8 +5,8 @@
         <el-icon><Menu /></el-icon>
       </el-button>
       <div class="mobile-brand">
-        <span class="logo">🐾</span>
-        <span>LynxAgent</span>
+        <span class="logo">📈</span>
+        <span>AStockPick</span>
       </div>
       <div v-if="billingInfo" class="mobile-quota">
         剩余 {{ billingInfo.remaining_today }}/{{ billingInfo.daily_limit }}
@@ -15,8 +15,8 @@
     <div v-if="mobileMenuOpen" class="mobile-mask" @click="mobileMenuOpen = false" />
     <el-aside width="216px" class="sidebar" :class="{ 'sidebar-open': mobileMenuOpen }">
       <div class="brand">
-        <span class="logo">🐾</span>
-        <span class="name">LynxAgent</span>
+        <span class="logo">📈</span>
+        <span class="name">AStockPick</span>
       </div>
       <el-menu
         :default-active="route.path"

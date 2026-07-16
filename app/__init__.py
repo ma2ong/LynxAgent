@@ -1,1 +1,1 @@
-"""LynxAgent — FastAPI backend package."""
+"""AStockPick — FastAPI backend package."""

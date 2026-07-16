@@ -1,13 +1,13 @@
-# LynxAgent
+# AStockPick · A股优选
 
-> **See the patterns others miss.** A 股量化形态选股 + 多智能体深度分析的轻量 SaaS。
+> **每一次选股，都经得起历史验证。** A 股全市场结构因子选股 + 12 个月回放验证的轻量 SaaS。
 
 ![License](https://img.shields.io/badge/license-Proprietary-red.svg)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
 ![Vue](https://img.shields.io/badge/Vue-3-42b883.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104%2B-009688.svg)
 
-LynxAgent 把「全市场形态扫描」和「多智能体深度研究」合到一个轻量产品里：先用本地行情数据在全市场（约 5000 只）里扫出技术形态候选，再让多个 AI 智能体（行业 / 估值 / 情景）逐只深挖，产出可读的深度分析报告。
+AStockPick 用本地日线在全市场（约 5000 只）做结构因子评分选股，**评分公式与 12 个月历史回放严格同源**——选出来的每一分都能被回放验证。区别于满大街的荐股工具：它用超额收益口径（相对全市场中位）说话、不承诺胜率、涨停买不到会如实标注、弱市该停跟会主动提示。多个 AI 智能体（行业 / 估值 / 情景）可对单只个股逐只深挖，产出可读的深度分析报告。
 
 ---
 

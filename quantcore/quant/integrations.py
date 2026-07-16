@@ -317,7 +317,7 @@ def integration_capabilities() -> List[Dict[str, Any]]:
             status="already_covered",
             capabilities=["因子研究循环", "策略验证思路", "批量策略筛选", "回测结果复核"],
             integration_mode="deterministic_factor_agent_and_composable_strategies",
-            notes="MIT 项目可借鉴；当前 LynxAgent 已有因子 Agent 与组合策略框架，暂不引入聚宽自动化依赖。",
+            notes="MIT 项目可借鉴；当前 AStockPick 已有因子 Agent 与组合策略框架，暂不引入聚宽自动化依赖。",
         ),
         IntegrationCapability(
             name="stock_analysis_deep_report",

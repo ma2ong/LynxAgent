@@ -55,7 +55,7 @@ from quantcore.shared.disclaimer import attach_disclaimer
 LYNX_PUBLIC = os.getenv("LYNX_PUBLIC", "false").lower() in ("1", "true", "yes")
 
 app = FastAPI(
-    title="LynxAgent SaaS Lite",
+    title="AStockPick",
     version="0.1.0",
     description="Local SaaS Lite runtime with SQLite auth and protected quant APIs.",
     docs_url=None if LYNX_PUBLIC else "/docs",
@@ -653,7 +653,7 @@ async def root():
     index = Path(__file__).resolve().parent.parent / "frontend" / "dist" / "index.html"
     if index.is_file():
         return FileResponse(str(index), headers={"Cache-Control": "no-cache"})
-    return {"name": "LynxAgent SaaS Lite", "status": "running"}
+    return {"name": "AStockPick", "status": "running"}
 
 
 @app.get("/api/health")
@@ -3998,7 +3998,7 @@ async def test_wechat_push(user: dict[str, Any] = Depends(get_current_lite_user)
         })
     result = notification_store.notify_user(
         user["username"],
-        "LynxAgent 微信推送测试",
+        "AStockPick 微信推送测试",
         "这是一条测试通知。收到后说明微信推送绑定已生效。\n\n仅供研究提醒，不构成投资建议。",
         type_="wechat_test",
         payload={"source": "membership"},

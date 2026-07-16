@@ -1,4 +1,4 @@
-"""Quantitative analysis extensions for LynxAgent."""
+"""Quantitative analysis extensions for AStockPick."""
 
 from .engine import QuantEngine
 from .models import (

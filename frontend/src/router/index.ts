@@ -9,8 +9,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/components/Layout/AppLayout.vue'),
     meta: { requiresAuth: true },
     children: [
-      { path: '', redirect: '/today' },
-      { path: 'today', name: 'today', component: () => import('@/views/Today/Index.vue') },
+      { path: '', redirect: '/quant' },
       { path: 'limit-up', name: 'limit-up', component: () => import('@/views/LimitUp/Index.vue') },
       { path: 'heatmap', name: 'heatmap', component: () => import('@/views/Heatmap/Index.vue') },
       { path: 'call-auction', name: 'call-auction', component: () => import('@/views/CallAuction/Index.vue') },
@@ -25,7 +24,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'admin/users', name: 'admin-users', component: () => import('@/views/Admin/Users.vue'), meta: { requiresAdmin: true } },
     ],
   },
-  { path: '/:pathMatch(.*)*', redirect: '/today' },
+  { path: '/:pathMatch(.*)*', redirect: '/quant' },
 ]
 
 const router = createRouter({
@@ -39,7 +38,7 @@ router.beforeEach(async (to) => {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
   if (to.name === 'login' && token) {
-    return { name: 'today' }
+    return { name: 'quant' }
   }
   if (to.meta.requiresAdmin) {
     const { loadCurrentUser } = await import('@/stores/user')

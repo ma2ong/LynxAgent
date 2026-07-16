@@ -24,7 +24,6 @@
         class="menu"
         @select="mobileMenuOpen = false"
       >
-        <el-menu-item index="/today"><el-icon><Calendar /></el-icon><span>今日</span></el-menu-item>
         <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
         <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
         <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
@@ -58,7 +57,7 @@ import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   TrendCharts, Star, SwitchButton,
-  DocumentChecked, Coin, Calendar, Menu,
+  DocumentChecked, Coin, Menu,
   MagicStick, Medal, Setting, DataLine, Sunrise, DataAnalysis, Histogram,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'

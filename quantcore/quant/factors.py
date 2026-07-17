@@ -222,9 +222,17 @@ def smart_factor_chunk(payload: Dict[str, object]) -> list:
             score = composite_score(factors)
         except Exception:
             continue
+        # 七不买体检顺手做掉：worker 手里已有截断日线，零额外 IO（问题股/ST 由池级排除兜底）
+        try:
+            from .risk_check import check_risks
+            risk = check_risks(sym, "", df)
+            risk_flags = risk["flags"]
+        except Exception:
+            risk_flags = []
         out.append({"symbol": sym, "score": score, "factors": factors,
                     "close_local": float(df["close"].iloc[-1] or 0),
-                    "amount_local": local_amount})
+                    "amount_local": local_amount,
+                    "risk_flags": risk_flags})
     return out
 
 

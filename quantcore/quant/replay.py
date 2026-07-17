@@ -29,7 +29,8 @@ HORIZON = 5
 # 扫描断点缓存的口径版本：_replay_symbol 的评分器集合/公式一旦变化必须 +1，
 # 否则同轴续跑会复用旧口径的候选（实测：加 smart_fac 池后旧缓存里没有它）。
 # v3：smart 评分切换为结构因子合成（原 smart_fac 实验转正），smart_fac 池移除。
-SCAN_VERSION = 3
+# v4：形态识别新增三不卖低位形态（三军会师/双管齐下/五阳上阵），pattern 候选集变化。
+SCAN_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS replay_runs (

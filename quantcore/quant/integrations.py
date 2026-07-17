@@ -241,6 +241,69 @@ def _detect_pre_lift_patterns(data: pd.DataFrame) -> List[Dict[str, Any]]:
                 ],
             ))
 
+    # ---- 三不卖（低位持有/介入形态，源自经典口诀，2026-07-17 并入）----
+    # 「低位」统一定义：收盘处于近 120 日区间下 40%，避免把高位形态误判成底部信号。
+    low_window = data.tail(120)
+    lw_low = _safe_number(low_window["low"].min())
+    lw_high = _safe_number(low_window["high"].max())
+    at_low = lw_high > lw_low > 0 and (close - lw_low) / (lw_high - lw_low) <= 0.40
+
+    # 三军会师：MA5>MA10>MA20 多头排列且三线金叉发生在近 5 日内（低位）
+    if at_low and min(ma5, ma10, ma20) > 0 and ma5 > ma10 > ma20:
+        five_ago = data.iloc[-6] if len(data) > 6 else data.iloc[0]
+        was_bear = _safe_number(five_ago.get("ma5")) <= _safe_number(five_ago.get("ma10")) or \
+                   _safe_number(five_ago.get("ma10")) <= _safe_number(five_ago.get("ma20"))
+        if was_bear:
+            spread = (ma5 / ma20 - 1) * 100
+            patterns.append(_pattern(
+                "ma_triple_cross_low",
+                "三军会师",
+                66 + min(spread, 5) * 3 + max(0, pct_chg) * 1.5,
+                f"低位 5/10/20 日均线近 5 日内完成金叉并多头排列（MA5 高于 MA20 {spread:.1f}%），趋势向好。",
+                {"ma5": ma5, "ma10": ma10, "ma20": ma20, "position_in_120d": round((close - lw_low) / (lw_high - lw_low), 3)},
+                [{"type": "arrow", "date": _dt(-1), "price": high, "label": "三线金叉"}],
+            ))
+
+    # 双管齐下：近 3 根内两根长下影小实体 K 线、下影最低点相近（低位）
+    if at_low and len(data) >= 3:
+        tail3 = data.tail(3)
+        hammers = []
+        for pos_off, (_, row) in enumerate(tail3.iterrows()):
+            o, c, lo = _safe_number(row.get("open")), _safe_number(row.get("close")), _safe_number(row.get("low"))
+            body = abs(c - o)
+            lower_shadow = min(o, c) - lo
+            if c > 0 and lower_shadow >= max(body, c * 0.002) * 2 and body / c < 0.015:
+                hammers.append((pos_off, lo))
+        if len(hammers) >= 2:
+            lows = [h[1] for h in hammers[-2:]]
+            if min(lows) > 0 and abs(lows[0] - lows[1]) / min(lows) < 0.015:
+                patterns.append(_pattern(
+                    "double_hammer_low",
+                    "双管齐下",
+                    64 + max(0, pct_chg) * 2,
+                    f"低位连续出现两根长下影小实体 K 线，下影最低点相近（{min(lows):.2f}），下方承接强劲。",
+                    {"hammer_lows": [round(v, 3) for v in lows]},
+                    [{"type": "hline", "price": round(min(lows), 3), "label": "下影支撑"}],
+                ))
+
+    # 五阳上阵：连续 5 日小阳线、累计涨幅温和（低位）
+    if at_low and len(data) >= 5:
+        tail5 = data.tail(5)
+        opens5 = tail5["open"].astype(float)
+        closes5 = tail5["close"].astype(float)
+        all_bull = bool((closes5.values > opens5.values).all())
+        small_bodies = bool(((closes5.values - opens5.values) / opens5.values <= 0.03).all()) if all_bull else False
+        cum_gain = (float(closes5.iloc[-1]) / float(opens5.iloc[0]) - 1) * 100 if float(opens5.iloc[0]) > 0 else 99
+        if all_bull and small_bodies and cum_gain < 12:
+            patterns.append(_pattern(
+                "five_soldiers_low",
+                "五阳上阵",
+                63 + cum_gain * 1.2,
+                f"低位连续 5 日收小阳（累计 {_signed_pct(cum_gain)}），多方稳步掌控局面。",
+                {"cum_gain_pct": round(cum_gain, 2)},
+                [{"type": "box", "date1": _dt(-5), "date2": _dt(-1), "label": "五连阳"}],
+            ))
+
     patterns.sort(key=lambda item: item["strength"], reverse=True)
     return patterns
 

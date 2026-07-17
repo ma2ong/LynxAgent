@@ -86,6 +86,23 @@ export interface QuantSmartPoolItem {
   trade_plan?: TradePlan
   /** 当前已封涨停：展示的收盘买入价实际买不到，实盘只能次日开盘入场 */
   limit_up?: boolean
+  /** 七不买体检命中的风险/提示项 */
+  risk_flags?: RiskFlag[]
+}
+
+export interface RiskFlag {
+  key: string
+  name: string
+  level: 'risk' | 'info'
+  reason: string
+}
+
+export interface RiskCheckResult {
+  symbol: string
+  name: string
+  flags: RiskFlag[]
+  risk_count: number
+  advice: string
 }
 
 export interface QuantSmartPoolResult {
@@ -445,6 +462,10 @@ export const quantApi = {
 
   klineDetail: async (symbol: string, name = '', days = 250) =>
     unwrap<any>(await ApiClient.get('/api/quant/kline', { symbol, name, days }, { timeout: 60000 })),
+
+  // ---- 七不买体检：规则化风险检查（日线 + 实时行情，非 LLM）----
+  riskCheck: async (symbol: string) =>
+    unwrap<RiskCheckResult>(await ApiClient.get('/api/quant/risk-check', { symbol, _ts: nonce() }, { timeout: 30000 })),
 
   // ---- 个股深研增强：投资者画像 / 红旗（走 LLM）----
   investorPanel: async (symbol: string) =>

@@ -357,6 +357,39 @@ async def quant_picks_stats(days: int = 30, pool: str = ""):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/risk-check")
+async def quant_risk_check(symbol: str):
+    """七不买体检：对任意个股跑规则化风险检查（日线 + 实时行情 + 业绩预告标记）。"""
+    sym = str(symbol or "").strip().zfill(6)
+    if not sym.strip("0") or len(sym) != 6:
+        raise HTTPException(status_code=400, detail="无效股票代码")
+
+    def _run():
+        from quantcore.quant.data import load_local_kline
+        from quantcore.quant.engine import _fetch_tencent_quotes
+        from quantcore.quant.local_store import get_local_store
+        from quantcore.quant.risk_check import check_risks
+
+        df = load_local_kline(sym, days=200)
+        if df is None or len(df) < 20:
+            raise ValueError("本地日线不足，请先在数据中心同步该股行情")
+        quote = (_fetch_tencent_quotes([sym]) or {}).get(sym) or {}
+        try:
+            bad = sym in get_local_store().load_bad_forecast_symbols()
+        except Exception:
+            bad = False
+        name = str(quote.get("name") or "")
+        result = check_risks(sym, name, df, quote=quote, bad_forecast=bad)
+        return {"symbol": sym, "name": name, **result}
+
+    try:
+        return await asyncio.to_thread(_run)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/signal-stats")
 async def quant_signal_stats(pool: str = "smart", days: int = 90):
     """信号历史表现（入选理由卡）：池级留痕/回放双口径 + 形态级 T+5 超额聚合。"""

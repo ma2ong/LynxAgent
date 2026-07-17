@@ -193,6 +193,11 @@
               </el-table-column>
               <el-table-column label="入选理由" min-width="460">
                 <template #default="{ row }">
+                  <el-tooltip v-for="f in row.risk_flags || []" :key="f.key" :content="f.reason" placement="top">
+                    <el-tag class="capability-tag" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="dark">
+                      ⚠ {{ f.name }}
+                    </el-tag>
+                  </el-tooltip>
                   <el-tag v-for="reason in row.reasons" :key="reason" class="capability-tag" effect="plain">
                     {{ reason }}
                   </el-tag>
@@ -376,6 +381,11 @@
               </el-table-column>
               <el-table-column label="证据/理由" min-width="360">
                 <template #default="{ row }">
+                  <el-tooltip v-for="f in row.risk_flags || []" :key="f.key" :content="f.reason" placement="top">
+                    <el-tag class="capability-tag" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="dark">
+                      ⚠ {{ f.name }}
+                    </el-tag>
+                  </el-tooltip>
                   <el-tag v-for="reason in row.reasons" :key="reason" class="capability-tag" effect="plain">
                     {{ reason }}
                   </el-tag>

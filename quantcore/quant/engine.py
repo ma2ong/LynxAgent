@@ -57,14 +57,8 @@ def _json_safe(value):
     return value
 
 
-def board_limit_pct(symbol: str) -> float:
-    """日涨跌幅上限：科创688/689、创业300/301 = 20%；北交 8/4/920 = 30%；主板 = 10%。"""
-    sym = str(symbol or "")
-    if sym.startswith(("688", "689", "300", "301")):
-        return 20.0
-    if sym.startswith(("8", "4", "920")):
-        return 30.0
-    return 10.0
+# 单一定义在轻量的 risk_check（worker 子进程 import 链考虑），此处再导出保持既有引用不变
+from .risk_check import board_limit_pct  # noqa: E402
 
 
 def is_limit_up(symbol: str, pct_chg: float) -> bool:
@@ -242,11 +236,21 @@ def _pattern_scan_one(payload: Dict[str, object]) -> Optional[Dict[str, object]]
             "factors": factors, "risk": risk, "patterns": matched, "matched_patterns": matched,
             "wyckoff": wyckoff,
             "limit_up": is_limit_up(symbol, pct_chg),
+            "risk_flags": _risk_flags_safe(symbol, str(quote.get("name") or payload.get("name") or ""), data, quote),
             "trade_plan": trade_plan(price, latest_atr(data)),
             "reasons": list(dict.fromkeys(reasons))[:8],
         }
     except Exception:
         return None
+
+
+def _risk_flags_safe(symbol: str, name: str, df, quote=None) -> list:
+    """七不买体检（worker 内顺手做，失败不影响主结果）。"""
+    try:
+        from .risk_check import check_risks
+        return check_risks(symbol, name, df, quote=quote)["flags"]
+    except Exception:
+        return []
 
 
 class QuantEngine:
@@ -408,6 +412,7 @@ class QuantEngine:
                 "pct_chg": _safe_float(quote.get("pct_chg"), 0),
                 "amount": rt_amount or float(scored["amount_local"] or 0),
                 "limit_up": is_limit_up(symbol, _safe_float(quote.get("pct_chg"), 0)),
+                "risk_flags": scored.get("risk_flags") or [],
                 "factors": factors,
                 "risk": {"volatility": 0, "max_drawdown": 0, "sharpe": 0},
                 "forecast": {

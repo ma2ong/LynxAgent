@@ -129,6 +129,23 @@
         </div>
       </div>
 
+      <!-- 七不买体检 -->
+      <div class="card risk-card" v-if="riskCheck">
+        <div class="card-title">七不买体检
+          <el-tag size="small" :type="riskCheck.risk_count >= 2 ? 'danger' : riskCheck.risk_count === 1 ? 'warning' : 'success'" effect="dark">
+            {{ riskCheck.risk_count >= 2 ? '回避' : riskCheck.risk_count === 1 ? '谨慎' : '无雷' }}
+          </el-tag>
+        </div>
+        <template v-if="riskCheck.flags.length">
+          <div v-for="f in riskCheck.flags" :key="f.key" class="risk-row">
+            <el-tag size="small" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="plain">{{ f.name }}</el-tag>
+            <span class="risk-reason">{{ f.reason }}</span>
+          </div>
+        </template>
+        <div v-else class="risk-row"><span class="risk-reason">急涨 / 天量 / 滞涨 / 破位 / 横盘 / 问题股 六项规则均未命中。</span></div>
+        <p class="risk-advice">{{ riskCheck.advice }}</p>
+      </div>
+
       <!-- K线图 -->
       <div class="card" v-if="data.kline?.dates?.length">
         <div class="card-title">价格走势（近40日，可缩放）</div>
@@ -459,7 +476,7 @@ import { echarts, type ECharts } from '@/utils/echarts'
 import { ElMessage } from 'element-plus'
 import { Search, Clock, Close } from '@element-plus/icons-vue'
 import { ApiClient } from '@/api/request'
-import { quantApi } from '@/api/quant'
+import { quantApi, type RiskCheckResult } from '@/api/quant'
 
 const symbolInput = ref('')
 const loading = ref(false)
@@ -725,6 +742,15 @@ const renderKline = () => {
   })
 }
 
+const riskCheck = ref<RiskCheckResult | null>(null)
+
+const loadRiskCheck = async (s: string) => {
+  riskCheck.value = null
+  try {
+    riskCheck.value = await quantApi.riskCheck(s)
+  } catch { /* 本地日线不足等情况静默，不阻塞主分析 */ }
+}
+
 const analyze = async (sym?: string) => {
   const s = (sym || symbolInput.value).trim()
   if (!s) return
@@ -732,10 +758,12 @@ const analyze = async (sym?: string) => {
   loading.value = true
   data.value = null
   panel.value = null
+  riskCheck.value = null
   deepStarted.value = false
   deepResult.value = null
   deepError.value = ''
   try {
+    const riskPromise = loadRiskCheck(s)  // 与主分析并行，先到先渲染
     const res: any = await ApiClient.get(`/api/quant/stock-analysis/${s}`, { _ts: Date.now() }, { timeout: 120000 })
     data.value = res?.data || null
     if (data.value?.available) {
@@ -745,6 +773,7 @@ const analyze = async (sym?: string) => {
     } else {
       ElMessage.warning('未找到该股票数据')
     }
+    await riskPromise
   } catch (e: any) {
     ElMessage.error(e?.message || '分析失败')
   } finally {
@@ -1275,5 +1304,31 @@ onUnmounted(() => {
   }
   .nt { white-space: normal; }
   .nd { margin-left: 0; }
+}
+
+.risk-card {
+  .card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .risk-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 3px 0;
+  }
+
+  .risk-reason {
+    font-size: 13px;
+    color: var(--el-text-color-regular);
+  }
+
+  .risk-advice {
+    margin: 8px 0 0;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+  }
 }
 </style>

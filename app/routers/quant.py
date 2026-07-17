@@ -402,13 +402,24 @@ async def quant_signal_stats(pool: str = "smart", days: int = 90):
 
 
 @router.post("/replay/run")
-async def quant_replay_run(months: int = 12, step: int = 5, top_n: int = 20):
-    """启动一次选股规则历史回放（后台线程，防重入；结果落库后由 /replay/results 查询）。"""
+async def quant_replay_run(months: int = 12, step: int = 5, top_n: int = 20, anchor: str = ""):
+    """启动一次选股规则历史回放（后台线程，防重入；结果落库后由 /replay/results 查询）。
+
+    anchor（YYYY-MM-DD，可选）：会话轴锚定日。跑 A/B 时传旧 run 的锚定日可复现同一条轴，
+    让两次运行只差评分器版本（run_replay 本就支持，此处透传）。
+    """
     try:
+        from datetime import date as _date
         from quantcore.quant.replay import start_replay_async
+        anchor_val = None
+        if anchor:
+            _date.fromisoformat(anchor)  # 非法日期直接 400
+            anchor_val = anchor
         return start_replay_async(
             months=max(1, min(months, 24)), step=max(1, min(step, 20)),
-            top_n=max(3, min(top_n, 50)))
+            top_n=max(3, min(top_n, 50)), anchor=anchor_val)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"anchor 需为 YYYY-MM-DD：{exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

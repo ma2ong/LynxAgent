@@ -28,7 +28,6 @@
         <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
         <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
         <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
-        <el-menu-item index="/insights/capital"><el-icon><Coin /></el-icon><span>资金面板</span></el-menu-item>
         <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
         <el-menu-item index="/review"><el-icon><DataAnalysis /></el-icon><span>选股复盘</span></el-menu-item>
         <el-menu-item index="/favorites"><el-icon><Star /></el-icon><span>我的自选股</span></el-menu-item>
@@ -57,7 +56,7 @@ import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   TrendCharts, Star, SwitchButton,
-  DocumentChecked, Coin, Menu,
+  DocumentChecked, Menu,
   MagicStick, Medal, Setting, DataLine, Sunrise, DataAnalysis, Histogram,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'

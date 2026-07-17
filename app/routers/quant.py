@@ -14,13 +14,6 @@ from quantcore.quant.chart_service import build_chart_payload
 from quantcore.quant.data_sources import data_source_status
 from quantcore.quant.report_service import build_stock_report
 from quantcore.quant.pipeline import run_pipeline, list_runs, get_run, run_t5_review, quick_critic_batch
-from quantcore.quant.capital_flow import (
-    industry_fund_flow_rank,
-    concept_fund_flow_rank,
-    individual_fund_flow_rank,
-)
-from quantcore.quant.dragon_tiger import dragon_tiger_list, dragon_tiger_seats
-from quantcore.quant.calendar_events import financial_calendar
 from quantcore.quant.investor_panel import investor_panel, run_panel_batch
 from quantcore.quant.red_flags import red_flag_scan
 
@@ -403,38 +396,7 @@ async def quant_replay_results():
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/capital/industry-flow")
-async def capital_industry_flow():
-    return await asyncio.to_thread(industry_fund_flow_rank)
-
-
-@router.get("/capital/concept-flow")
-async def capital_concept_flow():
-    return await asyncio.to_thread(concept_fund_flow_rank)
-
-
-@router.get("/capital/stock-flow")
-async def capital_stock_flow(limit: int = 50):
-    return await asyncio.to_thread(individual_fund_flow_rank, limit)
-
-
-@router.get("/dragon-tiger")
-async def dragon_tiger(date: str = ""):
-    return await asyncio.to_thread(dragon_tiger_list, date)
-
-
-@router.get("/dragon-tiger/seats")
-async def dragon_tiger_seat_detail(symbol: str, date: str = ""):
-    return await asyncio.to_thread(dragon_tiger_seats, symbol, date)
-
-
 # ---- 聪明钱：活跃席位 / 席位胜率 / 基金重仓（akshare，6h 缓存，不计费）----
-
-
-@router.get("/calendar")
-async def capital_calendar(types: str = "earnings,unlock,ipo", days: int = 14):
-    type_list = [t.strip() for t in types.split(",") if t.strip()]
-    return await asyncio.to_thread(financial_calendar, type_list, days)
 
 
 # ---- 个股深研增强：评委打分 / 红旗快查（走 LLM，计入配额）----

@@ -446,29 +446,7 @@ export const quantApi = {
   klineDetail: async (symbol: string, name = '', days = 250) =>
     unwrap<any>(await ApiClient.get('/api/quant/kline', { symbol, name, days }, { timeout: 60000 })),
 
-  // ---- 资金面：资金流向 / 龙虎榜 / 财经日历 ----
-  capitalIndustryFlow: async () =>
-    unwrap<any>(await ApiClient.get('/api/quant/capital/industry-flow', undefined, { timeout: 60000 })),
-  capitalConceptFlow: async () =>
-    unwrap<any>(await ApiClient.get('/api/quant/capital/concept-flow', undefined, { timeout: 60000 })),
-  capitalStockFlow: async (limit = 50) =>
-    unwrap<any>(await ApiClient.get('/api/quant/capital/stock-flow', { limit }, { timeout: 60000 })),
-  dragonTiger: async (date = '') =>
-    unwrap<any>(await ApiClient.get('/api/quant/dragon-tiger', { date }, { timeout: 60000 })),
-  dragonTigerSeats: async (symbol: string, date = '') =>
-    unwrap<any>(await ApiClient.get('/api/quant/dragon-tiger/seats', { symbol, date }, { timeout: 60000 })),
-  capitalCalendar: async (types = 'earnings,unlock,ipo', days = 14) =>
-    unwrap<any>(await ApiClient.get('/api/quant/calendar', { types, days }, { timeout: 60000 })),
-
-  // ---- 加权情绪：大盘 / 板块 ----
-  marketWeightedSentiment: async () =>
-    unwrap<any>(await ApiClient.get('/api/quant/market/weighted-sentiment', undefined, { timeout: 60000 })),
-  sectorSentimentRank: async (limit = 20) =>
-    unwrap<any>(await ApiClient.get('/api/quant/sector/sentiment-rank', { limit }, { timeout: 60000 })),
-
-  // ---- 个股深研增强：加权情绪 / 投资者画像 / 红旗（后两者走 LLM）----
-  stockSentiment: async (symbol: string) =>
-    unwrap<any>(await ApiClient.get('/api/quant/stock/sentiment', { symbol }, { timeout: 60000 })),
+  // ---- 个股深研增强：投资者画像 / 红旗（走 LLM）----
   investorPanel: async (symbol: string) =>
     unwrap<any>(await ApiClient.get('/api/quant/stock/investor-panel', { symbol }, { timeout: 120000 })),
   redFlags: async (symbol: string) =>

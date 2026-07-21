@@ -67,6 +67,7 @@
           <el-radio-button value="">全部</el-radio-button>
           <el-radio-button value="pattern">形态智选</el-radio-button>
           <el-radio-button value="smart">智能推荐</el-radio-button>
+          <el-radio-button value="strength">强势股</el-radio-button>
           <el-radio-button value="swing">短线波段</el-radio-button>
           <el-radio-button value="auction">竞价优选</el-radio-button>
         </el-radio-group>
@@ -237,6 +238,7 @@ const horizons = [
 const POOL_LABELS: Record<string, string> = {
   pattern: '形态智选',
   smart: '智能推荐',
+  strength: '强势股',
   swing: '短线波段',
   auction: '竞价优选',
   // 换评分公式必须换池名：旧公式的战绩不能挂在新公式名下（2026-07-14 v2→v3）

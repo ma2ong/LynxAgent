@@ -183,7 +183,7 @@ async def _start_ml_factor_scheduler() -> None:
                     store.evaluate_picks(days=days, refresh=True)
                 except Exception:
                     continue
-            for pool in ("smart", "pattern", "swing", "auction"):
+            for pool in ("smart", "pattern", "strength", "swing", "auction"):
                 try:
                     store.signal_stats(pool, refresh=True)
                 except Exception:
@@ -195,6 +195,26 @@ async def _start_ml_factor_scheduler() -> None:
         CronTrigger.from_crontab(os.getenv("SIGNAL_STATS_CRON", "55 15 * * 1-5"), timezone=tz),
         id="signal_stats_preheat", name="信号统计缓存预热",
         replace_existing=True, misfire_grace_time=3600,
+    )
+
+    # 集合竞价盘口采样：仅 09:15-09:25 每 20 秒采一次全市场快照，攒竞价轨迹供四形态识别。
+    # 只在竞价窗口触发（非常驻循环，11 分钟/天），采样收盘后自然停止；只实时可用、不回测。
+    async def _job_auction_sampling() -> None:
+        if not await _is_trading_day_now():
+            return
+        try:
+            from quantcore.quant.auction_tape import record_sample
+            snapshot = await asyncio.to_thread(_load_realtime_quotes_snapshot, 5)
+            await asyncio.to_thread(record_sample, snapshot)
+        except Exception:
+            pass
+
+    _ml_factor_scheduler.add_job(
+        _job_auction_sampling,
+        CronTrigger(hour=9, minute="15-25", second="*/20",
+                    day_of_week="mon-fri", timezone=tz),
+        id="auction_sampling", name="集合竞价盘口采样",
+        replace_existing=True, misfire_grace_time=15, max_instances=1, coalesce=True,
     )
     _ml_factor_scheduler.start()
 
@@ -3243,6 +3263,27 @@ async def lite_call_auction(
         industry_map=industry_map, hot_industries=hot_industries, exclude_symbols=bad_symbols,
         open_min=open_min, open_max_ratio=open_max_ratio,
     )
+
+    # 四形态（实时·不可回测）：竞价窗口内被访问时顺手采一点提高分辨率；
+    # 给买入候选贴上盘口形态（抢筹/诱多/洗盘/分歧），并附全市场形态计数。
+    try:
+        from quantcore.quant.auction_tape import classify_symbol, record_sample, tape_summary
+        from quantcore.quant.call_auction import _in_auction_window
+        if _in_auction_window():
+            record_sample(snapshot)
+        tape = tape_summary()
+        result["auction_tape"] = {
+            "available": tape["available"], "tracked": tape["tracked"],
+            "sample_points": tape["sample_points"], "pattern_counts": tape["pattern_counts"],
+            "note": "四形态来自 09:15-09:25 竞价过程采样，仅实时可用、无法历史回测。",
+        }
+        for c in result.get("buy_candidates", []) or []:
+            pat = classify_symbol(str(c.get("code") or ""))
+            if pat.get("pattern") not in (None, "insufficient"):
+                c["auction_pattern"] = pat
+    except Exception:
+        pass
+
     payload = {
         "success": True,
         "data": {**result, "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S")},

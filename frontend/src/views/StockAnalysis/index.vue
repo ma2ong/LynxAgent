@@ -129,21 +129,38 @@
         </div>
       </div>
 
-      <!-- 七不买体检 -->
+      <!-- 避雷决策（多角度综合 + 分档建议） -->
       <div class="card risk-card" v-if="riskCheck">
-        <div class="card-title">七不买体检
-          <el-tag size="small" :type="riskCheck.risk_count >= 2 ? 'danger' : riskCheck.risk_count === 1 ? 'warning' : 'success'" effect="dark">
-            {{ riskCheck.risk_count >= 2 ? '回避' : riskCheck.risk_count === 1 ? '谨慎' : '无雷' }}
+        <div class="card-title">避雷决策
+          <el-tag size="small" :type="verdictTagType(riskCheck.verdict?.level)" effect="dark">
+            {{ riskCheck.verdict?.level || (riskCheck.risk_count >= 2 ? '回避' : riskCheck.risk_count === 1 ? '谨慎' : '无雷') }}
           </el-tag>
+          <span v-if="riskCheck.composite != null" class="composite">综合 {{ riskCheck.composite.toFixed(0) }}</span>
         </div>
+
+        <!-- 分档买卖建议 -->
+        <div v-if="riskCheck.verdict?.stance" class="stance" :class="verdictTagType(riskCheck.verdict.level)">
+          {{ riskCheck.verdict.stance }}
+        </div>
+
+        <!-- 五角度评分条 -->
+        <div v-if="riskCheck.angles?.length" class="angles">
+          <div v-for="a in riskCheck.angles" :key="a.key" class="angle-row" :title="a.note">
+            <span class="angle-label">{{ a.label }}</span>
+            <div class="angle-bar"><i :class="angleClass(a.score)" :style="{ width: Math.max(4, a.score) + '%' }" /></div>
+            <span class="angle-state" :class="angleClass(a.score)">{{ a.state }}</span>
+          </div>
+        </div>
+
+        <!-- 七不买红灯明细 -->
         <template v-if="riskCheck.flags.length">
           <div v-for="f in riskCheck.flags" :key="f.key" class="risk-row">
             <el-tag size="small" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="plain">{{ f.name }}</el-tag>
             <span class="risk-reason">{{ f.reason }}</span>
           </div>
         </template>
-        <div v-else class="risk-row"><span class="risk-reason">急涨 / 天量 / 滞涨 / 破位 / 横盘 / 问题股 六项规则均未命中。</span></div>
-        <p class="risk-advice">{{ riskCheck.advice }}</p>
+        <div v-else class="risk-row"><span class="risk-reason">七不买（急涨/天量/滞涨/破位/横盘/问题股）均未命中。</span></div>
+        <p class="risk-advice">{{ riskCheck.disclaimer || riskCheck.advice }}</p>
       </div>
 
       <!-- K线图 -->
@@ -744,6 +761,13 @@ const renderKline = () => {
 
 const riskCheck = ref<RiskCheckResult | null>(null)
 
+const VERDICT_TAG: Record<string, string> = {
+  可买入: 'success', 偏多观望: 'primary', 中性观望: 'info',
+  谨慎观望: 'warning', 回避: 'danger', 强烈回避: 'danger', 偏空回避: 'danger',
+}
+const verdictTagType = (level?: string) => VERDICT_TAG[level || ''] || 'info'
+const angleClass = (score: number) => (score >= 62 ? 'a-good' : score >= 42 ? 'a-mid' : 'a-bad')
+
 const loadRiskCheck = async (s: string) => {
   riskCheck.value = null
   try {
@@ -1330,5 +1354,27 @@ onUnmounted(() => {
     font-size: 12px;
     color: var(--el-text-color-secondary);
   }
+
+  .composite { font-size: 12px; color: var(--el-text-color-secondary); margin-left: auto; }
+  .stance {
+    margin: 4px 0 10px; padding: 8px 12px; border-radius: 6px; font-size: 13px; font-weight: 600;
+    border-left: 3px solid;
+  }
+  .stance.success { background: var(--el-color-success-light-9); border-color: var(--el-color-success); color: var(--el-color-success); }
+  .stance.primary { background: var(--el-color-primary-light-9); border-color: var(--el-color-primary); color: var(--el-color-primary); }
+  .stance.warning { background: var(--el-color-warning-light-9); border-color: var(--el-color-warning); color: var(--el-color-warning); }
+  .stance.danger  { background: var(--el-color-danger-light-9);  border-color: var(--el-color-danger);  color: var(--el-color-danger); }
+  .stance.info    { background: var(--el-fill-color-light); border-color: var(--el-border-color); color: var(--el-text-color-regular); }
+
+  .angles { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 10px; }
+  .angle-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .angle-label { width: 96px; color: var(--el-text-color-secondary); flex: none; }
+  .angle-bar { flex: 1; height: 8px; border-radius: 4px; background: var(--el-fill-color); overflow: hidden;
+    i { display: block; height: 100%; border-radius: 4px; } }
+  .angle-state { width: 60px; text-align: right; flex: none; font-weight: 600; }
+  .a-good { background: var(--el-color-success); color: var(--el-color-success); }
+  .a-mid  { background: var(--el-color-warning); color: var(--el-color-warning); }
+  .a-bad  { background: var(--el-color-danger);  color: var(--el-color-danger); }
+  .angle-state.a-good, .angle-state.a-mid, .angle-state.a-bad { background: transparent; }
 }
 </style>

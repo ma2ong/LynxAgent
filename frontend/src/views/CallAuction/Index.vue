@@ -46,6 +46,25 @@
 
       <div class="verdict">{{ data.overview.verdict }}</div>
 
+      <!-- 竞价四形态（实时·不可回测） -->
+      <section class="tape" v-if="data.auction_tape && data.auction_tape.available">
+        <div class="tape-head">
+          竞价盘口四形态
+          <span class="tape-meta">跟踪 {{ data.auction_tape.tracked }} 只 · {{ data.auction_tape.sample_points }} 个采样点</span>
+          <span class="tape-live">实时 · 不可回测</span>
+        </div>
+        <div class="tape-counts">
+          <span class="tc t-acc">主力抢筹 <b>{{ data.auction_tape.pattern_counts.accumulation }}</b></span>
+          <span class="tc t-dist">诱多出货 <b>{{ data.auction_tape.pattern_counts.distribution }}</b></span>
+          <span class="tc t-shake">洗盘低吸 <b>{{ data.auction_tape.pattern_counts.shakeout }}</b></span>
+          <span class="tc t-div">多空分歧 <b>{{ data.auction_tape.pattern_counts.divergence }}</b></span>
+        </div>
+        <p class="tape-note">{{ data.auction_tape.note }}</p>
+      </section>
+      <el-alert v-else-if="data.auction_tape && !data.auction_tape.available"
+        type="info" :closable="false" show-icon style="margin:2px 0"
+        title="竞价四形态需在盘前 09:15-09:25 期间采样才有数据（实时可用、无法回测）" />
+
       <!-- 高开幅度分布（精确口径） -->
       <section class="dist" v-if="data.overview.distribution?.length">
         <div class="dist-head">
@@ -97,6 +116,8 @@
             <div class="cc-l">
               <div class="cc-name">{{ c.name }}<span class="cc-code">{{ c.code }}</span>
                 <span v-if="c.theme" class="theme-tag">{{ c.theme }}</span>
+                <span v-if="c.auction_pattern" class="pat-tag" :class="patClass(c.auction_pattern.pattern)"
+                  :title="c.auction_pattern.note">{{ c.auction_pattern.label }}</span>
                 <span v-if="c.tier" class="tier" :class="tierClass(c.tier)">{{ c.tier }}</span>
               </div>
               <div class="cc-reasons">{{ c.reasons.join(' · ') }}</div>
@@ -140,6 +161,10 @@ const DIST_CLASS: Record<string, string> = {
 }
 const distClass = (label: string) => DIST_CLASS[label] || 'd-flat'
 const rankClass = (r: number) => (r === 1 ? 'r1' : r <= 3 ? 'r23' : 'rn')
+const PAT_CLASS: Record<string, string> = {
+  accumulation: 'p-acc', distribution: 'p-dist', shakeout: 'p-shake', divergence: 'p-div', neutral: 'p-neu',
+}
+const patClass = (p: string) => PAT_CLASS[p] || 'p-neu'
 const tierClass = (t: string) => (t === '最强推荐' ? 't-top' : t === '强推荐' ? 't-strong' : 't-mid')
 const fmtAmt = (yi: number) => (yi >= 10000 ? `${(yi / 10000).toFixed(2)} 万亿` : `${yi} 亿`)
 
@@ -258,4 +283,23 @@ onMounted(load)
 .cc-pct { font-size: 13px; font-weight: 600; }
 
 .disclaimer { font-size: 11px; color: var(--el-text-color-placeholder); margin: 4px 0 0; }
+
+/* 竞价四形态 */
+.tape { background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 10px; padding: 12px 16px; }
+.tape-head { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+.tape-meta { font-size: 12px; font-weight: 400; color: var(--el-text-color-secondary); }
+.tape-live { margin-left: auto; font-size: 11px; font-weight: 600; color: #fff; background: var(--el-color-success); padding: 2px 8px; border-radius: 4px; }
+.tape-counts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.tc { font-size: 12px; padding: 4px 10px; border-radius: 6px; b { font-size: 14px; margin-left: 4px; } }
+.t-acc { background: rgba(183,28,28,.1); color: #b71c1c; }
+.t-dist { background: rgba(240,160,32,.14); color: #b7791f; }
+.t-shake { background: rgba(64,158,255,.12); color: #2f74c0; }
+.t-div { background: var(--el-fill-color); color: var(--el-text-color-secondary); }
+.tape-note { font-size: 11px; color: var(--el-text-color-placeholder); margin: 8px 0 0; }
+.pat-tag { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-left: 6px; color: #fff; }
+.p-acc { background: #b71c1c; }
+.p-dist { background: #f0a020; }
+.p-shake { background: #409eff; }
+.p-div { background: #909399; }
+.p-neu { background: #c0c4cc; }
 </style>

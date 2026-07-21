@@ -139,6 +139,51 @@ async def quant_pattern_pool(limit: int = 20, universe_limit: int = 5000, min_st
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/rs-pool")
+async def quant_rs_pool(limit: int = 30, universe_limit: int = 5000,
+                        dist_min: float = 70.0, adr_min: float = 4.5,
+                        require_ema: bool = True, exclude_fundamental: bool = True):
+    """相对强度筛选器（强势股研究清单）。"""
+    try:
+        result = await run_scan(engine.strength_pool, limit, universe_limit,
+                                dist_min, adr_min, require_ema, exclude_fundamental)
+        items = result.get("items") if isinstance(result, dict) else None
+        if items:
+            try:
+                from quantcore.quant import industry as _industry
+                await asyncio.to_thread(_industry.enrich_industries, items)
+            except Exception:
+                pass
+            # 补「领先/落后板块」标：读当日板块轮动缓存（两者都跑过当天才有；缺失则不打标）
+            try:
+                from quantcore.quant.engine import _SECTOR_ROTATION_CACHE
+                leaders = _SECTOR_ROTATION_CACHE.get("leaders") or set()
+                laggards = _SECTOR_ROTATION_CACHE.get("laggards") or set()
+                for it in items:
+                    ind = it.get("industry") or ""
+                    it["sector_pos"] = "leading" if ind in leaders else ("lagging" if ind in laggards else "")
+            except Exception:
+                pass
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/sector-rotation")
+async def quant_sector_rotation(universe_limit: int = 5000):
+    """板块轮动相对强度排名（4周/12周相对大盘超额，标领先/落后板块）。"""
+    try:
+        industry_map = {}
+        try:
+            from app.lite_main import _load_industry_map
+            industry_map = await asyncio.to_thread(_load_industry_map)
+        except Exception:
+            industry_map = {}
+        return await run_scan(engine.sector_rotation, universe_limit, industry_map)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/forecast")
 async def forecast_stock(req: QuantForecastRequest):
     try:
@@ -366,9 +411,9 @@ async def quant_risk_check(symbol: str):
 
     def _run():
         from quantcore.quant.data import load_local_kline
-        from quantcore.quant.engine import _fetch_tencent_quotes
+        from quantcore.quant.decision import stock_decision
+        from quantcore.quant.engine import _fetch_tencent_quotes, market_context
         from quantcore.quant.local_store import get_local_store
-        from quantcore.quant.risk_check import check_risks
 
         df = load_local_kline(sym, days=200)
         if df is None or len(df) < 20:
@@ -378,9 +423,12 @@ async def quant_risk_check(symbol: str):
             bad = sym in get_local_store().load_bad_forecast_symbols()
         except Exception:
             bad = False
+        try:
+            env = str((market_context() or {}).get("state") or "")
+        except Exception:
+            env = ""
         name = str(quote.get("name") or "")
-        result = check_risks(sym, name, df, quote=quote, bad_forecast=bad)
-        return {"symbol": sym, "name": name, **result}
+        return stock_decision(sym, name, df, quote=quote, market_env=env, bad_forecast=bad)
 
     try:
         return await asyncio.to_thread(_run)

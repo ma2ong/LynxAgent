@@ -37,6 +37,7 @@ def _pattern(
     reason: str,
     evidence: Optional[Dict[str, Any]] = None,
     annotations: Optional[List[Dict[str, Any]]] = None,
+    category: str = "",
 ) -> Dict[str, Any]:
     return {
         "key": key,
@@ -45,6 +46,8 @@ def _pattern(
         "strength": round(max(0.0, min(100.0, strength)), 1),
         "reason": reason,
         "evidence": evidence or {},
+        # 分类：""=普通突破/买入形态；"三不卖"=低位持有形态（三军会师/双管齐下/五阳上阵）
+        "category": category,
         # 图上特征标注：box(框)/circle(圆圈)/arrow(箭头)/hline(压力线)，date 定位避免错位
         "annotations": annotations or [],
     }
@@ -262,6 +265,7 @@ def _detect_pre_lift_patterns(data: pd.DataFrame) -> List[Dict[str, Any]]:
                 f"低位 5/10/20 日均线近 5 日内完成金叉并多头排列（MA5 高于 MA20 {spread:.1f}%），趋势向好。",
                 {"ma5": ma5, "ma10": ma10, "ma20": ma20, "position_in_120d": round((close - lw_low) / (lw_high - lw_low), 3)},
                 [{"type": "arrow", "date": _dt(-1), "price": high, "label": "三线金叉"}],
+                category="三不卖",
             ))
 
     # 双管齐下：近 3 根内两根长下影小实体 K 线、下影最低点相近（低位）
@@ -284,6 +288,7 @@ def _detect_pre_lift_patterns(data: pd.DataFrame) -> List[Dict[str, Any]]:
                     f"低位连续出现两根长下影小实体 K 线，下影最低点相近（{min(lows):.2f}），下方承接强劲。",
                     {"hammer_lows": [round(v, 3) for v in lows]},
                     [{"type": "hline", "price": round(min(lows), 3), "label": "下影支撑"}],
+                    category="三不卖",
                 ))
 
     # 五阳上阵：连续 5 日小阳线、累计涨幅温和（低位）
@@ -302,6 +307,7 @@ def _detect_pre_lift_patterns(data: pd.DataFrame) -> List[Dict[str, Any]]:
                 f"低位连续 5 日收小阳（累计 {_signed_pct(cum_gain)}），多方稳步掌控局面。",
                 {"cum_gain_pct": round(cum_gain, 2)},
                 [{"type": "box", "date1": _dt(-5), "date2": _dt(-1), "label": "五连阳"}],
+                category="三不卖",
             ))
 
     patterns.sort(key=lambda item: item["strength"], reverse=True)

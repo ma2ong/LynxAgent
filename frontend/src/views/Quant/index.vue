@@ -317,10 +317,21 @@
                 </el-button>
               </div>
             </div>
+            <div v-if="patternPoolResult?.items.length" class="pattern-cat-filter">
+              <span class="pcf-label">形态类别</span>
+              <el-radio-group v-model="patternCategory" size="small">
+                <el-radio-button value="">全部（{{ patternPoolResult.items.length }}）</el-radio-button>
+                <el-radio-button value="三不卖">三不卖·低位持有（{{ sanbumaiCount }}）</el-radio-button>
+              </el-radio-group>
+              <span class="pcf-hint" v-if="patternCategory === '三不卖'">低位金叉/长下影/五连阳等底部持有形态，源自「三不卖」口诀</span>
+            </div>
+            <el-empty
+              v-if="patternPoolResult?.items.length && !visiblePatternItems.length"
+              :description="`本次扫描未命中${patternCategory}类形态`" />
             <el-table
-              v-if="patternPoolResult?.items.length"
+              v-if="visiblePatternItems.length"
               ref="patternTableRef"
-              :data="patternPoolResult.items"
+              :data="visiblePatternItems"
               max-height="520"
               size="small"
               @selection-change="handlePatternSelectionChange"
@@ -366,16 +377,20 @@
                   <span v-else>-</span>
                 </template>
               </el-table-column>
-              <el-table-column label="命中形态" min-width="320">
+              <el-table-column label="命中形态" min-width="340">
                 <template #default="{ row }">
                   <el-tag
                     v-for="pattern in row.matched_patterns || row.patterns || []"
                     :key="pattern.key"
                     class="capability-tag"
-                    type="primary"
-                    effect="plain"
+                    :type="pattern.category === '三不卖' ? 'success' : 'primary'"
+                    :effect="pattern.category === '三不卖' ? 'dark' : 'plain'"
+                    :title="pattern.reason"
                   >
-                    {{ pattern.name }} {{ formatScore(pattern.strength) }}
+                    <template v-if="pattern.category === '三不卖'">🔒 </template>{{ pattern.name }} {{ formatScore(pattern.strength) }}
+                    <span v-if="pattern.evidence && pattern.evidence.position_in_120d != null" class="pos-badge">
+                      · 120日位 {{ (pattern.evidence.position_in_120d * 100).toFixed(0) }}%
+                    </span>
                   </el-tag>
                 </template>
               </el-table-column>
@@ -807,6 +822,16 @@ const patternPoolLoading = ref(false)
 const patternPoolResult = ref<QuantPatternPoolResult | null>(null)
 const patternTableRef = ref<any>()
 const selectedPatternRows = ref<QuantPatternPoolItem[]>([])
+// 形态类别筛选：''=全部；'三不卖'=低位持有形态（三军会师/双管齐下/五阳上阵）
+const patternCategory = ref('')
+const patternHasCategory = (row: any, cat: string) =>
+  (row.matched_patterns || row.patterns || []).some((p: any) => (p.category || '') === cat)
+const visiblePatternItems = computed(() => {
+  const items = patternPoolResult.value?.items || []
+  return patternCategory.value ? items.filter((r: any) => patternHasCategory(r, patternCategory.value)) : items
+})
+const sanbumaiCount = computed(() =>
+  (patternPoolResult.value?.items || []).filter((r: any) => patternHasCategory(r, '三不卖')).length)
 const smartElapsed = ref(0)
 let smartProgressTimer: number | undefined
 let smartTaskTimer: number | undefined
@@ -1940,6 +1965,13 @@ const openChart = async (row: any) => {
 .capability-tag {
   margin: 0 6px 6px 0;
 }
+.pos-badge { font-size: 10px; opacity: .85; margin-left: 2px; }
+.pattern-cat-filter {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 4px 0 10px; font-size: 13px;
+}
+.pcf-label { color: var(--el-text-color-secondary); }
+.pcf-hint { font-size: 12px; color: var(--el-text-color-placeholder); }
 
 .trade-plan-cell {
   display: flex;

@@ -97,12 +97,26 @@ export interface RiskFlag {
   reason: string
 }
 
+export interface DecisionAngle {
+  key: string
+  label: string
+  score: number
+  state: string
+  note: string
+}
+
 export interface RiskCheckResult {
   symbol: string
   name: string
   flags: RiskFlag[]
   risk_count: number
   advice: string
+  // 多角度避雷决策（新版 /risk-check 返回；旧字段保留向后兼容）
+  composite?: number
+  verdict?: { level: string; stance: string }
+  angles?: DecisionAngle[]
+  market_env?: string
+  disclaimer?: string
 }
 
 export interface QuantSmartPoolResult {

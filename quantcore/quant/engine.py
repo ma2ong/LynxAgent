@@ -253,6 +253,11 @@ def _risk_flags_safe(symbol: str, name: str, df, quote=None) -> list:
         return []
 
 
+# 当日板块轮动结果缓存：sector_rotation 计算后写入，strength_pool 读取给个股打「领先/落后板块」标。
+# 松耦合——两者各自独立扫描，都跑过当天才有标；缺失时 strength_pool 只是不打标，功能不缺失。
+_SECTOR_ROTATION_CACHE: Dict[str, object] = {"date": None, "leaders": set(), "laggards": set()}
+
+
 class QuantEngine:
     def __init__(self, min_bars: int = 80):
         self.min_bars = min_bars
@@ -509,6 +514,189 @@ class QuantEngine:
             "items": final_items,
             "market_context": market_context(),
             "errors": errors,
+        })
+
+    def strength_pool(self, limit: int = 30, universe_limit: int = 5000,
+                      dist_min: float = 70.0, adr_min: float = 4.5,
+                      require_ema: bool = True, exclude_fundamental: bool = True) -> Dict[str, object]:
+        """相对强度筛选器（强势股研究清单）。硬筛：距250日低点≥+70% / ADR≥4.5% /
+        站上 EMA8&EMA21；按全市场横截面 RS 评级(1-99)排序。研究清单，非买入清单。"""
+        from .relative_strength import assign_rs_rating, strength_chunk
+        safe_limit = max(1, min(limit, 60))
+        safe_universe_limit = max(safe_limit, min(universe_limit, 5000))
+        pool, pool_source = self._scan_pool(safe_universe_limit)
+        symbols = [str(m.get("symbol") or "").strip().zfill(6) for m in pool]
+        quote_map = _fetch_tencent_quotes(symbols)
+
+        # 第一层排除（停牌/ST/价格/成交额）+ 基本面利空
+        bad_fundamentals: set = set()
+        if exclude_fundamental:
+            try:
+                bad_fundamentals = get_local_store().load_bad_forecast_symbols()
+            except Exception:
+                bad_fundamentals = set()
+        meta_by_symbol: Dict[str, Dict[str, object]] = {}
+        gated_symbols: List[str] = []
+        rt_amounts: Dict[str, float] = {}
+        for meta in pool:
+            symbol = str(meta.get("symbol") or "").strip().zfill(6)
+            if not symbol or not symbol.isdigit() or len(symbol) != 6:
+                continue
+            q = quote_map.get(symbol, {})
+            name = str(q.get("name") or meta.get("name") or symbol)
+            if exclusion_reason(name, _safe_float(q.get("price"), 0), _safe_float(q.get("amount"), 0)):
+                continue
+            if symbol in bad_fundamentals:
+                continue
+            meta_by_symbol[symbol] = meta
+            gated_symbols.append(symbol)
+            rt_amounts[symbol] = _safe_float(q.get("amount"), 0)
+
+        # RS 需要长历史（250日低点 + 多周期动量）；回放同源可复算
+        cutoff = (date.today() - timedelta(days=400)).strftime("%Y-%m-%d")
+        db_path = get_local_store().db_path
+        workers = min(6, max(1, os.cpu_count() or 4))
+        chunk_size = max(1, (len(gated_symbols) + workers - 1) // workers)
+        payloads = [{
+            "db_path": db_path, "cutoff": cutoff,
+            "symbols": gated_symbols[i:i + chunk_size],
+            "rt_amounts": {s: rt_amounts[s] for s in gated_symbols[i:i + chunk_size]},
+        } for i in range(0, len(gated_symbols), chunk_size)]
+        scored_rows: List[dict] = []
+        try:
+            from concurrent.futures import ProcessPoolExecutor
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                for part in executor.map(strength_chunk, payloads):
+                    scored_rows.extend(part)
+        except Exception:
+            for p in payloads:  # 进程池不可用时串行兜底
+                scored_rows.extend(strength_chunk(p))
+
+        # 横截面相对强度评级（对全部有数据的票排名，RS 才具相对意义）
+        assign_rs_rating(scored_rows)
+
+        # 硬筛：成交额 + 距低点 + ADR + EMA
+        min_amount = self.SMART_MIN_AMOUNT
+        passed: List[dict] = []
+        for r in scored_rows:
+            sym = str(r["symbol"])
+            if max(rt_amounts.get(sym, 0.0), r["amount_local"]) < min_amount:
+                continue
+            if r["dist_from_low"] < dist_min:
+                continue
+            if r["adr"] < adr_min:
+                continue
+            if require_ema and not (r["above_ema8"] and r["above_ema21"]):
+                continue
+            passed.append(r)
+        passed.sort(key=lambda r: (r["rs_rating"], r["dist_from_low"]), reverse=True)
+        final_rows = passed[:safe_limit]
+
+        items: List[Dict[str, object]] = []
+        for r in final_rows:
+            sym = str(r["symbol"])
+            q = quote_map.get(sym, {})
+            meta = meta_by_symbol.get(sym, {})
+            close_price = _safe_float(q.get("price"), 0) or r["close_local"]
+            rt_amount = _safe_float(q.get("amount"), 0) or r["amount_local"]
+            reasons = [
+                f"RS 相对强度 {r['rs_rating']}（全市场动量百分位）",
+                f"距250日低点 +{r['dist_from_low']:.0f}%",
+                f"ADR {r['adr']:.1f}%",
+                "站上 EMA8/EMA21" + ("·多头排列" if r["ema_stack"] else ""),
+                f"成交额 {rt_amount / 1e8:.2f}亿",
+            ]
+            atr = 0.0
+            try:
+                kdata = load_local_kline(sym, days=120)
+                if kdata is not None and not kdata.empty:
+                    atr = latest_atr(kdata)
+            except Exception:
+                atr = 0.0
+            items.append({
+                "symbol": sym, "code": sym,
+                "name": q.get("name") or meta.get("name") or sym,
+                "market": meta.get("market") or "A股",
+                "score": float(r["rs_rating"]),
+                "rs_rating": r["rs_rating"],
+                "dist_from_low": r["dist_from_low"],
+                "adr": r["adr"],
+                "ema_stack": r["ema_stack"],
+                "signal": signal_from_score(float(r["rs_rating"])),
+                "close": close_price,
+                "pct_chg": _safe_float(q.get("pct_chg"), 0),
+                "amount": rt_amount,
+                "limit_up": is_limit_up(sym, _safe_float(q.get("pct_chg"), 0)),
+                "reasons": reasons,
+                "trade_plan": trade_plan(close_price, atr),
+            })
+
+        # 留痕（池名 strength，评分=RS 评级）；供复盘页统计真实 T+N 胜率
+        try:
+            get_local_store().record_picks("strength", items)
+        except Exception:
+            pass
+
+        return _json_safe({
+            "source": f"quant-engine-strength-screen:{pool_source}",
+            "universe_size": len(pool),
+            "scored": len(scored_rows),
+            "matched": len(passed),
+            "items": items,
+            "criteria": {"dist_min": dist_min, "adr_min": adr_min, "require_ema": require_ema},
+            "market_context": market_context(),
+            "note": ("强势股研究清单：距250日低点≥+70%、ADR≥4.5%、站上 EMA8&EMA21 硬筛，"
+                     "按全市场相对强度(RS)排名。研究清单不是买入清单——基本面/底部结构/风险位需自行深挖。"),
+        })
+
+    def sector_rotation(self, universe_limit: int = 5000,
+                        industry_map: Optional[Dict[str, str]] = None) -> Dict[str, object]:
+        """板块轮动相对强度排名：行业 4周/12周相对大盘的超额，按 12周 RS 排名，标领先/落后。"""
+        from .sector_rotation import rank_sectors, sector_return_chunk
+        pool, pool_source = self._scan_pool(max(1, min(universe_limit, 5000)))
+        gated_symbols = [str(m.get("symbol") or "").strip().zfill(6) for m in pool
+                         if str(m.get("symbol") or "").strip().zfill(6).isdigit()]
+        cutoff = (date.today() - timedelta(days=100)).strftime("%Y-%m-%d")
+        db_path = get_local_store().db_path
+        workers = min(6, max(1, os.cpu_count() or 4))
+        chunk_size = max(1, (len(gated_symbols) + workers - 1) // workers)
+        payloads = [{"db_path": db_path, "cutoff": cutoff,
+                     "symbols": gated_symbols[i:i + chunk_size]}
+                    for i in range(0, len(gated_symbols), chunk_size)]
+        rows: List[dict] = []
+        try:
+            from concurrent.futures import ProcessPoolExecutor
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                for part in executor.map(sector_return_chunk, payloads):
+                    rows.extend(part)
+        except Exception:
+            for p in payloads:  # 进程池不可用时串行兜底
+                rows.extend(sector_return_chunk(p))
+
+        imap = {str(k).zfill(6): v for k, v in (industry_map or {}).items()}
+        result = rank_sectors(rows, imap)
+
+        # 缓存当日领先/落后板块，供 strength_pool 给个股打标（松耦合）
+        _SECTOR_ROTATION_CACHE["date"] = date.today().isoformat()
+        _SECTOR_ROTATION_CACHE["leaders"] = set(result.get("leaders") or [])
+        _SECTOR_ROTATION_CACHE["laggards"] = set(result.get("laggards") or [])
+
+        # 结论卡：跟随资金往哪流
+        leaders = result.get("leaders") or []
+        laggards = result.get("laggards") or []
+        verdict = (
+            f"资金流向：领先 {' / '.join(leaders) or '—'}；回避 {' / '.join(laggards) or '—'}。"
+            "板块决定方向——领先板块里的平庸形态，往往强过落后板块里的完美形态。"
+        )
+        return _json_safe({
+            "source": f"sector-rotation:{pool_source}",
+            "universe_size": len(pool),
+            "scored": len(rows),
+            "mapped": sum(1 for r in rows if imap.get(str(r["symbol"]).zfill(6))),
+            "verdict": verdict,
+            **result,
+            "note": "行业 4周(20日)/12周(60日) 收益中位相对全市场中位的超额(RS)；正=强于大盘。"
+                    "研究参考，不构成投资建议。",
         })
 
     def pattern_pool(self, limit: int = 20, universe_limit: int = 5000, min_strength: float = 70.0,

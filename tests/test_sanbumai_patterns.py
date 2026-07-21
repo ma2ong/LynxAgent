@@ -29,6 +29,9 @@ def test_ma_triple_cross_low_detected():
     res = recognize_patterns("600001", _df(rows))
     keys = [p["key"] for p in res.patterns]
     assert "ma_triple_cross_low" in keys
+    # 三不卖形态必须带 category 标签，供「图形智选」按类别筛选
+    tri = next(p for p in res.patterns if p["key"] == "ma_triple_cross_low")
+    assert tri.get("category") == "三不卖"
 
 
 def test_double_hammer_low_detected():

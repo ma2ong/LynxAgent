@@ -12,6 +12,13 @@ Set-Location $root
 $exe = Join-Path $root "runtime\ngrok\ngrok.exe"
 $log = Join-Path $root "runtime\ngrok\ngrok.log"
 
+# The scheduled task runs as SYSTEM, whose profile has no ngrok.yml, so ngrok
+# resolved an empty config and failed with "Tunnel 'lynxagent' is not defined"
+# once a minute forever. Point it at the real config explicitly instead of
+# relying on whatever account happens to run this. Keep the authtoken out of
+# the repo - the file stays in the user profile.
+$config = "C:\Users\Administrator\AppData\Local\ngrok\ngrok.yml"
+
 # already up -> nothing to do
 if (Get-Process ngrok -ErrorAction SilentlyContinue) { exit 0 }
 
@@ -19,10 +26,16 @@ if (Get-Process ngrok -ErrorAction SilentlyContinue) { exit 0 }
 $backend = Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue
 if (-not $backend) { exit 0 }
 
+# no config -> retrying every minute would just spam the log; say so and stop
+if (-not (Test-Path $config)) {
+    "[$(Get-Date -Format o)] ngrok config missing: $config" | Out-File -FilePath $log -Append -Encoding utf8
+    exit 1
+}
+
 "[$(Get-Date -Format o)] starting ngrok tunnel" | Out-File -FilePath $log -Append -Encoding utf8
 
 Start-Process -FilePath $exe `
-    -ArgumentList "start", "lynxagent", "--log", "stdout" `
+    -ArgumentList "start", "lynxagent", "--config", "`"$config`"", "--log", "stdout" `
     -RedirectStandardOutput (Join-Path $root "runtime\ngrok\ngrok.out.log") `
     -RedirectStandardError (Join-Path $root "runtime\ngrok\ngrok.err.log") `
     -WindowStyle Hidden

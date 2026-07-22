@@ -368,10 +368,23 @@ async def pipeline_quick_critic(req: QuickCriticRequest,
 # ---- 资金面：资金流向 / 龙虎榜 / 财经日历（纯本地数据，不计费）----
 @router.get("/market-context")
 async def quant_market_context():
-    """大盘环境标签：全市场 5 日中位涨幅 + 上涨占比 → 偏暖/中性/偏冷 + 仓位建议。"""
+    """大盘环境标签：赚钱效应（逐日中位+广度加权温度）+ 指数口径 + 仓位建议。
+
+    传入全市场实时快照，让当日盘中直接进入温度计算——否则日线要等收盘同步，
+    横幅会整个交易日停在昨天，与顶部宏观条的实时指数同屏打架。
+    快照拿不到时 market_context 自动退回日线口径。
+    """
     try:
         from quantcore.quant.engine import market_context
-        return await _run_light(market_context)
+
+        snapshot = {}
+        try:  # 延迟导入：lite_main 在启动时 import 本模块，顶层导入会成环
+            from app.lite_main import _load_realtime_quotes_snapshot
+            snapshot = await asyncio.wait_for(
+                asyncio.to_thread(_load_realtime_quotes_snapshot, 30), timeout=8.0) or {}
+        except Exception:
+            snapshot = {}
+        return await _run_light(market_context, snapshot)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -394,7 +407,7 @@ async def quant_risk_check(symbol: str):
     if not sym.strip("0") or len(sym) != 6:
         raise HTTPException(status_code=400, detail="无效股票代码")
 
-    def _run():
+    def _run(snapshot):
         from quantcore.quant.data import load_local_kline
         from quantcore.quant.decision import stock_decision
         from quantcore.quant.engine import _fetch_tencent_quotes, market_context
@@ -410,7 +423,8 @@ async def quant_risk_check(symbol: str):
             bad = False
         env, temp = "", None
         try:
-            ctx = market_context() or {}
+            # 与顶部横幅传同一份快照，否则同一时刻个股深研说偏冷、横幅说中性
+            ctx = market_context(snapshot) or {}
             env = str(ctx.get("state") or "")
             temp = ctx.get("temp")
         except Exception:
@@ -419,8 +433,15 @@ async def quant_risk_check(symbol: str):
         return stock_decision(sym, name, df, quote=quote, market_env=env,
                               bad_forecast=bad, market_temp=temp)
 
+    snapshot = {}
     try:
-        return await asyncio.to_thread(_run)
+        from app.lite_main import _load_realtime_quotes_snapshot
+        snapshot = await asyncio.wait_for(
+            asyncio.to_thread(_load_realtime_quotes_snapshot, 30), timeout=8.0) or {}
+    except Exception:
+        snapshot = {}
+    try:
+        return await asyncio.to_thread(_run, snapshot)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

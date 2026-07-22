@@ -545,6 +545,10 @@ export interface MarketContext {
   /** 指数与个股背离的一句话说明（无背离为空串） */
   divergence?: string
   as_of?: string
+  /** true=最新一日来自实时快照；false=截至 as_of 收盘日线 */
+  intraday?: boolean
+  /** 实时快照的行情时刻 HH:MM（intraday 时有值） */
+  as_of_time?: string
   advice?: string
 }
 

@@ -134,8 +134,11 @@ def _fetch_tencent_quotes(symbols: List[str]) -> Dict[str, Dict[str, object]]:
     return quotes
 
 
-# market_context 的全表窗口扫描冷查询可达 20s+，页面横幅等不起；10 分钟 TTL 足够（日线级数据）。
-_MARKET_CTX_CACHE: Optional[Tuple[float, Dict[str, object]]] = None
+# market_context 的全表窗口扫描冷查询可达 20s+，页面横幅等不起。按快照日期分槽缓存：
+# 盘中口径（横幅）与日线口径（池子留痕）各留一份，互不挤掉对方，否则两边会来回互相作废。
+_MARKET_CTX_CACHE: Dict[str, Tuple[float, Dict[str, object]]] = {}
+_CTX_TTL_INTRADAY = 60.0   # 盘中要跟着刷新走
+_CTX_TTL_DAILY = 600.0     # 日线级数据 10 分钟足够
 
 
 def _day_label(median_pct: float, breadth_up: float) -> str:
@@ -147,7 +150,55 @@ def _day_label(median_pct: float, breadth_up: float) -> str:
     return "企稳" if breadth_up >= 0.50 else "分化"
 
 
-def market_context() -> Dict[str, object]:
+def _snapshot_stamp(snapshot: Optional[Dict[str, Dict]]) -> Tuple[str, str]:
+    """实时快照自报的行情日期与最新时刻 → ("YYYY-MM-DD", "HH:MM")。取不到返回 ("","")。
+
+    必须用快照自己的时间戳，不能用本机日期：节假日/休市时快照停在上一交易日，
+    按本机日期算就会把上一交易日的收盘当成「今天盘中」重复计一天。
+    时刻用于界面标注（"15:00 实时" vs "10:31 实时"），让用户知道数据新到什么时候。
+    """
+    import re as _re
+    if not snapshot:
+        return "", ""
+    dates: Dict[str, int] = {}
+    times: Dict[str, str] = {}
+    for q in list(snapshot.values())[:200]:
+        m = _re.match(r"(\d{4})[/-](\d{2})[/-](\d{2})[ T]?(\d{2}:\d{2})?", str((q or {}).get("updated_at") or ""))
+        if m:
+            key = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+            dates[key] = dates.get(key, 0) + 1
+            if m.group(4) and m.group(4) > times.get(key, ""):
+                times[key] = m.group(4)
+    if not dates:
+        return "", ""
+    day = max(dates, key=dates.get)
+    return day, times.get(day, "")
+
+
+def _snapshot_breadth(snapshot: Dict[str, Dict]) -> Optional[Dict[str, float]]:
+    """实时快照 → 当日盘中中位涨幅% / 上涨家数占比。样本不足返回 None。"""
+    import statistics
+    pcts: List[float] = []
+    for q in snapshot.values():
+        v = (q or {}).get("change_percent")
+        if v is None:
+            v = (q or {}).get("pct_chg")
+        if v is None:
+            continue
+        try:
+            pcts.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    if len(pcts) < 500:
+        return None
+    return {
+        "median_pct": round(statistics.median(pcts), 2),
+        "breadth_up": round(sum(1 for v in pcts if v > 0) / len(pcts), 4),
+        "count": len(pcts),
+    }
+
+
+def market_context(snapshot: Optional[Dict[str, Dict]] = None) -> Dict[str, object]:
     """大盘环境：个股口径（逐日中位/广度加权温度）+ 指数口径，背离显式标注。
 
     两个口径回答的是两个问题，缺一个就会出现「指数大涨但标签偏冷」这种看似矛盾的输出：
@@ -157,19 +208,40 @@ def market_context() -> Dict[str, object]:
 
     本地数据不足时返回空 dict，不影响主流程；指数取不到时降级为纯个股口径。
     """
-    global _MARKET_CTX_CACHE
     import time as _time
     from .regime import blend_temp, classify
     now = _time.time()
-    if _MARKET_CTX_CACHE and now - _MARKET_CTX_CACHE[0] < 600:
-        return _MARKET_CTX_CACHE[1]
+    snap_date, snap_time = _snapshot_stamp(snapshot)
+    cached = _MARKET_CTX_CACHE.get(snap_date)
+    if cached:
+        ttl = _CTX_TTL_INTRADAY if cached[1].get("intraday") else _CTX_TTL_DAILY
+        if now - cached[0] < ttl:
+            return cached[1]
     result: Dict[str, object] = {}
     try:
         store = get_local_store()
         daily = store.recent_daily_breadth(days=5)
         if not daily:
-            _MARKET_CTX_CACHE = (now, result)
+            _MARKET_CTX_CACHE[snap_date] = (now, result)
             return result
+
+        # as_of=最后一根真实日线（amount>0）
+        as_of = str(daily[0].get("date") or "")
+        try:
+            as_of = store.latest_real_bar_date() or as_of
+        except Exception:
+            pass
+
+        # 实时快照只要不比库里旧就优先用：盘中增量同步会把当天的半截 bar 写进 daily_kline
+        # （as_of 变成今天但数值停在同步那一刻），只判断 snap_date > as_of 会让整个交易日
+        # 都用不上实时数据。同日则替换掉那根半截 bar，跨日则插到最前挤掉最老一天。
+        intraday = False
+        if snap_date and snap_date >= as_of:
+            today = _snapshot_breadth(snapshot or {})
+            if today:
+                daily = [{"date": snap_date, **today}] + [d for d in daily if d["date"] != snap_date][:4]
+                as_of = snap_date
+                intraday = True
 
         temp = blend_temp([(float(d["median_pct"]), float(d["breadth_up"])) for d in daily])
         state = classify(temp)
@@ -187,17 +259,24 @@ def market_context() -> Dict[str, object]:
         except Exception:
             pass
 
-        # as_of=最后一根真实日线（amount>0），指数口径对齐同一天，否则盘中会自相矛盾
-        as_of = str(latest.get("date") or "")
-        try:
-            as_of = store.latest_real_bar_date() or as_of
-        except Exception:
-            pass
-
+        # 指数口径必须和个股口径同一天，否则会出现「横幅创业板 +7% / 顶部宏观条 -3%」这种
+        # 同屏打架：盘中用实时行情，收盘后（日线已同步）用对齐 as_of 的历史。
         index_items: List[Dict[str, object]] = []
         try:
-            from .macro_bar import fetch_index_history
-            index_items = fetch_index_history(as_of=as_of, window=5)
+            from .macro_bar import fetch_index_history, fetch_index_quotes
+            if intraday:
+                hist = {str(i["code"]): i for i in fetch_index_history(as_of="", window=5)}
+                for q in fetch_index_quotes():
+                    code = str(q.get("code") or "")
+                    index_items.append({
+                        "code": code,
+                        "name": str(q.get("name") or ""),
+                        "date": snap_date,
+                        "last_pct": round(float(q.get("change_percent") or 0), 2),
+                        "window_pct": float((hist.get(code) or {}).get("window_pct") or 0),
+                    })
+            else:
+                index_items = fetch_index_history(as_of=as_of, window=5)
         except Exception:
             index_items = []
 
@@ -216,6 +295,7 @@ def market_context() -> Dict[str, object]:
         rebound = state == "偏冷" and d_breadth >= 0.50 and d_median > 0
         if rebound:
             day_label = "反弹"
+        when = "今日盘中" if intraday else "最新一日"
 
         # 建议跟着两个口径一起走：先说个股赚钱效应，再说与指数的背离，最后给动作
         if state == "偏暖":
@@ -225,7 +305,7 @@ def market_context() -> Dict[str, object]:
         else:
             advice = "市场分化，优先选强主线，控制单票仓位。"
         if rebound:
-            advice = (f"急跌后最新一日企稳反弹（{d_breadth * 100:.0f}% 上涨、中位 "
+            advice = (f"急跌后{when}企稳反弹（{d_breadth * 100:.0f}% 上涨、中位 "
                       f"{'+' if d_median >= 0 else ''}{d_median:.1f}%），但加权温度仍偏冷——"
                       "反弹持续性待确认，轻仓参与强势方向、不追高。")
         if divergence:
@@ -250,9 +330,12 @@ def market_context() -> Dict[str, object]:
             },
             "divergence": divergence,
             "as_of": as_of,
+            # 实时口径 vs 收盘口径：前端要据此说清数据新到哪一刻，不能只写日期
+            "intraday": intraday,
+            "as_of_time": snap_time if intraday else "",
             "advice": advice,
         }
-        _MARKET_CTX_CACHE = (now, result)
+        _MARKET_CTX_CACHE[snap_date] = (now, result)
         return result
     except Exception:
         return result

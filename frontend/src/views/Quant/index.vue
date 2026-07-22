@@ -6,7 +6,12 @@
         <b class="mb-state">{{ marketCtx.state }}</b>
         <span v-if="marketCtx.temp != null" class="mb-temp">温度 {{ marketCtx.temp }}</span>
         <span class="mb-metrics">
-          {{ marketCtx.as_of ? `截至 ${marketCtx.as_of}` : '' }} 当日个股中位
+          <span class="mb-when" :class="{ live: marketCtx.intraday }">
+            {{ marketCtx.intraday
+              ? `${marketCtx.as_of} ${marketCtx.as_of_time || ''} 实时`
+              : `截至 ${marketCtx.as_of} 收盘` }}
+          </span>
+          个股中位
           <b>{{ pct(marketCtx.latest_day?.median_pct) }}</b>
           · 上涨家数占比 <b>{{ Math.round((marketCtx.latest_day?.breadth_up || 0) * 100) }}%</b>
         </span>
@@ -1384,6 +1389,10 @@ const openChart = async (row: any) => {
     padding: 1px 6px;
     border: 1px solid var(--el-border-color);
     border-radius: 4px;
+  }
+  .mb-when {
+    font-weight: 600;
+    &.live { color: #ef232a; }
   }
   .mb-index {
     margin-top: 6px;

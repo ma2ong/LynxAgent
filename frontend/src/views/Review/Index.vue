@@ -27,7 +27,7 @@
     <div v-if="marketCtx?.state" class="market-context" :class="`ctx-${ctxTone}`">
       <b>赚钱效应：{{ marketCtx.state }}</b>
       <span>
-        {{ marketCtx.as_of ? `截至 ${marketCtx.as_of}` : '' }} 当日个股中位
+        {{ marketCtx.intraday ? `${marketCtx.as_of} ${marketCtx.as_of_time || ''} 实时` : `截至 ${marketCtx.as_of} 收盘` }} 个股中位
         {{ (marketCtx.latest_day?.median_pct ?? 0) > 0 ? '+' : '' }}{{ marketCtx.latest_day?.median_pct }}%
         · 上涨家数占比 {{ Math.round((marketCtx.latest_day?.breadth_up || 0) * 100) }}%
         <template v-if="marketCtx.index?.items?.length">

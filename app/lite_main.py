@@ -1120,31 +1120,27 @@ def _compute_hot_industries(
 
 
 def _load_realtime_quotes_snapshot(ttl_seconds: int = 3) -> dict[str, dict[str, Any]]:
-    global lite_realtime_quotes_cache, _quotes_loading, _akshare_last_failure
+    global lite_realtime_quotes_cache, _quotes_loading
     now = datetime.now(timezone.utc)
     if lite_realtime_quotes_cache:
         created_at, snapshot = lite_realtime_quotes_cache
         if now - created_at <= timedelta(seconds=ttl_seconds):
             return snapshot
-    # Skip akshare for 5 min after a timeout/failure to avoid blocking thread pool
-    if _akshare_last_failure and (now - _akshare_last_failure) < timedelta(minutes=5):
-        return lite_realtime_quotes_cache[1] if lite_realtime_quotes_cache else {}
     if _quotes_loading:
         return lite_realtime_quotes_cache[1] if lite_realtime_quotes_cache else {}
     _quotes_loading = True
     try:
-        result = _do_load_realtime_quotes_snapshot()
-        _akshare_last_failure = None  # reset on success
-        return result
+        # 快源腾讯/东财每次都试（~2s，稳）；只有慢源 akshare 有 5 分钟冷却，见 _do_load。
+        # 之前顶层冷却会把整份快照连累置空 5 分钟——竞价窗口一次瞬时全失败就 blank 整段。
+        return _do_load_realtime_quotes_snapshot()
     except Exception:
-        _akshare_last_failure = now
         return lite_realtime_quotes_cache[1] if lite_realtime_quotes_cache else {}
     finally:
         _quotes_loading = False
 
 
 def _do_load_realtime_quotes_snapshot() -> dict[str, dict[str, Any]]:
-    global lite_realtime_quotes_cache
+    global lite_realtime_quotes_cache, _akshare_last_failure
     now = datetime.now(timezone.utc)
 
     try:
@@ -1161,6 +1157,11 @@ def _do_load_realtime_quotes_snapshot() -> dict[str, dict[str, Any]]:
     except Exception:
         pass
 
+    # 慢源 akshare（4s 超时）会阻塞线程池：最近失败过就 5 分钟内跳过慢源，避免反复干等。
+    # 冷却只关这一个慢源——上面的快源腾讯/东财每次都无条件试过了。
+    if _akshare_last_failure and (datetime.now(timezone.utc) - _akshare_last_failure) < timedelta(minutes=5):
+        raise RuntimeError("akshare 冷却中（近 5 分钟失败过），跳过慢源")
+
     import socket as _socket
     import akshare as ak
 
@@ -1173,8 +1174,12 @@ def _do_load_realtime_quotes_snapshot() -> dict[str, dict[str, Any]]:
         except Exception:
             source_name = "akshare.stock_zh_a_spot_em"
             df = ak.stock_zh_a_spot_em()
+    except Exception:
+        _akshare_last_failure = datetime.now(timezone.utc)
+        raise
     finally:
         _socket.setdefaulttimeout(_old_timeout)
+    _akshare_last_failure = None
 
     snapshot: dict[str, dict[str, Any]] = {}
     updated_at = datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S")

@@ -2525,6 +2525,72 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
     return enriched
 
 
+def _confluence_enrich_items(items: list[dict[str, Any]]) -> None:
+    """把「形态智选」「强势股」并入一键推荐：给每只结构因子入选票补低位形态识别 +
+    相对强度维度，形态/强度共振时给一个展示用加成分并据此微调排序。
+
+    方案 A（经 A/B 回放定调）：结构因子分是 proven 买入信号，保持为展示的「量化分」不动
+    （不绑死评分刻度）；形态是低位反转确认、强度是趋势/位置确认，都是骨架之上的加分标签，
+    不喧宾夺主、不引入新票。只对最终 ≤50 只入选票就地计算，成本可控。
+    """
+    from quantcore.quant.data import load_local_kline
+    from quantcore.quant.integrations import recognize_patterns
+    from quantcore.quant.relative_strength import compute_strength_metrics
+    for item in items:
+        symbol = str(item.get("symbol") or item.get("code") or "").zfill(6)
+        try:
+            data = load_local_kline(symbol, days=540)
+        except Exception:
+            data = None
+        if data is None or getattr(data, "empty", True):
+            continue
+        try:
+            rec = recognize_patterns(symbol, data)
+            matched = [p for p in rec.patterns
+                       if p.get("active") and float(p.get("strength") or 0) >= 70.0]
+        except Exception:
+            matched = []
+        item["patterns"] = matched
+        try:
+            sm = compute_strength_metrics(data)
+        except Exception:
+            sm = None
+        tags: list[str] = []
+        bonus = 0.0
+        if matched:
+            tags.append("形态")
+            bonus += 1.5
+        if sm:
+            item["strength"] = {
+                "dist_from_low": sm["dist_from_low"], "adr": sm["adr"],
+                "above_ema8": sm["above_ema8"], "above_ema21": sm["above_ema21"],
+                "ema_stack": sm["ema_stack"],
+            }
+            if sm["above_ema8"] and sm["above_ema21"]:
+                tags.append("强度")
+                bonus += 1.0
+                if sm["ema_stack"]:
+                    bonus += 0.5
+        if matched and sm and sm.get("above_ema8") and sm.get("above_ema21"):
+            bonus += 1.0  # 结构 + 形态 + 强度三重共振
+        if bonus:
+            item["confluence_bonus"] = round(min(bonus, 4.0), 1)
+            item["confluence_tags"] = tags
+    # 排序键 = 结构分 + 共振加成（加成小、只让共振票在近分档里上浮，量化分本身不改）
+    items.sort(key=lambda it: float(it.get("smart_score") or it.get("score") or 0)
+               + float(it.get("confluence_bonus") or 0), reverse=True)
+
+
+async def _apply_confluence(response: dict[str, Any]) -> None:
+    """在缓存前给智能池 items 就地补形态/强度共振（重活丢线程池，缓存命中不再重算）。"""
+    items = (response.get("data") or {}).get("items") or []
+    if items:
+        try:
+            await asyncio.to_thread(_confluence_enrich_items, items)
+        except Exception as exc:  # noqa: BLE001 — 融合富化失败不能阻断推荐主流程
+            print(f"confluence enrich failed: {exc}")
+
+
 def _smart_pool_task_update(task_id: str | None, **patch: Any) -> None:
     if not task_id:
         return
@@ -2627,7 +2693,7 @@ async def _compute_lite_smart_pool(
     # 3700 只约 32 秒，5000 只的上限扛得住；旧的 1200 截断会让线上池和回放验证的池不是一回事。
     safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
-    cache_key = f"smart-pool:factor-v3:{strategy}:{safe_limit}:{safe_universe}"
+    cache_key = f"smart-pool:factor-v3-confluence:{strategy}:{safe_limit}:{safe_universe}"
     _smart_pool_task_update(task_id, progress=5, phase="cache", message="检查最近智能推荐缓存")
     cached = _cache_get(cache_key, 900)
     if cached:
@@ -2746,9 +2812,10 @@ async def _compute_lite_smart_pool(
                     "pick_date": ai_factor_pool.get("pick_date"),
                     "universe": ai_factor_pool.get("universe"),
                 },
-                "source_note": "同源于量化中心智能推荐，并把 AI 因子模型 Top-K 排名作为评分因子；研究与模拟使用，不构成投资建议。",
+                "source_note": "同源于量化中心智能推荐，并把 AI 因子模型 Top-K 排名作为评分因子；已并入形态识别与相对强度共振标签；研究与模拟使用，不构成投资建议。",
             }
             wrapped_response = {"success": True, "data": response, "message": "ok"}
+            await _apply_confluence(wrapped_response)
             _persistent_cache_set(cache_key, wrapped_response)
             _cache_set(cache_key, wrapped_response)
             _smart_pool_task_update(task_id, progress=95, phase="realtime", message="模型完成，刷新实时价格")
@@ -3016,9 +3083,10 @@ async def _compute_lite_smart_pool(
             "universe": ai_factor_pool.get("universe"),
         },
         "items": items,
-        "source_note": "智能股票池由真实新闻/公告/研报事件、A股基础股票池、量化因子、AI因子模型和入场触发器综合生成；仅供研究，不承诺收益。",
+        "source_note": "智能股票池由真实新闻/公告/研报事件、A股基础股票池、量化因子、AI因子模型和入场触发器综合生成；已并入形态识别与相对强度共振标签；仅供研究，不承诺收益。",
     }
     response = {"success": True, "data": data, "message": "ok"}
+    await _apply_confluence(response)
     _persistent_cache_set(cache_key, response)
     _cache_set(cache_key, response)
     _smart_pool_task_update(task_id, progress=95, phase="realtime", message="推荐池完成，刷新实时价格")

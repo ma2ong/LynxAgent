@@ -169,21 +169,6 @@ async def quant_rs_pool(limit: int = 30, universe_limit: int = 5000,
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/sector-rotation")
-async def quant_sector_rotation(universe_limit: int = 5000):
-    """板块轮动相对强度排名（4周/12周相对大盘超额，标领先/落后板块）。"""
-    try:
-        industry_map = {}
-        try:
-            from app.lite_main import _load_industry_map
-            industry_map = await asyncio.to_thread(_load_industry_map)
-        except Exception:
-            industry_map = {}
-        return await run_scan(engine.sector_rotation, universe_limit, industry_map)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 @router.post("/forecast")
 async def forecast_stock(req: QuantForecastRequest):
     try:

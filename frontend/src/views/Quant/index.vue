@@ -1,5 +1,19 @@
 <template>
   <div class="quant-page">
+    <section v-if="marketCtx?.state" class="market-banner" :class="`ctx-${ctxTone}`">
+      <div class="mb-row">
+        <span class="mb-tag">大盘环境</span>
+        <b class="mb-state">{{ marketCtx.state }}</b>
+        <span class="mb-metrics">
+          近5日{{ marketCtx.as_of ? `(截至 ${marketCtx.as_of})` : '' }}全市场中位
+          <b>{{ (marketCtx.median_5d_pct ?? 0) > 0 ? '+' : '' }}{{ marketCtx.median_5d_pct }}%</b>
+          · 上涨占比 <b>{{ Math.round((marketCtx.breadth_up || 0) * 100) }}%</b>
+        </span>
+      </div>
+      <div class="mb-advice">{{ marketCtx.advice }}</div>
+      <div v-if="coldEvidence" class="mb-evidence">{{ coldEvidence }}</div>
+    </section>
+
     <section class="page-head">
       <div>
         <h1>智能选股</h1>
@@ -32,13 +46,6 @@
       </div>
     </section>
 
-    <section v-if="marketCtx?.state" class="market-context" :class="`ctx-${ctxTone}`">
-      <b>大盘环境：{{ marketCtx.state }}</b>
-      <span>近5日{{ marketCtx.as_of ? `(截至 ${marketCtx.as_of})` : '' }}全市场中位 {{ (marketCtx.median_5d_pct ?? 0) > 0 ? '+' : '' }}{{ marketCtx.median_5d_pct }}% · 上涨占比 {{ Math.round((marketCtx.breadth_up || 0) * 100) }}%</span>
-      <span class="ctx-advice">{{ marketCtx.advice }}</span>
-      <span v-if="coldEvidence" class="ctx-advice ctx-evidence">{{ coldEvidence }}</span>
-    </section>
-
     <el-alert
       v-if="isIntradayHealth"
       title="盘中使用实时行情，日 K 不需要现在补"
@@ -55,7 +62,7 @@
           <section class="smart-hero compact-smart-hero">
             <div>
               <h2>一键智能推荐股票池</h2>
-              <p>基于本地日线的结构因子评分（MACD、布林位置、趋势、动量、资金流等合成），评分公式与 12 个月历史回放完全同源、经同轴 A/B 验证；实时行情用于排除停牌/ST 与展示现价。</p>
+              <p>结构因子评分为骨架（MACD、布林位置、趋势、动量、资金流等合成，与 12 个月回放同源、经 A/B 验证），已并入「形态智选」的低位拉升形态与「强势股」的相对强度确认——三者共振的标的自动上浮并打标，量化分仍为 proven 的结构分。实时行情用于排除停牌/ST 与展示现价。</p>
             </div>
             <div class="smart-inline-settings">
               <label class="strategy-pick">
@@ -75,7 +82,7 @@
               </label>
             </div>
             <div class="smart-actions">
-              <el-button type="success" size="large" native-type="button" :loading="smartPoolLoading" :disabled="patternPoolLoading" @click="loadSmartPool">
+              <el-button type="success" size="large" native-type="button" :loading="smartPoolLoading" @click="loadSmartPool">
                 <el-icon><Search /></el-icon>
                 一键智能推荐
               </el-button>
@@ -191,7 +198,29 @@
                   <span v-else>-</span>
                 </template>
               </el-table-column>
-              <el-table-column label="入选理由" min-width="460">
+              <el-table-column label="形态 · 强度" min-width="300">
+                <template #default="{ row }">
+                  <el-tag v-if="row.confluence_bonus" class="capability-tag" type="warning" effect="dark"
+                    :title="`结构因子之上，形态/强度共振加成 +${row.confluence_bonus}（已计入排序，量化分保持结构分不动）`">
+                    共振+{{ row.confluence_bonus }}
+                  </el-tag>
+                  <el-tag v-for="pattern in row.patterns || []" :key="pattern.key || pattern.name"
+                    class="capability-tag"
+                    :type="pattern.category === '三不卖' ? 'success' : 'primary'"
+                    :effect="pattern.category === '三不卖' ? 'dark' : 'plain'"
+                    :title="pattern.reason">
+                    <template v-if="pattern.category === '三不卖'">🔒 </template>{{ pattern.name }} {{ formatScore(pattern.strength) }}
+                  </el-tag>
+                  <el-tag v-if="row.strength && row.strength.ema_stack" class="capability-tag" type="success" effect="plain"
+                    title="站上 EMA8 且 EMA21、且多头排列（强度确认）">EMA多头</el-tag>
+                  <el-tag v-else-if="row.strength && row.strength.above_ema8 && row.strength.above_ema21" class="capability-tag" effect="plain"
+                    title="站上 EMA8 与 EMA21（趋势确认）">站上双均线</el-tag>
+                  <el-tag v-if="row.strength && row.strength.dist_from_low != null" class="capability-tag" effect="plain"
+                    title="距 250 日最低点涨幅（已证明的上升趋势）">距低点 +{{ Math.round(row.strength.dist_from_low) }}%</el-tag>
+                  <span v-if="!row.confluence_bonus && !(row.patterns || []).length && !row.strength" class="panel-pending">—</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="入选理由" min-width="360">
                 <template #default="{ row }">
                   <el-tooltip v-for="f in row.risk_flags || []" :key="f.key" :content="f.reason" placement="top">
                     <el-tag class="capability-tag" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="dark">
@@ -244,178 +273,6 @@
               </div>
             </el-collapse-item>
           </el-collapse>
-        </div>
-      </el-tab-pane>
-
-
-      <el-tab-pane label="形态智选" name="patterns">
-        <div class="smart-home">
-          <section class="smart-hero compact-smart-hero">
-            <div>
-              <h2>7类拉升前图形扫描</h2>
-              <p>全市场扫描A股K线结构，识别均线粘合、地量启动、挖坑修复、压力试盘、MACD修复、小步快跑和盘口代理信号。</p>
-            </div>
-            <div class="smart-inline-settings">
-              <label>
-                <span>候选</span>
-                <el-input-number v-model="patternPoolForm.universe_limit" :min="50" :max="5000" :step="50" controls-position="right" />
-              </label>
-              <label>
-                <span>返回</span>
-                <el-input-number v-model="patternPoolForm.limit" :min="5" :max="50" controls-position="right" />
-              </label>
-              <label>
-                <span>形态阈值</span>
-                <el-input-number v-model="patternPoolForm.min_strength" :min="50" :max="95" :step="5" controls-position="right" />
-              </label>
-            </div>
-            <div class="smart-actions">
-              <el-button type="success" size="large" native-type="button" :loading="patternPoolLoading" :disabled="smartPoolLoading" @click="loadPatternPool">
-                <el-icon><Search /></el-icon>
-                一键扫描形态
-              </el-button>
-              <span v-if="patternPoolResult?.items.length">已命中 {{ patternPoolResult.items.length }} 只</span>
-              <button class="winrate-chip" type="button" @click="router.push('/review')">{{ poolWinText('pattern') }}</button>
-            </div>
-          </section>
-
-          <section class="result-panel smart-result-panel">
-            <div v-if="patternPoolLoading" class="smart-progress">
-              <div class="progress-head">
-                <div>
-                  <b>正在扫描拉升前形态</b>
-                  <span>全市场形态扫描计算量更大，系统会先用最近完整日线，再叠加实时行情兜底。</span>
-                </div>
-                <strong>{{ smartElapsed }}s</strong>
-              </div>
-              <el-progress :percentage="100" :indeterminate="true" :duration="3" :stroke-width="10" :show-text="false" />
-              <p style="margin:8px 0 0;font-size:12px;color:#e6a23c;">全市场逐只扫描约需 1~2 分钟，系统正在计算，请耐心等待、勿重复点击。</p>
-              <div class="progress-steps">
-                <div v-for="step in patternProgressSteps" :key="step.name" :class="['progress-step', step.status]">
-                  <span>{{ step.index }}</span>
-                  <b>{{ step.name }}</b>
-                  <em>{{ step.text }}</em>
-                </div>
-              </div>
-            </div>
-            <div v-if="patternPoolResult?.items.length" class="mini-summary">
-              <span>自动候选 {{ patternPoolResult.universe_size }} 只</span>
-              <b>命中 {{ patternPoolResult.matched || patternPoolResult.items.length }} 只</b>
-              <span v-if="patternPoolResult.analyzed">已分析 {{ patternPoolResult.analyzed }} 只</span>
-              <span v-if="patternPoolResult?.excluded">已排除 {{ patternPoolResult.excluded }} 只</span>
-              <span v-if="patternPoolResult?.source === 'live-fallback'" style="color:#e6a23c">本地K线不足，系统已尝试补齐；当前先用实时行情兜底。</span>
-              <div class="table-actions">
-                <el-button size="small" @click="togglePatternSelection">全选/取消</el-button>
-                <el-button size="small" type="success" :disabled="!selectedPatternRows.length" @click="addSelectedPatternsToFavorites">
-                  加入自选({{ selectedPatternRows.length }})
-                </el-button>
-                <el-button size="small" type="primary" :disabled="!selectedPatternRows.length" @click="batchAnalyzePatternSelected">
-                  批量分析
-                </el-button>
-                <el-button size="small" type="success" plain @click="addAllPatternsToFavorites">
-                  一键全选加入自选
-                </el-button>
-              </div>
-            </div>
-            <div v-if="patternPoolResult?.items.length" class="pattern-cat-filter">
-              <span class="pcf-label">形态类别</span>
-              <el-radio-group v-model="patternCategory" size="small">
-                <el-radio-button value="">全部（{{ patternPoolResult.items.length }}）</el-radio-button>
-                <el-radio-button value="三不卖">三不卖·低位持有（{{ sanbumaiCount }}）</el-radio-button>
-              </el-radio-group>
-              <span class="pcf-hint" v-if="patternCategory === '三不卖'">低位金叉/长下影/五连阳等底部持有形态，源自「三不卖」口诀</span>
-            </div>
-            <el-empty
-              v-if="patternPoolResult?.items.length && !visiblePatternItems.length"
-              :description="`本次扫描未命中${patternCategory}类形态`" />
-            <el-table
-              v-if="visiblePatternItems.length"
-              ref="patternTableRef"
-              :data="visiblePatternItems"
-              max-height="520"
-              size="small"
-              @selection-change="handlePatternSelectionChange"
-            >
-              <el-table-column type="selection" width="44" fixed />
-              <el-table-column label="形态分" width="90" fixed>
-                <template #default="{ row }"><b>{{ formatScore(row.pattern_score ?? row.score) }}</b></template>
-              </el-table-column>
-              <el-table-column label="五方判读" width="110">
-                <template #default="{ row }">
-                  <el-tooltip v-if="panelScores.pattern[row.symbol]" :content="panelScores.pattern[row.symbol].summary" placement="top">
-                    <el-button text size="small" @click.stop="openPanelDialog(row, 'pattern')">
-                      <b>{{ panelScores.pattern[row.symbol].consensus_score.toFixed(0) }}</b>
-                      <span class="panel-div">±{{ panelScores.pattern[row.symbol].divergence.toFixed(0) }}</span>
-                    </el-button>
-                  </el-tooltip>
-                  <span v-else class="panel-pending">—</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="symbol" label="代码" width="100" />
-              <el-table-column prop="name" label="名称" width="120" />
-              <el-table-column label="行业/板块" width="140">
-                <template #default="{ row }">{{ row.industry || row.board || '-' }}</template>
-              </el-table-column>
-              <el-table-column label="现价" width="90"><template #default="{ row }">{{ formatNumber(row.close) }}</template></el-table-column>
-              <el-table-column label="涨跌幅" width="90" align="right">
-                <template #default="{ row }">
-                  <span :class="changeClass(row.pct_chg)">{{ signedPercent(row.pct_chg) }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="买卖计划" width="156">
-                <template #default="{ row }">
-                  <div v-if="row.trade_plan && row.trade_plan.buy_price" class="trade-plan-cell">
-                    <el-tag v-if="row.limit_up" size="small" type="danger" effect="dark" class="limit-up-tag">
-                      已涨停 · 买不到此价
-                    </el-tag>
-                    <span>买 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
-                    <span class="tp-stop">止损 {{ formatNumber(row.trade_plan.stop_loss) }}（{{ row.trade_plan.stop_loss_pct }}%）</span>
-                    <span class="tp-target">止盈 {{ formatNumber(row.trade_plan.take_profit) }}（+{{ row.trade_plan.take_profit_pct }}%）</span>
-                    <em v-if="row.limit_up" class="tp-warn">封板价买不进，只能次日开盘入场（历史超额会缩水）</em>
-                    <em v-else>盈亏比 {{ row.trade_plan.risk_reward_ratio ?? '-' }}:1 · {{ row.trade_plan.basis === 'atr' ? 'ATR' : '比例' }}</em>
-                  </div>
-                  <span v-else>-</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="命中形态" min-width="340">
-                <template #default="{ row }">
-                  <el-tag
-                    v-for="pattern in row.matched_patterns || row.patterns || []"
-                    :key="pattern.key"
-                    class="capability-tag"
-                    :type="pattern.category === '三不卖' ? 'success' : 'primary'"
-                    :effect="pattern.category === '三不卖' ? 'dark' : 'plain'"
-                    :title="pattern.reason"
-                  >
-                    <template v-if="pattern.category === '三不卖'">🔒 </template>{{ pattern.name }} {{ formatScore(pattern.strength) }}
-                    <span v-if="pattern.evidence && pattern.evidence.position_in_120d != null" class="pos-badge">
-                      · 120日位 {{ (pattern.evidence.position_in_120d * 100).toFixed(0) }}%
-                    </span>
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="证据/理由" min-width="360">
-                <template #default="{ row }">
-                  <el-tooltip v-for="f in row.risk_flags || []" :key="f.key" :content="f.reason" placement="top">
-                    <el-tag class="capability-tag" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="dark">
-                      ⚠ {{ f.name }}
-                    </el-tag>
-                  </el-tooltip>
-                  <el-tag v-for="reason in row.reasons" :key="reason" class="capability-tag" effect="plain">
-                    {{ reason }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="230" fixed="right">
-                <template #default="{ row }">
-                  <el-button type="primary" link size="small" @click="addOneToFavorites(row)">加入自选</el-button>
-                  <el-button link type="primary" size="small" @click="openChart(row)">看图</el-button>
-                  <el-button link type="primary" size="small" @click="openWhy(row, 'pattern')">理由</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-            <el-empty v-else-if="!patternPoolLoading" description="点击一键扫描形态，自动找出符合7类拉升前结构的股票" />
-          </section>
         </div>
       </el-tab-pane>
 
@@ -762,8 +619,6 @@ import {
   type PatternRecognitionResult,
   type QuantDataHealth,
   type QuantAnalysisResult,
-  type QuantPatternPoolItem,
-  type QuantPatternPoolResult,
   type QuantScreenResult,
   type QuantSmartPoolItem,
   type QuantSmartPoolResult,
@@ -817,21 +672,6 @@ const smartPoolResult = ref<QuantSmartPoolResult | null>(null)
 const smartPoolTask = ref<QuantSmartPoolTask | null>(null)
 const smartTableRef = ref<any>()
 const selectedSmartRows = ref<QuantSmartPoolItem[]>([])
-const patternPoolForm = ref({ limit: 20, universe_limit: 5000, min_strength: 70, exclude_fundamental: true })
-const patternPoolLoading = ref(false)
-const patternPoolResult = ref<QuantPatternPoolResult | null>(null)
-const patternTableRef = ref<any>()
-const selectedPatternRows = ref<QuantPatternPoolItem[]>([])
-// 形态类别筛选：''=全部；'三不卖'=低位持有形态（三军会师/双管齐下/五阳上阵）
-const patternCategory = ref('')
-const patternHasCategory = (row: any, cat: string) =>
-  (row.matched_patterns || row.patterns || []).some((p: any) => (p.category || '') === cat)
-const visiblePatternItems = computed(() => {
-  const items = patternPoolResult.value?.items || []
-  return patternCategory.value ? items.filter((r: any) => patternHasCategory(r, patternCategory.value)) : items
-})
-const sanbumaiCount = computed(() =>
-  (patternPoolResult.value?.items || []).filter((r: any) => patternHasCategory(r, '三不卖')).length)
 const smartElapsed = ref(0)
 let smartProgressTimer: number | undefined
 let smartTaskTimer: number | undefined
@@ -978,36 +818,6 @@ const smartProgressSteps = computed(() => {
     }
   ]
 })
-const patternProgressSteps = computed(() => {
-  const elapsed = smartElapsed.value
-  return [
-    {
-      index: '1',
-      name: '检查日线',
-      text: dataHealth.value?.latest_complete_date ? `最近完整日线 ${dataHealth.value.latest_complete_date}` : '确认 K 线样本可用',
-      status: elapsed >= 2 ? 'done' : 'active'
-    },
-    {
-      index: '2',
-      name: '结构扫描',
-      text: `扫描 ${patternPoolForm.value.universe_limit} 只候选的均线、量能和突破结构`,
-      status: elapsed >= 12 ? 'done' : elapsed >= 2 ? 'active' : 'pending'
-    },
-    {
-      index: '3',
-      name: '过滤风险',
-      text: '剔除基本面或形态证据不足的标的',
-      status: elapsed >= 24 ? 'done' : elapsed >= 12 ? 'active' : 'pending'
-    },
-    {
-      index: '4',
-      name: '输出结果',
-      text: `返回前 ${patternPoolForm.value.limit} 只形态更清晰的股票`,
-      status: elapsed >= 24 ? 'active' : 'pending'
-    }
-  ]
-})
-
 const startSmartProgress = () => {
   smartElapsed.value = 0
   if (smartProgressTimer) window.clearInterval(smartProgressTimer)
@@ -1036,7 +846,6 @@ const pollSync = async () => {
     const s = syncStatus.value
     await refreshDataHealth(false)
     smartPoolResult.value = null
-    patternPoolResult.value = null
     ElMessage.success(`同步完成：${s.done}/${s.total} 只，失败 ${s.errors_count || 0}。已刷新本地数据状态。`)
   }
 }
@@ -1151,7 +960,6 @@ onMounted(async () => {
 onUnmounted(() => {
   if (syncTimer) window.clearTimeout(syncTimer)
   stopSmartTaskPolling()
-  stopPatternPolling()
   stopSmartProgress()
   Object.values(panelTimers).forEach(t => window.clearTimeout(t))
 })
@@ -1295,68 +1103,6 @@ const formatScore = (value?: number | null) => Number(value ?? 0).toFixed(1)
 
 const displayScore = (row: QuantSmartPoolItem) => formatScore(row.quant_score ?? row.score)
 
-// 形态扫描走后台任务 + 轮询：全市场约 90 秒，同步请求会被反向代理掐断（Vercel 边缘约
-// 30s、Cloudflare 100s），也会让用户对着转圈干等。与「一键智能推荐」同一套模式。
-let patternPollTimer = 0
-
-const stopPatternPolling = () => {
-    window.clearInterval(patternPollTimer)
-    patternPollTimer = 0
-}
-
-const pollPatternPoolTask = (taskId: string) => {
-    stopPatternPolling()
-    patternPollTimer = window.setInterval(async () => {
-        try {
-            const task = await quantApi.patternPoolTask(taskId)
-            if (task.status === 'completed') {
-                stopPatternPolling()
-                patternPoolResult.value = task.result || null
-                selectedPatternRows.value = []
-                loadPanelScores('pattern')
-                stopSmartProgress()
-                patternPoolLoading.value = false
-            } else if (task.status === 'failed') {
-                stopPatternPolling()
-                ElMessage.error(task.error || task.message || '形态扫描失败，请重试')
-                patternPoolResult.value = null
-                stopSmartProgress()
-                patternPoolLoading.value = false
-            }
-        } catch { /* 轮询失败下一轮重试；任务仍在后台跑 */ }
-    }, 3000)
-}
-
-const loadPatternPool = async () => {
-    patternPoolLoading.value = true
-    smartPoolTask.value = null
-    patternPoolResult.value = null
-    startSmartProgress()
-    try {
-        if (!(await ensureDataBeforeScan())) {
-            stopSmartProgress()
-            patternPoolLoading.value = false
-            return
-        }
-        const task = await quantApi.startPatternPoolTask(
-            patternPoolForm.value.limit,
-            patternPoolForm.value.universe_limit,
-            patternPoolForm.value.min_strength,
-        )
-        ElMessage.success('形态扫描已转入后台任务，完成后自动展示结果')
-        pollPatternPoolTask(task.task_id)
-    } catch (error: any) {
-        stopSmartProgress()
-        patternPoolLoading.value = false
-        ElMessage.error(error?.message || '启动形态扫描失败')
-        patternPoolResult.value = null
-    }
-}
-
-const handlePatternSelectionChange = (rows: QuantPatternPoolItem[]) => {
-  selectedPatternRows.value = rows
-}
-
 const addFavoriteRows = async (rows: QuantSmartPoolItem[]) => {
   const uniqueRows = rows.filter((row, index, arr) =>
     row?.symbol && arr.findIndex(item => item.symbol === row.symbol) === index
@@ -1390,15 +1136,9 @@ const addFavoriteRows = async (rows: QuantSmartPoolItem[]) => {
 const addOneToFavorites = (row: QuantSmartPoolItem) => addFavoriteRows([row])
 const addSelectedToFavorites = () => addFavoriteRows(selectedSmartRows.value)
 const addAllSmartToFavorites = () => addFavoriteRows(smartPoolResult.value?.items || [])
-const addSelectedPatternsToFavorites = () => addFavoriteRows(selectedPatternRows.value)
-const addAllPatternsToFavorites = () => addFavoriteRows(patternPoolResult.value?.items || [])
 
 const toggleSmartSelection = () => {
   smartTableRef.value?.toggleAllSelection?.()
-}
-
-const togglePatternSelection = () => {
-  patternTableRef.value?.toggleAllSelection?.()
 }
 
 const batchAnalyzeSelected = () => {
@@ -1409,16 +1149,6 @@ const batchAnalyzeSelected = () => {
   }
   router.push({ path: '/analysis/batch', query: { stocks: symbols.join(','), market: 'A股' } })
 }
-
-
-    const batchAnalyzePatternSelected = () => {
-    const symbols = selectedPatternRows.value.map(row => row.symbol).filter(Boolean)
-    if (!symbols.length) {
-        ElMessage.warning('请选择要批量分析的股票')
-        return
-    }
-    router.push({ path: '/analysis/batch', query: { stocks: symbols.join(','), market: 'A股' } })
-    }
 
 const runBacktest = async () => {
   if (!backtestForm.value.symbol.trim()) {
@@ -1586,32 +1316,61 @@ const openChart = async (row: any) => {
   }
 }
 
-.market-context {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  padding: 10px 12px;
+.market-banner {
+  padding: 14px 18px;
   border: 1px solid var(--el-border-color-light);
-  border-radius: 8px;
+  border-left: 6px solid var(--el-border-color);
+  border-radius: 10px;
   background: var(--el-fill-color-extra-light);
+  margin-bottom: 4px;
 
-  b { font-size: 14px; }
-  span { color: var(--el-text-color-secondary); font-size: 12px; }
-  .ctx-advice { color: var(--el-text-color-regular); }
-  .ctx-evidence { font-size: 12px; opacity: 0.85; }
+  .mb-row {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .mb-tag {
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--el-text-color-secondary);
+    padding: 2px 8px;
+    border-radius: 6px;
+  }
+  .mb-state { font-size: 22px; font-weight: 800; }
+  .mb-metrics {
+    font-size: 13px;
+    color: var(--el-text-color-regular);
+    b { font-size: 15px; font-weight: 700; }
+  }
+  .mb-advice {
+    margin-top: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+  }
+  .mb-evidence {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+  }
 }
 
 .ctx-warm {
   border-color: #ffb3a7;
+  border-left-color: #ef232a;
   background: #fff1f0;
-  b { color: #ef232a; }
+  .mb-tag { background: #ef232a; }
+  .mb-state, .mb-metrics b { color: #ef232a; }
 }
 
 .ctx-cold {
   border-color: #a7d4b4;
+  border-left-color: #0e9f5a;
   background: #f0fff4;
-  b { color: #0e9f5a; }
+  .mb-tag { background: #0e9f5a; }
+  .mb-state, .mb-metrics b { color: #0e9f5a; }
 }
 
 .health-fresh,

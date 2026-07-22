@@ -25,7 +25,8 @@ def _state(score: float, hi: str, mid: str, lo: str, hi_th=62.0, lo_th=42.0) -> 
 def stock_decision(symbol: str, name: str, df: pd.DataFrame,
                    quote: Optional[Dict] = None,
                    market_env: str = "",
-                   bad_forecast: bool = False) -> Dict[str, object]:
+                   bad_forecast: bool = False,
+                   market_temp: Optional[float] = None) -> Dict[str, object]:
     """多角度避雷决策。df 需含 OHLCV 日线（升序）。返回角度评分卡 + 分档建议。"""
     quote = quote or {}
     risk = check_risks(symbol, name, df, quote=quote, bad_forecast=bad_forecast)
@@ -42,9 +43,12 @@ def stock_decision(symbol: str, name: str, df: pd.DataFrame,
     liquidity = float(factors.get("liquidity", 50.0))
     capital = float(factors.get("capital_flow", 50.0))
 
-    # 盘面/情绪（大盘）：从环境标签映射温度
+    # 盘面/情绪（大盘）：优先用连续温度分。三档硬映射会把「刚企稳的偏冷」和「跌停潮」
+    # 打成同一个 32 分，昨日反弹在个股评分里彻底消失；有 temp 就直接用。
     env = str(market_env or "")
-    if any(k in env for k in ("暖", "强", "活跃")):
+    if market_temp is not None:
+        market_score = max(0.0, min(100.0, float(market_temp)))
+    elif any(k in env for k in ("暖", "强", "活跃")):
         market_score = 70.0
     elif any(k in env for k in ("冷", "弱", "谨慎")):
         market_score = 32.0
@@ -76,9 +80,10 @@ def stock_decision(symbol: str, name: str, df: pd.DataFrame,
         {"key": "capital", "label": "资金(价量代理)", "score": capital_angle,
          "state": _state(capital_angle, "净流入", "中性", "净流出"),
          "note": "成交额随价上行，资金偏流入" if capital_angle >= 62 else ("资金进出均衡" if capital_angle >= 42 else "价跌量出，资金偏流出")},
+        # 阈值用 regime 的 60/40，与顶部大盘横幅同源——同一个市场不能在两处显示不同冷暖
         {"key": "market", "label": "盘面/情绪(大盘)", "score": round(market_score, 1),
-         "state": _state(market_score, "偏暖", "中性", "偏冷"),
-         "note": f"当前大盘环境：{env or '未知'}"},
+         "state": _state(market_score, "偏暖", "中性", "偏冷", hi_th=60.0, lo_th=40.0),
+         "note": f"当前全市场赚钱效应：{env or '未知'}（个股中位+上涨广度口径，与指数涨跌可能背离）"},
     ]
 
     # 综合分（不含风险项——风险是硬否决）：趋势/资金/量能/盘面加权

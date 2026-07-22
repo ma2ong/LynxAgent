@@ -408,12 +408,16 @@ async def quant_risk_check(symbol: str):
             bad = sym in get_local_store().load_bad_forecast_symbols()
         except Exception:
             bad = False
+        env, temp = "", None
         try:
-            env = str((market_context() or {}).get("state") or "")
+            ctx = market_context() or {}
+            env = str(ctx.get("state") or "")
+            temp = ctx.get("temp")
         except Exception:
-            env = ""
+            pass
         name = str(quote.get("name") or "")
-        return stock_decision(sym, name, df, quote=quote, market_env=env, bad_forecast=bad)
+        return stock_decision(sym, name, df, quote=quote, market_env=env,
+                              bad_forecast=bad, market_temp=temp)
 
     try:
         return await asyncio.to_thread(_run)

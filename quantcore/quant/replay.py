@@ -86,21 +86,18 @@ def _limit_up_threshold(symbol: str) -> float:
     return 0.195 if symbol.startswith(("30", "68")) else 0.095
 
 
-REGIME_WINDOW = 5  # 与 engine.market_context 的 recent_returns(window=5) 对齐
-
-
-def _classify_regime(median_pct: float, breadth_up: float) -> str:
-    """大盘环境分类，阈值与 engine.market_context 完全一致（口径必须同源，否则分层结论失真）。"""
-    if median_pct >= 1.0 and breadth_up >= 0.55:
-        return "偏暖"
-    if median_pct <= -1.0 or breadth_up <= 0.40:
-        return "偏冷"
-    return "中性"
+REGIME_WINDOW = 5  # 与 engine.market_context 的 recent_daily_breadth(days=5) 对齐
 
 
 def _session_regimes(store: LocalQuantStore, sessions: List[str]) -> Dict[str, str]:
-    """每个回放期 as_of 的 point-in-time 大盘环境（近 5 交易日全市场中位涨幅 + 上涨占比）。"""
+    """每个回放期 as_of 的 point-in-time 大盘环境。
+
+    口径与 engine.market_context 同源：逐日中位涨幅 + 上涨广度 → regime 加权温度分。
+    不同源分层结论就会与线上标签矛盾（同一天回放说偏冷、横幅说中性）。
+    """
     import statistics
+
+    from .regime import blend_temp, classify
 
     if not sessions:
         return {}
@@ -109,16 +106,17 @@ def _session_regimes(store: LocalQuantStore, sessions: List[str]) -> Dict[str, s
     tdates = [str(r[0]) for r in conn.execute(
         "SELECT DISTINCT date FROM daily_kline WHERE date>=? AND amount>0 ORDER BY date", (since,))]
     didx = {d: i for i, d in enumerate(tdates)}
+    # 每个 session 需要 REGIME_WINDOW 个日收益 → REGIME_WINDOW+1 根 bar
     need = set()
-    pair: Dict[str, tuple] = {}
+    spans: Dict[str, List[str]] = {}
     for s in sessions:
         i = didx.get(s)
         if i is None or i < REGIME_WINDOW:
             continue
-        base = tdates[i - REGIME_WINDOW]
-        pair[s] = (base, s)
-        need.update((base, s))
-    if not pair:
+        span = tdates[i - REGIME_WINDOW: i + 1]
+        spans[s] = span
+        need.update(span)
+    if not spans:
         return {}
     by_date: Dict[str, Dict[str, float]] = {}
     qmarks = ",".join("?" * len(need))
@@ -128,14 +126,17 @@ def _session_regimes(store: LocalQuantStore, sessions: List[str]) -> Dict[str, s
     ):
         by_date.setdefault(str(d), {})[str(sym)] = float(c or 0)
     out: Dict[str, str] = {}
-    for s, (base, cur) in pair.items():
-        m0, m1 = by_date.get(base, {}), by_date.get(cur, {})
-        rets = [(m1[k] / m0[k] - 1) * 100 for k in m0.keys() & m1.keys() if m0[k] > 0]
-        if len(rets) < 10:
+    for s, span in spans.items():
+        days: List[tuple] = []
+        for prev_d, cur_d in zip(span, span[1:]):
+            m0, m1 = by_date.get(prev_d, {}), by_date.get(cur_d, {})
+            rets = [(m1[k] / m0[k] - 1) * 100 for k in m0.keys() & m1.keys() if m0[k] > 0]
+            if len(rets) < 10:
+                continue
+            days.append((statistics.median(rets), sum(1 for v in rets if v > 0) / len(rets)))
+        if not days:
             continue
-        median = statistics.median(rets)
-        breadth = sum(1 for v in rets if v > 0) / len(rets)
-        out[s] = _classify_regime(median, breadth)
+        out[s] = classify(blend_temp(list(reversed(days))))  # blend_temp 要求最新一日在前
     return out
 
 

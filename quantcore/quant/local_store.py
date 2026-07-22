@@ -407,6 +407,46 @@ class LocalQuantStore:
                 out[str(symbol).zfill(6)] = (c / b - 1) * 100
         return out
 
+    def recent_daily_breadth(self, days: int = 5) -> List[Dict[str, float]]:
+        """最近 days 个交易日的**逐日**全市场中位涨幅% / 上涨占比，最新一日在前。
+
+        与 recent_returns 的累计口径互补：环境温度要的是「每天多冷多热」，累计口径会被
+        单根大阴线锁死整整一个窗口（见 regime 模块注释）。
+        同样只用 amount>0 的真实 bar + 45 天窗口，缺 bar 的股票当日不计入。
+        """
+        import statistics
+        from datetime import date as _date, timedelta as _td
+        cutoff = (_date.today() - _td(days=45)).strftime("%Y-%m-%d")
+        sql = """
+        WITH d AS (
+            SELECT DISTINCT date FROM daily_kline
+            WHERE amount > 0 AND date >= ? ORDER BY date DESC LIMIT ?
+        ), lagged AS (
+            SELECT date, close,
+                   LAG(close) OVER (PARTITION BY symbol ORDER BY date) AS prev
+            FROM daily_kline
+            WHERE amount > 0 AND date IN (SELECT date FROM d)
+        )
+        SELECT date, close, prev FROM lagged WHERE prev IS NOT NULL
+        """
+        buckets: Dict[str, List[float]] = {}
+        for d, close, prev in self._conn().execute(sql, (cutoff, days + 1)).fetchall():
+            p = _f(prev)
+            if p > 0:
+                buckets.setdefault(str(d), []).append((_f(close) / p - 1) * 100)
+        out: List[Dict[str, float]] = []
+        for d in sorted(buckets, reverse=True)[:days]:
+            rets = buckets[d]
+            if len(rets) < 100:  # 样本太少（同步残缺日）不足以代表全市场，跳过而非给出假广度
+                continue
+            out.append({
+                "date": d,
+                "median_pct": round(statistics.median(rets), 2),
+                "breadth_up": round(sum(1 for v in rets if v > 0) / len(rets), 4),
+                "count": len(rets),
+            })
+        return out
+
     def latest_daily_stats(self) -> Dict[str, Dict[str, float]]:
         """每只股票最新真实 bar 的当日涨跌幅%/成交额/收盘价（快照不可用时热力图兜底）。
 

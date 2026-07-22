@@ -138,79 +138,117 @@ def _fetch_tencent_quotes(symbols: List[str]) -> Dict[str, Dict[str, object]]:
 _MARKET_CTX_CACHE: Optional[Tuple[float, Dict[str, object]]] = None
 
 
-def market_context() -> Dict[str, object]:
-    """全市场 5 日中位涨幅 + 上涨占比 → 大盘环境提示。
+def _day_label(median_pct: float, breadth_up: float) -> str:
+    """单日脉冲标签（个股口径）。"""
+    if median_pct >= 1.0 and breadth_up >= 0.55:
+        return "普涨"
+    if median_pct <= -1.0 or breadth_up <= 0.40:
+        return "普跌"
+    return "企稳" if breadth_up >= 0.50 else "分化"
 
-    择时证据：普跌市里短线信号胜率系统性下降，池子输出应带环境标签让用户决定仓位。
-    本地数据不足时返回空 dict，不影响主流程。
+
+def market_context() -> Dict[str, object]:
+    """大盘环境：个股口径（逐日中位/广度加权温度）+ 指数口径，背离显式标注。
+
+    两个口径回答的是两个问题，缺一个就会出现「指数大涨但标签偏冷」这种看似矛盾的输出：
+    - 指数口径 = 用户口中的「大盘涨没涨」（市值加权，权重股能单独拉出来）；
+    - 个股口径 = 「我的票好不好做」（中位数 + 上涨广度，决定短线信号胜率）。
+    环境标签 state 取个股口径——选股系统的仓位决策该跟赚钱效应走，不跟指数点位走。
+
+    本地数据不足时返回空 dict，不影响主流程；指数取不到时降级为纯个股口径。
     """
     global _MARKET_CTX_CACHE
     import time as _time
+    from .regime import blend_temp, classify
     now = _time.time()
     if _MARKET_CTX_CACHE and now - _MARKET_CTX_CACHE[0] < 600:
         return _MARKET_CTX_CACHE[1]
     result: Dict[str, object] = {}
     try:
-        rets = get_local_store().recent_returns(window=5)
-        vals = sorted(rets.values())
-        if len(vals) < 500:
+        store = get_local_store()
+        daily = store.recent_daily_breadth(days=5)
+        if not daily:
             _MARKET_CTX_CACHE = (now, result)
             return result
-        median = vals[len(vals) // 2]
-        breadth = sum(1 for v in vals if v > 0) / len(vals)
-        if median >= 1.0 and breadth >= 0.55:
-            state, advice = "偏暖", "市场普涨，短线信号胜率通常较高。"
-        elif median <= -1.0 or breadth <= 0.40:
-            state, advice = "偏冷", "市场普跌，短线信号胜率系统性下降，建议降低仓位或观望。"
-        else:
-            state, advice = "中性", "市场分化，优先选强主线，控制单票仓位。"
 
-        # 最新一日脉冲：只看近5日趋势会掩盖单日反弹（急跌数日后昨日翻红），
-        # 单独给出单日口径，让「近段偏冷 vs 昨日反弹」这种背离可见，不再只报一个滞后的趋势标签。
-        d_median, d_breadth, day_label = 0.0, 0.0, "—"
+        temp = blend_temp([(float(d["median_pct"]), float(d["breadth_up"])) for d in daily])
+        state = classify(temp)
+        latest = daily[0]
+        d_median = float(latest["median_pct"])
+        d_breadth = float(latest["breadth_up"])
+
+        # 近 5 日累计口径：仍然有用（回答"这波跌了多少"），但不再决定标签
+        median_5d, breadth_5d = 0.0, 0.0
         try:
-            day = get_local_store().recent_returns(window=1)
-            dvals = sorted(day.values())
-            if dvals:
-                d_median = dvals[len(dvals) // 2]
-                d_breadth = sum(1 for v in dvals if v > 0) / len(dvals)
-                if d_median >= 1.0 and d_breadth >= 0.55:
-                    day_label = "普涨"
-                elif d_median <= -1.0 or d_breadth <= 0.40:
-                    day_label = "普跌"
-                elif d_breadth >= 0.50:
-                    day_label = "企稳"
-                else:
-                    day_label = "分化"
+            vals = sorted(store.recent_returns(window=5).values())
+            if vals:
+                median_5d = vals[len(vals) // 2]
+                breadth_5d = sum(1 for v in vals if v > 0) / len(vals)
         except Exception:
             pass
 
-        # 趋势偏冷但最新一日转强 → 明确标注反弹并调整建议（反弹≠反转，防追高）。
-        rebound = state == "偏冷" and (d_median > 0 or d_breadth >= 0.50)
+        # as_of=最后一根真实日线（amount>0），指数口径对齐同一天，否则盘中会自相矛盾
+        as_of = str(latest.get("date") or "")
+        try:
+            as_of = store.latest_real_bar_date() or as_of
+        except Exception:
+            pass
+
+        index_items: List[Dict[str, object]] = []
+        try:
+            from .macro_bar import fetch_index_history
+            index_items = fetch_index_history(as_of=as_of, window=5)
+        except Exception:
+            index_items = []
+
+        # 背离：指数昨日均值 vs 个股昨日中位。差 1pp 以上才算，避免噪声误报。
+        divergence = ""
+        idx_last = None
+        if index_items:
+            idx_last = sum(float(i["last_pct"]) for i in index_items) / len(index_items)
+            gap = idx_last - d_median
+            if gap >= 1.0:
+                divergence = "指数强于个股——权重拉指数，中位股没跟上，赚指数不赚钱"
+            elif gap <= -1.0:
+                divergence = "个股强于指数——普涨但权重股拖累指数，题材/小盘活跃"
+
+        day_label = _day_label(d_median, d_breadth)
+        rebound = state == "偏冷" and d_breadth >= 0.50 and d_median > 0
         if rebound:
             day_label = "反弹"
-            advice = (f"近段急跌后昨日企稳反弹（{d_breadth * 100:.0f}% 上涨、中位"
-                      f"{'+' if d_median >= 0 else ''}{d_median:.1f}%），但近5日仍偏冷——"
-                      "反弹持续性待确认，轻仓参与强势方向、不追高。")
 
-        # as_of=最后一根真实日线（amount>0），与中位数计算口径一致；本口径是「近段结构趋势」，
-        # 盘中实时情绪看市场雷达，两者可能背离（如普跌后盘中反弹），标注截止日避免互相矛盾。
-        as_of = ""
-        try:
-            as_of = get_local_store().latest_real_bar_date()
-        except Exception:
-            pass
+        # 建议跟着两个口径一起走：先说个股赚钱效应，再说与指数的背离，最后给动作
+        if state == "偏暖":
+            advice = "赚钱效应好，短线信号胜率通常较高，可正常参与。"
+        elif state == "偏冷":
+            advice = "赚钱效应差，短线信号胜率系统性下降，建议降低仓位或观望。"
+        else:
+            advice = "市场分化，优先选强主线，控制单票仓位。"
+        if rebound:
+            advice = (f"急跌后最新一日企稳反弹（{d_breadth * 100:.0f}% 上涨、中位 "
+                      f"{'+' if d_median >= 0 else ''}{d_median:.1f}%），但加权温度仍偏冷——"
+                      "反弹持续性待确认，轻仓参与强势方向、不追高。")
+        if divergence:
+            advice = f"{advice}｜{divergence}。"
+
         result = {
             "state": state,
-            "median_5d_pct": round(median, 2),
-            "breadth_up": round(breadth, 4),
-            # 最新一日脉冲（单日口径），供前端与「偏冷」并列展示，避免单日反弹被趋势标签盖住
+            "temp": round(temp, 1),
+            # 逐日序列（最新在前）：让用户自己看清标签是被哪几天压住的
+            "daily": daily,
+            "median_5d_pct": round(median_5d, 2),
+            "breadth_up": round(breadth_5d, 4),
             "latest_day": {
                 "median_pct": round(d_median, 2),
                 "breadth_up": round(d_breadth, 4),
                 "label": day_label,
                 "rebound": rebound,
             },
+            "index": {
+                "items": index_items,
+                "last_pct": round(idx_last, 2) if idx_last is not None else None,
+            },
+            "divergence": divergence,
             "as_of": as_of,
             "advice": advice,
         }

@@ -2,21 +2,35 @@
   <div class="quant-page">
     <section v-if="marketCtx?.state" class="market-banner" :class="`ctx-${ctxTone}`">
       <div class="mb-row">
-        <span class="mb-tag">大盘环境</span>
+        <span class="mb-tag">赚钱效应</span>
         <b class="mb-state">{{ marketCtx.state }}</b>
+        <span v-if="marketCtx.temp != null" class="mb-temp">温度 {{ marketCtx.temp }}</span>
         <span class="mb-metrics">
-          近5日趋势{{ marketCtx.as_of ? `(截至 ${marketCtx.as_of})` : '' }}中位
-          <b>{{ (marketCtx.median_5d_pct ?? 0) > 0 ? '+' : '' }}{{ marketCtx.median_5d_pct }}%</b>
-          · 上涨占比 <b>{{ Math.round((marketCtx.breadth_up || 0) * 100) }}%</b>
+          {{ marketCtx.as_of ? `截至 ${marketCtx.as_of}` : '' }} 当日个股中位
+          <b>{{ pct(marketCtx.latest_day?.median_pct) }}</b>
+          · 上涨家数占比 <b>{{ Math.round((marketCtx.latest_day?.breadth_up || 0) * 100) }}%</b>
         </span>
-        <span v-if="marketCtx.latest_day && marketCtx.latest_day.label && marketCtx.latest_day.label !== '—'"
+        <span v-if="marketCtx.latest_day?.label && marketCtx.latest_day.label !== '—'"
           class="mb-day" :class="{ rebound: marketCtx.latest_day.rebound }">
-          昨日<b>{{ marketCtx.latest_day.label }}</b>
-          · 中位 {{ (marketCtx.latest_day.median_pct ?? 0) > 0 ? '+' : '' }}{{ marketCtx.latest_day.median_pct }}%
-          · 上涨 {{ Math.round((marketCtx.latest_day.breadth_up || 0) * 100) }}%
+          {{ marketCtx.latest_day.label }}
         </span>
       </div>
+      <div v-if="marketCtx.index?.items?.length" class="mb-row mb-index">
+        <span class="mb-tag">大盘指数</span>
+        <span v-for="i in marketCtx.index.items" :key="i.code" class="mb-idx"
+          :class="i.last_pct >= 0 ? 'up' : 'down'">
+          {{ i.name }} <b>{{ pct(i.last_pct) }}</b>
+        </span>
+        <span class="mb-idx-note">近5日 {{ marketCtx.index.items.map((i) => pct(i.window_pct)).join(' / ') }}</span>
+      </div>
+      <div v-if="marketCtx.divergence" class="mb-diverge">⚠ {{ marketCtx.divergence }}</div>
       <div class="mb-advice">{{ marketCtx.advice }}</div>
+      <div v-if="marketCtx.daily?.length" class="mb-daily">
+        近5日逐日：
+        <span v-for="d in marketCtx.daily" :key="d.date" :class="d.median_pct >= 0 ? 'up' : 'down'">
+          {{ d.date.slice(5) }} {{ pct(d.median_pct) }}/{{ Math.round(d.breadth_up * 100) }}%
+        </span>
+      </div>
       <div v-if="coldEvidence" class="mb-evidence">{{ coldEvidence }}</div>
     </section>
 
@@ -909,6 +923,7 @@ const ctxTone = computed(() => {
   const s = marketCtx.value?.state
   return s === '偏暖' ? 'warm' : s === '偏冷' ? 'cold' : 'flat'
 })
+const pct = (v?: number | null) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`)
 
 // 偏冷时给回放证据：历史上偏冷期两池超额如何（接口有缓存，<0.1s）
 const coldEvidence = ref('')
@@ -1363,11 +1378,43 @@ const openChart = async (row: any) => {
       b { color: #ef232a; }
     }
   }
+  .mb-temp {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    padding: 1px 6px;
+    border: 1px solid var(--el-border-color);
+    border-radius: 4px;
+  }
+  .mb-index {
+    margin-top: 6px;
+    .mb-idx {
+      font-size: 13px;
+      color: var(--el-text-color-regular);
+      b { font-weight: 700; }
+      &.up b { color: #ef232a; }
+      &.down b { color: #0e9f5a; }
+    }
+    .mb-idx-note { font-size: 12px; color: var(--el-text-color-secondary); }
+  }
+  .mb-diverge {
+    margin-top: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #d46b08;
+  }
   .mb-advice {
     margin-top: 6px;
     font-size: 14px;
     font-weight: 600;
     color: var(--el-text-color-primary);
+  }
+  .mb-daily {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    span { margin-right: 10px; }
+    .up { color: #ef232a; }
+    .down { color: #0e9f5a; }
   }
   .mb-evidence {
     margin-top: 4px;

@@ -127,15 +127,25 @@ def test_replay_limitup_flagged(store):
     assert smart["limitup_ratio"] > 0
 
 
-def test_classify_regime_thresholds():
-    """阈值必须与 engine.market_context 完全一致（同源口径）。"""
-    from quantcore.quant.replay import _classify_regime
+def test_regime_temp_symmetric_and_recent_weighted():
+    """回放与线上横幅共用 regime 模块（同源口径），且分档必须对称、近日权重更高。"""
+    from quantcore.quant.regime import blend_temp, classify, day_temp
 
-    assert _classify_regime(1.0, 0.55) == "偏暖"
-    assert _classify_regime(1.5, 0.54) == "中性"   # 宽度不足不算暖
-    assert _classify_regime(-1.0, 0.5) == "偏冷"
-    assert _classify_regime(0.0, 0.40) == "偏冷"   # 宽度崩塌也算冷
-    assert _classify_regime(0.0, 0.5) == "中性"
+    # 上下对称：镜像输入必须给出镜像标签（旧口径偏暖要 AND、偏冷只要 OR，系统性偏冷）
+    assert classify(day_temp(1.0, 0.60)) == "偏暖"
+    assert classify(day_temp(-1.0, 0.40)) == "偏冷"
+    assert classify(day_temp(0.0, 0.50)) == "中性"
+
+    # 一根大阴线不该锁死整个窗口：其后连续 4 天转暖，标签必须跟着动（旧的 5 日累计口径做不到）
+    crash_then_rally = [(1.5, 0.65), (1.5, 0.65), (1.2, 0.62), (1.0, 0.60), (-5.0, 0.10)]
+    assert classify(blend_temp(crash_then_rally)) == "偏暖"
+    # 同样 5 天、只把大阴线换到最新一日 → 温度必须大幅下挫且不再算暖（权重跟着时间走）
+    crash_latest = blend_temp(list(reversed(crash_then_rally)))
+    assert crash_latest < blend_temp(crash_then_rally) - 20
+    assert classify(crash_latest) != "偏暖"
+
+    # 真实的连续下跌必须判冷（旧口径此处也判冷，新口径不能放松）
+    assert classify(blend_temp([(-1.5, 0.30), (-2.0, 0.25), (-1.0, 0.35), (0.2, 0.51), (-0.5, 0.45)])) == "偏冷"
 
 
 def test_replay_regime_stratification(store):

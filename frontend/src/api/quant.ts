@@ -525,6 +525,10 @@ export const quantApi = {
 
 export interface MarketContext {
   state?: '偏暖' | '中性' | '偏冷'
+  /** 逐日加权温度分 0-100（50=中性），state 由它分档 */
+  temp?: number
+  /** 逐日中位/广度序列，最新一日在前 */
+  daily?: Array<{ date: string; median_pct: number; breadth_up: number; count: number }>
   median_5d_pct?: number
   breadth_up?: number
   latest_day?: {
@@ -533,6 +537,13 @@ export interface MarketContext {
     label?: string
     rebound?: boolean
   }
+  /** 指数口径：用户口中的「大盘涨没涨」 */
+  index?: {
+    items?: Array<{ code: string; name: string; date: string; last_pct: number; window_pct: number }>
+    last_pct?: number | null
+  }
+  /** 指数与个股背离的一句话说明（无背离为空串） */
+  divergence?: string
   as_of?: string
   advice?: string
 }

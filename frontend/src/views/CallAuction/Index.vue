@@ -50,8 +50,8 @@
       <section class="tape" v-if="data.auction_tape && data.auction_tape.available">
         <div class="tape-head">
           竞价盘口四形态
-          <span class="tape-meta">跟踪 {{ data.auction_tape.tracked }} 只 · {{ data.auction_tape.sample_points }} 个采样点</span>
-          <span class="tape-live">实时 · 不可回测</span>
+          <span class="tape-meta">买入候选 {{ data.auction_tape.tracked }} 只 · 判出 {{ data.auction_tape.resolved }} 只</span>
+          <span class="tape-live">09:15-09:25 逐分钟撮合价</span>
         </div>
         <div class="tape-counts">
           <span class="tc t-acc">主力抢筹 <b>{{ data.auction_tape.pattern_counts.accumulation }}</b></span>
@@ -63,7 +63,7 @@
       </section>
       <el-alert v-else-if="data.auction_tape && !data.auction_tape.available"
         type="info" :closable="false" show-icon style="margin:2px 0"
-        title="竞价四形态需在盘前 09:15-09:25 期间采样才有数据（实时可用、无法回测）" />
+        title="当前买入候选的竞价有效报价不足，判不出盘口形态" />
 
       <!-- 高开幅度分布（精确口径） -->
       <section class="dist" v-if="data.overview.distribution?.length">

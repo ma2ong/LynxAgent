@@ -1,91 +1,107 @@
-"""集合竞价"盘口轨迹"采样与四形态识别。
+"""集合竞价"盘口轨迹"取数与四形态识别。
 
 现有竞价功能只有 09:25 最终撮合价一个点——四形态（主力抢筹/诱多出货/洗盘低吸/多空分歧）
-全长一个样。四形态的本质是 09:15-09:25 这 10 分钟里"临时撮合价 + 竞价量能怎么变"：
-  · 主力抢筹：临时价逐步走高 + 量能放大 —— 资金持续挂买；
-  · 诱多出货：高开后临时价逐步走低 / 量能萎缩 —— 拉高引诱接盘再撤；
-  · 洗盘低吸：低开或探底后逐步回升 —— 打掉浮筹低位吸筹；
-  · 多空分歧：价格反复上下、量能不稳 —— 多空争夺无合力。
+全长一个样。四形态的本质是 09:15-09:25 这 10 分钟里"临时撮合价怎么变"：
+  · 主力抢筹：临时价一路走高 —— 资金持续挂买；
+  · 诱多出货：高开后临时价被砸回 / 一路走低 —— 拉高引诱接盘再撤单；
+  · 洗盘低吸：先探底再回升 —— 打掉浮筹低位吸筹；
+  · 多空分歧：价格反复上下、无明确方向 —— 多空争夺无合力。
 
-实现：后端在 09:15-09:25 每 ~20 秒采一次全市场快照，攒出每只票的迷你时间序列，收盘或
-盘中据此分类。**只能盘前实时用，无法历史回测**（不存历史竞价 tick）——这点必须在页面标清。
+取数：东财盘前分时 push2his/trends2（iscr=1）直接给出 09:15-09:25 逐分钟虚拟撮合价，
+**盘后仍可回溯当日轨迹**。因此不需要后端在竞价窗口在线逐秒采样——按需拉取即可，进程
+重启、盘中才打开页面都不影响结果。竞价段成交量/额东财恒为 0，故形态只用价格轨迹判定。
+
+注意：09:15 那一分钟（以及此后连续等于昨收的分钟）是"尚无有效申报"的占位，不是"平开"，
+必须剔除后再判形态，否则宁德时代这种 09:21 才开始报价的票会被算成一路平开。
 """
 from __future__ import annotations
 
-from datetime import date, datetime
-from typing import Dict, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date
+from typing import Dict, List, Optional, Sequence, Tuple
 
-# 内存态盘口：{"date": "2026-07-21", "prev_close": {sym: pc}, "samples": {sym: [(hhmmss, price, amount)]}}
-_TAPE: Dict[str, object] = {"date": None, "prev_close": {}, "samples": {}}
+import requests
 
-# 只跟踪有意义的异动票（|高开| ≥ 此阈值），避免全市场 5000 只 × N 次采样撑爆内存
-_TRACK_GAP_MIN = 1.0
-_MAX_TRACK = 1200
+_EM_TRENDS_URL = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"
+_EM_UT = "fa5fd1943c7b386f172d6893dbfba10b"
+_HEADERS = {"User-Agent": "Mozilla/5.0"}
+_AUCTION_MINUTES = {f"09:{m:02d}" for m in range(15, 26)}
 
-
-def reset_if_new_day(today: Optional[str] = None) -> None:
-    today = today or date.today().isoformat()
-    if _TAPE.get("date") != today:
-        _TAPE["date"] = today
-        _TAPE["prev_close"] = {}
-        _TAPE["samples"] = {}
+# 当日轨迹一经 09:25 撮合就不再变化，进程内缓存到隔日：{"date": "2026-07-22", "items": {code: result}}
+_CACHE: Dict[str, object] = {"date": None, "items": {}}
 
 
-def record_sample(snapshot: Dict[str, dict], now: Optional[datetime] = None) -> int:
-    """采一次竞价快照：给异动票追加 (时刻, 临时撮合价, 竞价累计额)。返回本次跟踪的票数。
+def _secid(code: str) -> str:
+    """东财 secid 市场前缀：沪市(6/68/5/11 开头) 为 1，深市/北交所为 0。"""
+    return f"1.{code}" if code.startswith(("60", "68", "51", "58", "11")) else f"0.{code}"
 
-    临时撮合价用快照 price（竞价时段=最新撮合价）；量能用 amount（竞价时段=竞价累计成交额）。
+
+def fetch_auction_trend(code: str, timeout: float = 8.0) -> Tuple[float, List[Tuple[str, float]]]:
+    """拉当日 09:15-09:25 竞价轨迹。返回 (昨收, [(hh:mm, 虚拟撮合价), …])，失败返回 (0.0, [])。
+
+    已剔除开头"尚无有效申报"的占位分钟（价格恒等于昨收的前缀段）。
     """
-    now = now or datetime.now()
-    reset_if_new_day(now.date().isoformat())
-    hhmmss = now.strftime("%H%M%S")
-    prev_close: Dict[str, float] = _TAPE["prev_close"]  # type: ignore
-    samples: Dict[str, list] = _TAPE["samples"]  # type: ignore
+    code = str(code).zfill(6)
+    params = {
+        "fields1": "f1,f2,f3,f4,f5,f6,f7,f8",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+        "ut": _EM_UT, "ndays": 1, "iscr": 1, "iscca": 0, "secid": _secid(code),
+    }
+    session = requests.Session()
+    session.trust_env = False  # 本机代理会挡掉东财，见 CLAUDE.md 取数约定
+    try:
+        resp = session.get(_EM_TRENDS_URL, params=params, headers=_HEADERS, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json().get("data") or {}
+    except (requests.RequestException, ValueError):
+        return 0.0, []
 
-    for v in snapshot.values():
-        code = str(v.get("code") or v.get("symbol") or "").zfill(6)
-        if len(code) != 6 or not code.isdigit():
+    try:
+        prev_close = float(data.get("preClose") or 0)
+    except (TypeError, ValueError):
+        return 0.0, []
+    if prev_close <= 0:
+        return 0.0, []
+
+    points: List[Tuple[str, float]] = []
+    for row in data.get("trends") or []:
+        parts = str(row).split(",")
+        if len(parts) < 3:
+            continue
+        hhmm = parts[0][-5:]
+        if hhmm not in _AUCTION_MINUTES:
             continue
         try:
-            price = float(v.get("price") or 0)
-            pc = float(v.get("prev_close") or 0)
-            amount = float(v.get("amount") or 0)
-        except (TypeError, ValueError):
+            points.append((hhmm, float(parts[2])))  # parts[2] = 该分钟末的虚拟撮合价
+        except ValueError:
             continue
-        if price <= 0 or pc <= 0:
-            continue
-        gap = (price / pc - 1.0) * 100.0
-        already = code in samples
-        # 新票只在异动时纳入跟踪（且不超上限）；已跟踪的票继续采集，保证轨迹连续
-        if not already:
-            if abs(gap) < _TRACK_GAP_MIN or len(samples) >= _MAX_TRACK:
-                continue
-            prev_close[code] = pc
-            samples[code] = []
-        samples[code].append((hhmmss, round(price, 3), round(amount, 1)))
-    return len(samples)
+
+    # 剔除开头恒等于昨收的占位段（09:15 必是占位；有的票要到 09:21 才有有效申报）
+    start = 0
+    while start < len(points) and abs(points[start][1] - prev_close) < 1e-9:
+        start += 1
+    return prev_close, points[start:]
 
 
-def classify_trajectory(samples: List[Tuple[str, float, float]], prev_close: float) -> dict:
-    """从一只票的竞价轨迹判四形态。纯函数，可单测。
+def classify_trajectory(points: Sequence[Tuple[str, float]], prev_close: float) -> dict:
+    """从一只票的竞价价格轨迹判四形态。纯函数，可单测。
 
-    samples: [(hhmmss, price, cumulative_amount), …] 时间升序；prev_close: 昨收。
-    返回 {pattern, label, confidence, gap_open, gap_last, drift, note}
+    points: [(hh:mm, 虚拟撮合价), …] 时间升序，已剔除占位段；prev_close: 昨收。
+    返回 {pattern, label, confidence, gap_open, gap_last, drift, amplitude, reversals, note}
     """
-    if prev_close <= 0 or len(samples) < 3:
+    if prev_close <= 0 or len(points) < 3:
         return {"pattern": "insufficient", "label": "数据不足", "confidence": 0.0,
                 "gap_open": None, "gap_last": None, "drift": None,
-                "note": "竞价采样点不足，无法判形态"}
+                "note": "竞价有效报价不足 3 分钟，无法判形态"}
 
-    prices = [s[1] for s in samples]
-    amounts = [s[2] for s in samples]
-    gap_open = (prices[0] / prev_close - 1.0) * 100.0
-    gap_last = (prices[-1] / prev_close - 1.0) * 100.0
-    drift = gap_last - gap_open                                # 窗口内临时价漂移(百分点)
+    prices = [p for _, p in points]
+    gap_open = (prices[0] / prev_close - 1.0) * 100.0        # 首个有效报价的高开幅度
+    gap_last = (prices[-1] / prev_close - 1.0) * 100.0       # 09:25 撮合价 = 当日开盘价
+    drift = gap_last - gap_open                              # 窗口内价格漂移(百分点)
     lo, hi = min(prices), max(prices)
-    amplitude = (hi - lo) / prev_close * 100.0                 # 价格振幅(百分点)
+    gap_low = (lo / prev_close - 1.0) * 100.0
+    amplitude = (hi - lo) / prev_close * 100.0
 
-    # 方向反转次数（choppiness）
     reversals = 0
     last_dir = 0
     for a, b in zip(prices, prices[1:]):
@@ -95,69 +111,78 @@ def classify_trajectory(samples: List[Tuple[str, float, float]], prev_close: flo
         if d != 0:
             last_dir = d
 
-    # 量能趋势：累计额的后半段增量 vs 前半段增量（放大/萎缩）
-    mid = len(amounts) // 2
-    early_inc = amounts[mid] - amounts[0]
-    late_inc = amounts[-1] - amounts[mid]
-    vol_growing = late_inc > early_inc * 1.1
-    vol_shrinking = late_inc < early_inc * 0.7
-
     def _pack(pattern, label, conf, note):
         return {"pattern": pattern, "label": label, "confidence": round(conf, 2),
                 "gap_open": round(gap_open, 2), "gap_last": round(gap_last, 2),
                 "drift": round(drift, 2), "amplitude": round(amplitude, 2),
-                "reversals": reversals, "vol_growing": vol_growing, "note": note}
+                "reversals": reversals, "note": note}
 
-    # 多空分歧优先判：反复拉锯、无明确方向（大振幅 + 多次反转，或漂移极小但振幅大）
-    if reversals >= 3 or (abs(drift) < 0.4 and amplitude >= 1.5):
+    # 多空分歧优先判：反复拉锯且最终回到起点附近。漂移一旦够大（≥1.5pt）方向就是主线，
+    # 中途震荡几次不改变性质——否则 "起+5.06% 收+2.60%" 这种明确被砸会误判成分歧。
+    if (reversals >= 3 and abs(drift) < 1.5) or (abs(drift) < 0.4 and amplitude >= 1.5):
         return _pack("divergence", "多空分歧", min(0.9, 0.5 + reversals * 0.1),
                      "竞价价格反复拉锯、缺乏合力，宜等开盘量价确认再动手")
 
-    # 主力抢筹：临时价持续走高 + 量能放大（末价为正）
-    if drift >= 0.6 and gap_last > 0 and vol_growing:
+    # 洗盘低吸：先明显探底、末段大幅回升，且要收回起点附近（drift ≥ -0.3）。
+    # 少了最后这条，"起+3.06% 砸到 -1.9% 反弹到 -0.38%" 这种崩塌中的反抽会被误标成看多。
+    if gap_low <= gap_open - 0.3 and gap_last - gap_low >= 0.8 and drift >= -0.3:
+        return _pack("shakeout", "洗盘低吸", min(0.85, 0.5 + (gap_last - gap_low) * 0.1),
+                     "竞价探底后逐步回升，疑似打掉浮筹低位吸筹，可低吸关注")
+
+    # 主力抢筹：一路走高且收在昨收之上（无明显探底，与洗盘区分）
+    if drift >= 0.6 and gap_last > 0:
         return _pack("accumulation", "主力抢筹", min(0.95, 0.6 + drift * 0.1),
-                     "竞价临时价逐步走高且量能放大，资金持续挂买，强势方向")
+                     "竞价临时价逐步走高，资金持续挂买，强势方向")
 
-    # 诱多出货：明显高开后临时价走低 / 量能萎缩
-    if gap_open >= 2.0 and (drift <= -0.6 or vol_shrinking):
-        return _pack("distribution", "诱多出货", min(0.9, 0.55 + abs(drift) * 0.1),
-                     "高开后竞价价格回落、量能萎缩，警惕拉高引诱接盘，冲高回落风险")
+    # 诱多出货：竞价一路被砸低（含"高开后砸回"和"直接跳水"）
+    if drift <= -0.6:
+        label = "诱多出货" if gap_open >= 2.0 else "竞价跳水"
+        return _pack("distribution", label, min(0.9, 0.55 + abs(drift) * 0.1),
+                     "竞价价格持续走低，抛压主导，警惕冲高回落")
 
-    # 洗盘低吸：低开/探底后回升
-    if gap_open <= 0.5 and drift >= 0.8:
-        return _pack("shakeout", "洗盘低吸", min(0.85, 0.5 + drift * 0.1),
-                     "低开探底后竞价逐步回升，疑似打掉浮筹低位吸筹，可低吸关注")
-
-    # 兜底：方向不明（温和高开/低开但无上述特征）
     return _pack("neutral", "方向不明", 0.3,
                  "竞价无明显主力特征，按普通高/低开对待")
 
 
 def classify_symbol(code: str) -> dict:
-    """从当日盘口轨迹判某票四形态（无轨迹返回数据不足）。"""
-    code = str(code).zfill(6)
-    samples: Dict[str, list] = _TAPE.get("samples") or {}  # type: ignore
-    prev_close: Dict[str, float] = _TAPE.get("prev_close") or {}  # type: ignore
-    return classify_trajectory(samples.get(code, []), prev_close.get(code, 0.0))
+    """拉当日竞价轨迹并判形态（带当日缓存）。"""
+    return classify_symbols([code]).get(str(code).zfill(6), classify_trajectory([], 0.0))
 
 
-def tape_summary() -> dict:
-    """当日采样概况 + 四形态计数（供竞价页展示）。"""
-    samples: Dict[str, list] = _TAPE.get("samples") or {}  # type: ignore
-    prev_close: Dict[str, float] = _TAPE.get("prev_close") or {}  # type: ignore
+def classify_symbols(codes: Sequence[str], max_workers: int = 12) -> Dict[str, dict]:
+    """批量判形态：并发拉盘前分时，同一交易日内进程级缓存（轨迹 09:25 后不再变化）。"""
+    today = date.today().isoformat()
+    if _CACHE.get("date") != today:
+        _CACHE["date"] = today
+        _CACHE["items"] = {}
+    cache: Dict[str, dict] = _CACHE["items"]  # type: ignore
+
+    wanted = [str(c).zfill(6) for c in codes if str(c).zfill(6).isdigit()]
+    missing = [c for c in dict.fromkeys(wanted) if c not in cache]
+    if missing:
+        def _one(code: str) -> Tuple[str, dict]:
+            prev_close, points = fetch_auction_trend(code)
+            return code, classify_trajectory(points, prev_close)
+
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(missing))) as pool:
+            for code, res in pool.map(_one, missing):
+                cache[code] = res
+    return {c: cache[c] for c in wanted if c in cache}
+
+
+def tape_summary(results: Optional[Dict[str, dict]] = None) -> dict:
+    """候选池形态概况（供竞价页展示）。results 缺省时用当日缓存里已判过的票。"""
+    items: Dict[str, dict] = results if results is not None else dict(_CACHE.get("items") or {})  # type: ignore
     counts = {"accumulation": 0, "distribution": 0, "shakeout": 0, "divergence": 0,
               "neutral": 0, "insufficient": 0}
-    per_symbol: Dict[str, dict] = {}
-    for code, seq in samples.items():
-        res = classify_trajectory(seq, prev_close.get(code, 0.0))
+    for res in items.values():
         counts[res["pattern"]] = counts.get(res["pattern"], 0) + 1
-        per_symbol[code] = res
-    sample_points = max((len(seq) for seq in samples.values()), default=0)
+    resolved = len(items) - counts["insufficient"]
     return {
-        "date": _TAPE.get("date"),
-        "tracked": len(samples),
-        "sample_points": sample_points,
+        "date": _CACHE.get("date"),
+        "tracked": len(items),
+        "resolved": resolved,
         "pattern_counts": counts,
-        "per_symbol": per_symbol,
-        "available": bool(samples),
+        "per_symbol": items,
+        "available": resolved > 0,
     }

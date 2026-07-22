@@ -19,8 +19,44 @@ $log = Join-Path $root "runtime\ngrok\ngrok.log"
 # the repo - the file stays in the user profile.
 $config = "C:\Users\Administrator\AppData\Local\ngrok\ngrok.yml"
 
-# already up -> nothing to do
-if (Get-Process ngrok -ErrorAction SilentlyContinue) { exit 0 }
+# "process alive" is not the same as "tunnel up": a heartbeat timeout leaves the
+# agent running in a reconnect loop while visitors get ERR_NGROK_3200. Ask the
+# local inspector whether the tunnel is actually published.
+#
+# ngrok reconnects on its own within a minute or so, and killing it mid-recovery
+# only makes the outage longer - so a single bad probe just leaves a stamp, and
+# only a tunnel that has been down across $graceMinutes gets force-restarted.
+# That still covers the case ngrok cannot fix itself (wedged reconnect loop).
+$stamp = Join-Path $root "runtime\ngrok\unhealthy.stamp"
+$graceMinutes = 3
+
+$proc = Get-Process ngrok -ErrorAction SilentlyContinue
+if ($proc) {
+    $healthy = $false
+    try {
+        $api = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels" -TimeoutSec 5
+        $healthy = @($api.tunnels).Count -gt 0
+    } catch { $healthy = $false }
+
+    if ($healthy) {
+        Remove-Item $stamp -ErrorAction SilentlyContinue
+        exit 0
+    }
+
+    if (-not (Test-Path $stamp)) {
+        (Get-Date -Format o) | Out-File -FilePath $stamp -Encoding utf8
+        "[$(Get-Date -Format o)] tunnel down, letting ngrok reconnect" | Out-File -FilePath $log -Append -Encoding utf8
+        exit 0
+    }
+
+    $since = Get-Date (Get-Content $stamp -First 1)
+    if (((Get-Date) - $since).TotalMinutes -lt $graceMinutes) { exit 0 }
+
+    "[$(Get-Date -Format o)] tunnel still down after $graceMinutes min; restarting ngrok" | Out-File -FilePath $log -Append -Encoding utf8
+    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+}
+Remove-Item $stamp -ErrorAction SilentlyContinue
 
 # don't publish a dead backend (visitors would get 502)
 $backend = Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue

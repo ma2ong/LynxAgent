@@ -164,6 +164,35 @@ def market_context() -> Dict[str, object]:
             state, advice = "偏冷", "市场普跌，短线信号胜率系统性下降，建议降低仓位或观望。"
         else:
             state, advice = "中性", "市场分化，优先选强主线，控制单票仓位。"
+
+        # 最新一日脉冲：只看近5日趋势会掩盖单日反弹（急跌数日后昨日翻红），
+        # 单独给出单日口径，让「近段偏冷 vs 昨日反弹」这种背离可见，不再只报一个滞后的趋势标签。
+        d_median, d_breadth, day_label = 0.0, 0.0, "—"
+        try:
+            day = get_local_store().recent_returns(window=1)
+            dvals = sorted(day.values())
+            if dvals:
+                d_median = dvals[len(dvals) // 2]
+                d_breadth = sum(1 for v in dvals if v > 0) / len(dvals)
+                if d_median >= 1.0 and d_breadth >= 0.55:
+                    day_label = "普涨"
+                elif d_median <= -1.0 or d_breadth <= 0.40:
+                    day_label = "普跌"
+                elif d_breadth >= 0.50:
+                    day_label = "企稳"
+                else:
+                    day_label = "分化"
+        except Exception:
+            pass
+
+        # 趋势偏冷但最新一日转强 → 明确标注反弹并调整建议（反弹≠反转，防追高）。
+        rebound = state == "偏冷" and (d_median > 0 or d_breadth >= 0.50)
+        if rebound:
+            day_label = "反弹"
+            advice = (f"近段急跌后昨日企稳反弹（{d_breadth * 100:.0f}% 上涨、中位"
+                      f"{'+' if d_median >= 0 else ''}{d_median:.1f}%），但近5日仍偏冷——"
+                      "反弹持续性待确认，轻仓参与强势方向、不追高。")
+
         # as_of=最后一根真实日线（amount>0），与中位数计算口径一致；本口径是「近段结构趋势」，
         # 盘中实时情绪看市场雷达，两者可能背离（如普跌后盘中反弹），标注截止日避免互相矛盾。
         as_of = ""
@@ -175,6 +204,13 @@ def market_context() -> Dict[str, object]:
             "state": state,
             "median_5d_pct": round(median, 2),
             "breadth_up": round(breadth, 4),
+            # 最新一日脉冲（单日口径），供前端与「偏冷」并列展示，避免单日反弹被趋势标签盖住
+            "latest_day": {
+                "median_pct": round(d_median, 2),
+                "breadth_up": round(d_breadth, 4),
+                "label": day_label,
+                "rebound": rebound,
+            },
             "as_of": as_of,
             "advice": advice,
         }

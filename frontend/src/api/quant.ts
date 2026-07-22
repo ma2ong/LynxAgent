@@ -527,6 +527,12 @@ export interface MarketContext {
   state?: '偏暖' | '中性' | '偏冷'
   median_5d_pct?: number
   breadth_up?: number
+  latest_day?: {
+    median_pct?: number
+    breadth_up?: number
+    label?: string
+    rebound?: boolean
+  }
   as_of?: string
   advice?: string
 }

@@ -5,9 +5,15 @@
         <span class="mb-tag">大盘环境</span>
         <b class="mb-state">{{ marketCtx.state }}</b>
         <span class="mb-metrics">
-          近5日{{ marketCtx.as_of ? `(截至 ${marketCtx.as_of})` : '' }}全市场中位
+          近5日趋势{{ marketCtx.as_of ? `(截至 ${marketCtx.as_of})` : '' }}中位
           <b>{{ (marketCtx.median_5d_pct ?? 0) > 0 ? '+' : '' }}{{ marketCtx.median_5d_pct }}%</b>
           · 上涨占比 <b>{{ Math.round((marketCtx.breadth_up || 0) * 100) }}%</b>
+        </span>
+        <span v-if="marketCtx.latest_day && marketCtx.latest_day.label && marketCtx.latest_day.label !== '—'"
+          class="mb-day" :class="{ rebound: marketCtx.latest_day.rebound }">
+          昨日<b>{{ marketCtx.latest_day.label }}</b>
+          · 中位 {{ (marketCtx.latest_day.median_pct ?? 0) > 0 ? '+' : '' }}{{ marketCtx.latest_day.median_pct }}%
+          · 上涨 {{ Math.round((marketCtx.latest_day.breadth_up || 0) * 100) }}%
         </span>
       </div>
       <div class="mb-advice">{{ marketCtx.advice }}</div>
@@ -1343,6 +1349,19 @@ const openChart = async (row: any) => {
     font-size: 13px;
     color: var(--el-text-color-regular);
     b { font-size: 15px; font-weight: 700; }
+  }
+  .mb-day {
+    font-size: 13px;
+    color: var(--el-text-color-secondary);
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--el-fill-color);
+    b { font-weight: 700; }
+    &.rebound {
+      color: #ef232a;
+      background: rgba(239, 35, 42, .1);
+      b { color: #ef232a; }
+    }
   }
   .mb-advice {
     margin-top: 6px;

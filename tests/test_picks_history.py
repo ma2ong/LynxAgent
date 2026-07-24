@@ -48,6 +48,25 @@ def test_record_picks_keeps_first_snapshot_of_day(store):
     assert row == (90.0, 10.0)
 
 
+def test_record_picks_replaces_latest_batch_without_changing_history(store):
+    store.record_picks("smart", [
+        {"symbol": "600001", "name": "旧一", "score": 90, "close": 10.0},
+        {"symbol": "600002", "name": "旧二", "score": 80, "close": 9.0},
+    ])
+    store.record_picks("smart", [
+        {"symbol": "600003", "name": "新一", "score": 88, "close": 12.0},
+    ])
+
+    history = store._conn().execute(
+        "SELECT symbol FROM picks_history WHERE pool='smart' ORDER BY symbol"
+    ).fetchall()
+    latest = store.load_latest_picks("smart")
+
+    assert history == [("600001",), ("600002",), ("600003",)]
+    assert [(item["symbol"], item["rank"]) for item in latest] == [("600003", 1)]
+    assert latest[0]["batch_at"]
+
+
 def test_record_picks_skips_invalid_symbols(store):
     assert store.record_picks("smart", [{"symbol": "", "score": 1}, {"symbol": "AAPL", "score": 1}]) == 0
 
@@ -183,6 +202,7 @@ def test_evaluate_picks_cache_invalidates_on_new_picks(store):
     after = store.evaluate_picks(days=30)
     assert after["total_picks"] == 2
     assert {i["symbol"] for i in after["items"]} == {"600001", "600002"}
+    assert [item["symbol"] for item in after["latest"]] == ["600002"]
 
 
 def test_signal_stats_cached_within_day(store, monkeypatch):

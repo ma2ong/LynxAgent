@@ -21,6 +21,8 @@ export default defineConfig({
     },
   },
   build: {
+    // 保留旧哈希资源，让部署前已打开的页面仍能完成懒加载；新 index.html 只引用最新资源。
+    emptyOutDir: false,
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {

@@ -21,6 +21,8 @@ def test_gauge_crash_market_is_dangerous():
     assert g["level"] in ("危险", "极危")
     assert g["score"] >= 55
     assert "停止" in g["action"] and "买入" in g["action"]
+    assert "单一" in g["action"] and "多维" in g["action"]
+    assert "无条件了结" not in g["action"]
     # 破位广度必须作为一项独立信号出现
     assert any(s["key"] == "breakdown" for s in g["signals"])
 

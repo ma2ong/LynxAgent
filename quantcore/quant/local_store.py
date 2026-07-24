@@ -50,6 +50,19 @@ CREATE TABLE IF NOT EXISTS picks_history (
     patterns TEXT,
     PRIMARY KEY (pick_date, pool, symbol)
 );
+CREATE TABLE IF NOT EXISTS latest_picks (
+    pool TEXT,
+    symbol TEXT,
+    pick_date TEXT,
+    batch_at TEXT,
+    name TEXT,
+    score REAL,
+    close REAL,
+    rank INTEGER,
+    patterns TEXT,
+    PRIMARY KEY (pool, symbol)
+);
+CREATE INDEX IF NOT EXISTS idx_latest_picks_pool_rank ON latest_picks(pool, rank);
 CREATE TABLE IF NOT EXISTS daily_reports (
     date TEXT,
     kind TEXT,
@@ -553,11 +566,12 @@ class LocalQuantStore:
 
     # ---- 选股留痕与胜率复盘 ----
     def record_picks(self, pool: str, items: List[Dict[str, object]]) -> int:
-        """记录一次选股结果。当日同池同股只保留首次快照（INSERT OR IGNORE），供 T+N 复盘。"""
+        """历史表保留当日首次快照；latest_picks 原子替换为本次完整名单。"""
         if not items:
             return 0
-        from datetime import date as _date
+        from datetime import date as _date, datetime as _datetime
         today = _date.today().strftime("%Y-%m-%d")
+        batch_at = _datetime.now().astimezone().isoformat(timespec="seconds")
         rows = []
         for rank, it in enumerate(items, start=1):
             raw = str(it.get("symbol") or it.get("code") or "").strip()
@@ -572,11 +586,42 @@ class LocalQuantStore:
         if not rows:
             return 0
         conn = self._conn()
-        conn.executemany(
-            "INSERT OR IGNORE INTO picks_history(pick_date,pool,symbol,name,score,close,rank,patterns) "
-            "VALUES(?,?,?,?,?,?,?,?)", rows)
-        conn.commit()
+        latest_rows = [
+            (pool, symbol, pick_date, batch_at, name, score, close, rank, patterns)
+            for pick_date, _, symbol, name, score, close, rank, patterns in rows
+        ]
+        with conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO picks_history(pick_date,pool,symbol,name,score,close,rank,patterns) "
+                "VALUES(?,?,?,?,?,?,?,?)", rows)
+            conn.execute("DELETE FROM latest_picks WHERE pool = ?", (pool,))
+            conn.executemany(
+                "INSERT INTO latest_picks(pool,symbol,pick_date,batch_at,name,score,close,rank,patterns) "
+                "VALUES(?,?,?,?,?,?,?,?,?)", latest_rows)
         return len(rows)
+
+    def load_latest_picks(self, pool: Optional[str] = None) -> List[Dict[str, object]]:
+        sql = (
+            "SELECT pick_date,pool,symbol,name,score,close,rank,patterns,batch_at "
+            "FROM latest_picks"
+        )
+        params: List[object] = []
+        if pool:
+            sql += " WHERE pool = ?"
+            params.append(pool)
+        sql += " ORDER BY pool, rank, symbol"
+        rows = self._conn().execute(sql, params).fetchall()
+        return [{
+            "pick_date": str(row[0]),
+            "pool": str(row[1]),
+            "symbol": str(row[2]),
+            "name": str(row[3] or ""),
+            "score": _f(row[4]),
+            "close": _f(row[5]),
+            "rank": int(row[6] or 0),
+            "patterns": str(row[7] or ""),
+            "batch_at": str(row[8] or ""),
+        } for row in rows]
 
     def evaluate_picks(self, days: int = 30, pool: Optional[str] = None,
                        refresh: bool = False) -> Dict[str, object]:
@@ -605,7 +650,9 @@ class LocalQuantStore:
                 (cache_key, stamp)).fetchone()
             if row:
                 try:
-                    return _json.loads(row[0])
+                    cached = _json.loads(row[0])
+                    cached["latest"] = self.load_latest_picks(pool)
+                    return cached
                 except Exception:
                     pass
         sql = ("SELECT pick_date,pool,symbol,name,score,close,rank,patterns FROM picks_history "
@@ -723,6 +770,7 @@ class LocalQuantStore:
             (cache_key, stamp, _json.dumps(out, ensure_ascii=False),
              _dt.now().isoformat(timespec="seconds")))
         conn.commit()
+        out["latest"] = self.load_latest_picks(pool)
         return out
 
     def signal_stats(self, pool: str, days: int = 90, refresh: bool = False) -> Dict[str, object]:

@@ -508,8 +508,12 @@ export const quantApi = {
   serenityDeep: async (payload: { theme: string; event?: string; beneficiaries?: any[] }) =>
     unwrap<any>(await ApiClient.post('/api/quant/serenity/deep', payload, { timeout: 180000 })),
 
-  picksStats: async (days = 30, pool = '') =>
-    unwrap<PicksStatsResult>(await ApiClient.get('/api/quant/picks/stats', { days, pool, _ts: nonce() }, { timeout: 120000 })),
+  picksStats: async (days = 30, pool = '', includeItems = true) =>
+    unwrap<PicksStatsResult>(await ApiClient.get(
+      '/api/quant/picks/stats',
+      { days, pool, include_items: includeItems, _ts: nonce() },
+      { timeout: 120000 },
+    )),
 
   marketContext: async () =>
     unwrap<MarketContext>(await ApiClient.get('/api/quant/market-context', { _ts: nonce() }, { timeout: 30000 })),
@@ -651,12 +655,25 @@ export interface PicksStatsItem {
   excess_t5?: number | null
 }
 
+export interface LatestPickItem {
+  pick_date: string
+  batch_at: string
+  pool: string
+  symbol: string
+  name: string
+  score: number
+  close: number
+  rank: number
+  patterns: string
+}
+
 export interface PicksStatsResult {
   days: number
   since: string
   total_picks: number
   pools: PicksPoolStat[]
   items: PicksStatsItem[]
+  latest: LatestPickItem[]
 }
 
 export interface ReplayStatus {

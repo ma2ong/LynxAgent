@@ -1,50 +1,57 @@
 <template>
   <div class="dash">
-    <!-- 大盘走向 + 攻防提示 -->
-    <section class="hero" :class="`v-${verdictKey}`">
-      <div class="hero-left">
-        <div class="verdict">
-          <span class="verdict-word">{{ verdict.word }}</span>
-          <span class="verdict-sub">{{ verdict.sub }}</span>
+    <!-- 盘面环境：从智能选股页迁移到首页，盘中自动刷新 -->
+    <section class="market-overview" :class="`ctx-${ctxTone}`">
+      <div v-if="risk" class="risk-verdict" :class="`risk-verdict-${riskKey}`">
+        <div class="risk-verdict-title">
+          <b>{{ verdict.word }}</b>
+          <span>{{ verdict.sub }}</span>
         </div>
-        <div class="hero-advice">
-          <span>{{ risk?.action || marketCtx?.advice || '正在评估大盘环境…' }}</span>
+        <div class="risk-verdict-action">{{ risk.action }}</div>
+      </div>
+      <div class="market-head">
+        <div class="mb-row">
+          <span class="mb-tag">赚钱效应</span>
+          <b class="mb-state">{{ marketCtx?.state || '评估中' }}</b>
+          <span v-if="marketCtx?.temp != null" class="mb-temp">温度 {{ marketCtx.temp }}</span>
+          <span v-if="marketCtx" class="mb-metrics">
+            <span class="mb-when" :class="{ live: marketCtx.intraday }">{{ asOfText }}</span>
+            个股中位 <b>{{ pct(marketCtx.latest_day?.median_pct) }}</b>
+            · 上涨家数占比 <b>{{ Math.round((marketCtx.latest_day?.breadth_up || 0) * 100) }}%</b>
+          </span>
+          <span v-if="marketCtx?.latest_day?.label && marketCtx.latest_day.label !== '—'"
+            class="mb-day" :class="{ rebound: marketCtx.latest_day.rebound }">
+            {{ marketCtx.latest_day.label }}
+          </span>
         </div>
-        <div v-if="marketCtx?.divergence" class="hero-diverge">⚠ {{ marketCtx.divergence }}</div>
-        <div class="hero-foot">
-          {{ asOfText }}
+        <div class="market-actions">
+          <span v-if="risk" class="risk-pill" :class="riskToneClass">
+            风险 {{ risk.level }} {{ risk.score }}
+          </span>
           <el-button link type="primary" size="small" :loading="heroLoading" @click="loadHero()">刷新</el-button>
-          · 规则化提示，不构成投资建议
         </div>
       </div>
 
-      <div class="hero-right">
-        <div class="gauge-tiles">
-          <div class="tile">
-            <span class="tile-label">赚钱效应</span>
-            <b class="tile-val" :class="ctxToneClass">{{ marketCtx?.state || '—' }}</b>
-            <div class="tile-bar" v-if="marketCtx?.temp != null">
-              <i :style="{ width: Math.min(100, marketCtx.temp) + '%' }" :class="tempBarClass" />
-            </div>
-            <small v-if="marketCtx?.temp != null">温度 {{ marketCtx.temp }}</small>
-          </div>
-          <div class="tile">
-            <span class="tile-label">大盘风险</span>
-            <b class="tile-val" :class="riskToneClass">{{ risk?.level || '—' }}</b>
-            <div class="tile-bar" v-if="risk">
-              <i :style="{ width: Math.min(100, risk.score) + '%' }" :class="riskToneClass" />
-            </div>
-            <small v-if="risk">风险分 {{ risk.score }}</small>
-          </div>
-        </div>
-        <div class="idx-tiles">
-          <div class="idx" v-for="idx in indices" :key="idx.name">
-            <span class="idx-name">{{ idx.name }}</span>
-            <b :class="idx.last_pct >= 0 ? 'up' : 'down'">{{ pct(idx.last_pct) }}</b>
-          </div>
-          <div v-if="!indices.length" class="idx idx-empty">指数加载中…</div>
-        </div>
+      <div v-if="marketCtx?.index?.items?.length" class="mb-row mb-index">
+        <span class="mb-tag">大盘指数</span>
+        <span v-for="item in marketCtx.index.items" :key="item.code" class="mb-idx"
+          :class="item.last_pct >= 0 ? 'up' : 'down'">
+          {{ item.name }} <b>{{ pct(item.last_pct) }}</b>
+        </span>
+        <span class="mb-idx-note">
+          近5日 {{ marketCtx.index.items.map((item) => pct(item.window_pct)).join(' / ') }}
+        </span>
       </div>
+      <div v-if="marketCtx?.divergence" class="mb-diverge">⚠ {{ marketCtx.divergence }}</div>
+      <div class="mb-advice">{{ marketCtx?.advice || '正在评估大盘环境…' }}</div>
+      <div v-if="marketCtx?.daily?.length" class="mb-daily">
+        近5日逐日：
+        <span v-for="day in marketCtx.daily" :key="day.date" :class="day.median_pct >= 0 ? 'up' : 'down'">
+          {{ day.date.slice(5) }} {{ pct(day.median_pct) }}/{{ Math.round(day.breadth_up * 100) }}%
+        </span>
+      </div>
+      <div v-if="coldEvidence" class="mb-evidence">{{ coldEvidence }}</div>
+      <div class="market-foot">每 60 秒自动刷新 · 规则化提示，不构成投资建议</div>
     </section>
 
     <!-- 模块预览 -->
@@ -227,7 +234,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onMounted, ref } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ApiClient } from '@/api/request'
 import { quantApi, heatmapApi, type MarketContext, type RiskAlert, type RiskScan } from '@/api/quant'
@@ -244,19 +251,17 @@ const risk = ref<RiskAlert | null>(null)
 const riskScan = ref<RiskScan | null>(null)
 const heroLoading = ref(false)
 
-const indices = computed(() => (marketCtx.value?.index?.items || []).slice(0, 3))
 const asOfText = computed(() => {
   const c = marketCtx.value
   if (!c?.as_of) return ''
-  return c.intraday ? `${c.as_of} 盘中实时` : `截至 ${c.as_of} 收盘`
+  return c.intraday ? `${c.as_of} ${c.as_of_time || ''} 实时` : `截至 ${c.as_of} 收盘`
 })
-const ctxToneClass = computed(() =>
-  marketCtx.value?.state === '偏暖' ? 'up' : marketCtx.value?.state === '偏冷' ? 'down' : '')
-const tempBarClass = computed(() => {
-  const t = marketCtx.value?.temp ?? 50
-  return t >= 60 ? 'up-bg' : t <= 40 ? 'down-bg' : 'mid-bg'
+const ctxTone = computed(() => {
+  const state = marketCtx.value?.state
+  return state === '偏暖' ? 'warm' : state === '偏冷' ? 'cold' : state ? 'flat' : 'loading'
 })
 const riskKey = computed(() => {
+  if (!risk.value) return 'loading'
   const l = risk.value?.level
   return l === '极危' ? 'extreme' : l === '危险' ? 'danger' : l === '警惕' ? 'warn' : 'safe'
 })
@@ -271,6 +276,31 @@ const verdict = computed(() => {
   if (l === '安全') return { word: '可以进攻', sub: '赚钱效应尚可，按纪律选股' }
   return { word: '评估中', sub: '正在加载大盘环境' }
 })
+const coldEvidence = ref('')
+const loadColdEvidence = async () => {
+  if (marketCtx.value?.state !== '偏冷') {
+    coldEvidence.value = ''
+    return
+  }
+  if (coldEvidence.value) return
+  try {
+    const replay = await quantApi.replayResults()
+    const parts: string[] = []
+    let bestCold: { label: string; avg: number } | null = null
+    for (const pool of replay?.pools || []) {
+      const cold = (pool.regimes || []).find((row) => row.regime === '偏冷')
+      if (!cold) continue
+      const label = pool.pool === 'pattern' ? '形态池' : pool.pool === 'smart' ? '智能池' : pool.pool
+      parts.push(`${label} ${cold.avg_excess > 0 ? '+' : ''}${cold.avg_excess}pp（中位 ${cold.median_excess}pp，${cold.picks} 样本）`)
+      if (!bestCold || cold.avg_excess > bestCold.avg) bestCold = { label, avg: cold.avg_excess }
+    }
+    if (!parts.length) return
+    const advice = bestCold && bestCold.avg >= 0.5
+      ? `——弱市里${bestCold.label}历史上仍有正超额，但仓位仍应克制；其余池贴零或为负，优先只跟${bestCold.label}。`
+      : '——各池弱市均无有效超额，建议轻仓或观望。'
+    coldEvidence.value = `历史回放偏冷期 T+5 超额：${parts.join('；')}${advice}`
+  } catch { /* 无回放结果时不展示 */ }
+}
 
 // —— 卡片数据 ——
 const smartPicks = ref<{ symbol: string; name: string; score: number }[]>([])
@@ -303,6 +333,7 @@ const loadRecent = () => {
 
 // Hero 单独可重试：冷启动首屏请求被挤掉时不至于永久留在「评估中」
 const loadHero = async (retries = 2) => {
+  if (heroLoading.value) return
   heroLoading.value = true
   let ok = true
   await Promise.all([
@@ -310,102 +341,161 @@ const loadHero = async (retries = 2) => {
     quantApi.riskAlert().then((r) => { if (r) risk.value = r; else ok = false }).catch(() => { ok = false }),
   ])
   heroLoading.value = false
+  if (ok) {
+    heroLoadedAt = Date.now()
+    loadColdEvidence()
+  }
   if (!ok && retries > 0) setTimeout(() => loadHero(retries - 1), 1800)
 }
 
-const loadCards = () => {
-  quantApi.riskScan(30).then((s) => {
+const loadCards = async (retries = 1) => {
+  let failed = false
+  await Promise.all([
+    quantApi.riskScan(30).then((s) => {
     riskScan.value = s || null
     topSell.value = (s?.items || []).filter((i) => i.severity >= 2)
       .slice(0, 3).map((i) => ({ symbol: i.symbol, name: i.name, signal: i.signal }))
-  }).catch(() => {})
-  quantApi.picksStats(30).then((res) => {
-    const stats = (res?.pools || []).filter((p) => ['smart', 'auction'].includes(p.pool))
-    poolStats.value = stats.map((p) => ({
-      label: POOL_LABEL[p.pool] || p.pool,
-      t1: p.horizons?.t1?.win_rate == null ? null : Math.round(p.horizons.t1.win_rate * 100),
-      t3: p.horizons?.t3?.win_rate == null ? null : Math.round(p.horizons.t3.win_rate * 100),
-      t5: p.horizons?.t5?.win_rate == null ? null : Math.round(p.horizons.t5.win_rate * 100),
-    }))
-    smartWin.value = poolStats.value.find((p) => p.label === '一键智选')?.t5 ?? null
-    const smartItems = (res?.items || []).filter((i) => i.pool === 'smart')
-    const latest = smartItems[0]?.pick_date
-    smartDate.value = latest || ''
-    smartPicks.value = smartItems.filter((i) => i.pick_date === latest)
-      .sort((a, b) => a.rank - b.rank).slice(0, 5)
-      .map((i) => ({ symbol: i.symbol, name: i.name, score: Math.round(i.score) }))
-  }).catch(() => {})
-  heatmapApi.fetch('industry').then((d) => {
-    const items = (d?.items || [])
-    const hot = [...items].sort((a, b) => b.pct - a.pct).slice(0, 3)
-    const cold = [...items].sort((a, b) => a.pct - b.pct).slice(0, 2)
-    hotIndustries.value = [...hot, ...cold].map((i) => ({ name: i.name, pct: i.pct }))
-  }).catch(() => {})
-  favoritesApi.list().then((raw: any) => {
-    const list = (raw?.data ?? raw) || []
-    favs.value = list.map((f: any) => ({
-      symbol: f.symbol || f.stock_code, name: f.stock_name, pct: f.change_percent ?? null,
-    }))
-  }).catch(() => {})
-  ApiClient.get<any>('/api/lite/call-auction', { _ts: Date.now() }, { timeout: 30000 }).then((raw) => {
-    const d = raw?.data ?? raw
-    const pc = d?.auction_tape?.pattern_counts
-    if (d) auction.value = {
-      pc: { accumulation: pc?.accumulation || 0, shakeout: pc?.shakeout || 0, distribution: pc?.distribution || 0 },
-      top: (d.buy_candidates || []).slice(0, 3),
-    }
-  }).catch(() => {})
-  ApiClient.get<any>('/api/lite/limit-up', {}, { timeout: 45000 }).then((raw) => {
-    const d = raw?.data ?? raw
-    if (d?.total_limit_up != null) limitUp.value = {
-      up: d.total_limit_up, down: d.total_limit_down, maxBoards: d.max_boards,
-      causes: (d.causes || []).slice(0, 3).map((c: string) => ({ name: c, n: d.cause_total?.[c] || 0 })),
-    }
-  }).catch(() => {})
+    }).catch(() => { failed = true }),
+    quantApi.picksStats(30, '', false).then((res) => {
+      const stats = (res?.pools || []).filter((p) => ['smart', 'auction'].includes(p.pool))
+      poolStats.value = stats.map((p) => ({
+        label: POOL_LABEL[p.pool] || p.pool,
+        t1: p.horizons?.t1?.win_rate == null ? null : Math.round(p.horizons.t1.win_rate * 100),
+        t3: p.horizons?.t3?.win_rate == null ? null : Math.round(p.horizons.t3.win_rate * 100),
+        t5: p.horizons?.t5?.win_rate == null ? null : Math.round(p.horizons.t5.win_rate * 100),
+      }))
+      smartWin.value = poolStats.value.find((p) => p.label === '一键智选')?.t5 ?? null
+      const smartItems = (res?.latest || []).filter((i) => i.pool === 'smart')
+      smartDate.value = (smartItems[0]?.batch_at || smartItems[0]?.pick_date || '')
+        .replace('T', ' ').slice(0, 16)
+      smartPicks.value = smartItems
+        .sort((a, b) => a.rank - b.rank).slice(0, 5)
+        .map((i) => ({ symbol: i.symbol, name: i.name, score: Math.round(i.score) }))
+    }).catch(() => { failed = true }),
+    heatmapApi.fetch('industry').then((d) => {
+      const items = (d?.items || [])
+      const hot = [...items].sort((a, b) => b.pct - a.pct).slice(0, 3)
+      const cold = [...items].sort((a, b) => a.pct - b.pct).slice(0, 2)
+      hotIndustries.value = [...hot, ...cold].map((i) => ({ name: i.name, pct: i.pct }))
+    }).catch(() => { failed = true }),
+    favoritesApi.list().then((raw: any) => {
+      const list = (raw?.data ?? raw) || []
+      favs.value = list.map((f: any) => ({
+        symbol: f.symbol || f.stock_code, name: f.stock_name, pct: f.change_percent ?? null,
+      }))
+    }).catch(() => { failed = true }),
+    ApiClient.get<any>('/api/lite/call-auction', { _ts: Date.now() }, { timeout: 30000 }).then((raw) => {
+      const d = raw?.data ?? raw
+      const pc = d?.auction_tape?.pattern_counts
+      if (d) auction.value = {
+        pc: { accumulation: pc?.accumulation || 0, shakeout: pc?.shakeout || 0, distribution: pc?.distribution || 0 },
+        top: (d.buy_candidates || []).slice(0, 3),
+      }
+    }).catch(() => { failed = true }),
+    ApiClient.get<any>('/api/lite/limit-up', {}, { timeout: 45000 }).then((raw) => {
+      const d = raw?.data ?? raw
+      if (d?.total_limit_up != null) limitUp.value = {
+        up: d.total_limit_up, down: d.total_limit_down, maxBoards: d.max_boards,
+        causes: (d.causes || []).slice(0, 3).map((c: string) => ({ name: c, n: d.cause_total?.[c] || 0 })),
+      }
+    }).catch(() => { failed = true }),
+  ])
+  cardsLoadedAt = Date.now()
+  if (failed && retries > 0) setTimeout(() => loadCards(retries - 1), 1800)
 }
 
 const loadAll = () => { loadRecent(); loadHero(); loadCards() }
-onMounted(loadAll)
-// keep-alive 返回时若 hero 仍空（冷启动失败），补拉一次
-onActivated(() => { if (!marketCtx.value || !risk.value) loadHero() })
+let heroLoadedAt = 0
+let cardsLoadedAt = 0
+let firstActivation = true
+let heroTimer: number | undefined
+const startHeroPolling = () => {
+  if (heroTimer) window.clearInterval(heroTimer)
+  heroTimer = window.setInterval(() => loadHero(1), 60_000)
+}
+const stopHeroPolling = () => {
+  if (heroTimer) window.clearInterval(heroTimer)
+  heroTimer = undefined
+}
+onMounted(() => {
+  loadAll()
+  startHeroPolling()
+})
+onActivated(() => {
+  if (firstActivation) {
+    firstActivation = false
+    return
+  }
+  startHeroPolling()
+  loadRecent()
+  const now = Date.now()
+  if (!marketCtx.value || !risk.value || now - heroLoadedAt >= 60_000) loadHero(1)
+  if (now - cardsLoadedAt >= 180_000) loadCards()
+})
+onDeactivated(stopHeroPolling)
+onUnmounted(stopHeroPolling)
 </script>
 
 <style scoped lang="scss">
 .dash { display: flex; flex-direction: column; gap: 18px; }
 
-/* ---------- Hero ---------- */
-.hero { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space-between;
-  border: 1px solid var(--el-border-color-light); border-left: 6px solid var(--el-border-color);
-  border-radius: 16px; padding: 22px 26px; background: var(--el-fill-color-extra-light); }
-.hero-left { flex: 1 1 340px; min-width: 300px; }
-.verdict { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
-.verdict-word { font-size: 38px; font-weight: 800; line-height: 1.05; letter-spacing: 1px; }
-.verdict-sub { font-size: 14px; color: var(--el-text-color-secondary); }
-.hero-advice { margin-top: 12px; font-size: 15px; font-weight: 600; line-height: 1.6; }
-.hero-diverge { margin-top: 6px; font-size: 13px; font-weight: 600; color: #d46b08; }
-.hero-foot { margin-top: 10px; font-size: 12px; color: var(--el-text-color-placeholder);
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* ---------- Market overview ---------- */
+.market-overview { padding: 16px 20px; border: 1px solid var(--el-border-color-light);
+  border-left: 6px solid var(--el-border-color); border-radius: 14px;
+  background: var(--el-fill-color-extra-light); }
+.risk-verdict { display: flex; align-items: center; gap: 18px; margin-bottom: 12px; padding: 10px 14px;
+  border-left: 4px solid var(--el-border-color); border-radius: 9px; background: rgba(255, 255, 255, .72); }
+.risk-verdict-title { display: flex; align-items: baseline; gap: 10px; min-width: 280px;
+  b { font-size: 28px; font-weight: 800; line-height: 1.1; white-space: nowrap; }
+  span { color: var(--el-text-color-secondary); font-size: 13px; white-space: nowrap; } }
+.risk-verdict-action { flex: 1; font-size: 13px; font-weight: 600; line-height: 1.6; }
+.risk-verdict-safe { border-left-color: #0e9f5a; .risk-verdict-title b { color: #0e9f5a; } }
+.risk-verdict-warn { border-left-color: #d48806; .risk-verdict-title b { color: #d48806; } }
+.risk-verdict-danger { border-left-color: #ef232a; .risk-verdict-title b { color: #ef232a; } }
+.risk-verdict-extreme { border-left-color: #a8071a; .risk-verdict-title b { color: #a8071a; } }
+.market-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.market-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.mb-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.mb-tag { font-size: 12px; font-weight: 600; color: #fff; background: var(--el-text-color-secondary);
+  padding: 2px 8px; border-radius: 6px; }
+.mb-state { font-size: 22px; font-weight: 800; }
+.mb-temp { font-size: 12px; color: var(--el-text-color-secondary); padding: 1px 6px;
+  border: 1px solid var(--el-border-color); border-radius: 4px; }
+.mb-metrics { font-size: 13px; color: var(--el-text-color-regular);
+  b { font-size: 15px; font-weight: 700; } }
+.mb-when { font-weight: 600; &.live { color: #ef232a; } }
+.mb-day { font-size: 13px; color: var(--el-text-color-secondary); padding: 2px 8px;
+  border-radius: 4px; background: var(--el-fill-color);
+  &.rebound { color: #ef232a; background: rgba(239, 35, 42, .1); } }
+.mb-index { margin-top: 7px; }
+.mb-idx { font-size: 13px; color: var(--el-text-color-regular); b { font-weight: 700; } }
+.mb-idx-note { font-size: 12px; color: var(--el-text-color-secondary); }
+.mb-diverge { margin-top: 7px; font-size: 13px; font-weight: 600; color: #d46b08; }
+.mb-advice { margin-top: 7px; font-size: 14px; font-weight: 600; color: var(--el-text-color-primary); }
+.mb-daily { margin-top: 5px; font-size: 12px; color: var(--el-text-color-secondary);
+  span { margin-right: 10px; } }
+.mb-evidence { margin-top: 5px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; }
+.risk-pill { color: #fff; font-size: 15px; font-weight: 800; padding: 4px 11px; border-radius: 12px; }
+.market-foot { margin-top: 7px; font-size: 11px; color: var(--el-text-color-placeholder); text-align: right; }
+.ctx-warm { border-color: #ffb3a7; border-left-color: #ef232a; background: #fff1f0;
+  .mb-tag { background: #ef232a; } .mb-state, .mb-metrics b { color: #ef232a; } }
+.ctx-cold { border-color: #a7d4b4; border-left-color: #0e9f5a; background: #f0fff4;
+  .mb-tag { background: #0e9f5a; } .mb-state, .mb-metrics b { color: #0e9f5a; } }
+.ctx-flat { border-left-color: #d48806; background: #fffdf3; }
+.ctx-loading { border-left-color: var(--el-border-color); }
+.mb-idx.up b, .mb-daily .up { color: #ef232a; }
+.mb-idx.down b, .mb-daily .down { color: #0e9f5a; }
+.risk-pill.rk-safe { color: #fff; background: rgba(14,159,90,.85); }
+.risk-pill.rk-warn { color: #fff; background: rgba(212,136,6,.85); }
+.risk-pill.rk-danger { color: #fff; background: rgba(239,35,42,.85); }
+.risk-pill.rk-extreme { color: #fff; background: rgba(168,7,26,.9); }
 
-.hero-right { display: flex; flex-direction: column; gap: 12px; min-width: 260px; }
-.gauge-tiles { display: flex; gap: 12px; }
-.tile { flex: 1; background: var(--el-bg-color); border: 1px solid var(--el-border-color-lighter);
-  border-radius: 12px; padding: 10px 14px; min-width: 120px; }
-.tile-label { font-size: 11px; color: var(--el-text-color-secondary); }
-.tile-val { display: block; font-size: 20px; font-weight: 800; margin: 2px 0 6px; }
-.tile-bar { height: 5px; border-radius: 3px; background: var(--el-fill-color); overflow: hidden;
-  i { display: block; height: 100%; } }
-.tile small { font-size: 11px; color: var(--el-text-color-placeholder); }
-.idx-tiles { display: flex; gap: 10px; flex-wrap: wrap; }
-.idx { flex: 1; min-width: 78px; background: var(--el-bg-color); border: 1px solid var(--el-border-color-lighter);
-  border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; }
-.idx-name { font-size: 11px; color: var(--el-text-color-secondary); }
-.idx b { font-size: 15px; font-weight: 700; }
-.idx-empty { color: var(--el-text-color-placeholder); font-size: 12px; justify-content: center; }
-
-.v-safe { border-left-color: #0e9f5a; background: #f2fdf6; .verdict-word { color: #0e9f5a; } }
-.v-warn { border-left-color: #d48806; background: #fffdf3; .verdict-word { color: #d48806; } }
-.v-danger { border-left-color: #ef232a; background: #fff6f5; .verdict-word { color: #ef232a; } }
-.v-extreme { border-left-color: #a8071a; background: #fff5f4; .verdict-word { color: #a8071a; } }
+@media (max-width: 760px) {
+  .risk-verdict { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .risk-verdict-title { min-width: 0; flex-wrap: wrap; }
+  .market-head { flex-direction: column; }
+  .market-actions { width: 100%; justify-content: space-between; }
+}
 
 /* ---------- Grid ---------- */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
@@ -470,6 +560,7 @@ onActivated(() => { if (!marketCtx.value || !risk.value) loadHero() })
 .up, .up2 { color: #ef232a; } .down, .down2 { color: #0e9f5a; } .warn { color: #d48806; } .muted { color: var(--el-text-color-placeholder); }
 .up-bg { background: #ef232a; } .down-bg { background: #0e9f5a; } .mid-bg { background: #d48806; }
 .rk-safe { color: #0e9f5a; } .pill.rk-safe, .tile-bar i.rk-safe { background: rgba(14,159,90,.85); }
+.rk-loading { color: var(--el-text-color-placeholder); }
 .rk-warn { color: #d48806; } .pill.rk-warn, .tile-bar i.rk-warn { background: rgba(212,136,6,.85); }
 .rk-danger { color: #ef232a; } .pill.rk-danger, .tile-bar i.rk-danger { background: rgba(239,35,42,.85); }
 .rk-extreme { color: #a8071a; } .pill.rk-extreme, .tile-bar i.rk-extreme { background: rgba(168,7,26,.9); }

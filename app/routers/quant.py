@@ -556,12 +556,16 @@ async def quant_risk_scan(limit: int = 200):
 
 
 @router.get("/picks/stats")
-async def quant_picks_stats(days: int = 30, pool: str = ""):
+async def quant_picks_stats(days: int = 30, pool: str = "", include_items: bool = True):
     """选股留痕复盘：各池 T+1/T+3/T+5 真实胜率与平均收益（数据来自每日扫描自动留痕）。"""
     try:
         from quantcore.quant.local_store import get_local_store
         safe_days = max(1, min(days, 120))
-        return await _run_light(get_local_store().evaluate_picks, safe_days, pool or None)
+        result = await _run_light(get_local_store().evaluate_picks, safe_days, pool or None)
+        if not include_items:
+            result = dict(result)
+            result["items"] = []
+        return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

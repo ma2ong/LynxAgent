@@ -1,44 +1,5 @@
 <template>
   <div class="quant-page">
-    <section v-if="marketCtx?.state" class="market-banner" :class="`ctx-${ctxTone}`">
-      <div class="mb-row">
-        <span class="mb-tag">赚钱效应</span>
-        <b class="mb-state">{{ marketCtx.state }}</b>
-        <span v-if="marketCtx.temp != null" class="mb-temp">温度 {{ marketCtx.temp }}</span>
-        <span class="mb-metrics">
-          <span class="mb-when" :class="{ live: marketCtx.intraday }">
-            {{ marketCtx.intraday
-              ? `${marketCtx.as_of} ${marketCtx.as_of_time || ''} 实时`
-              : `截至 ${marketCtx.as_of} 收盘` }}
-          </span>
-          个股中位
-          <b>{{ pct(marketCtx.latest_day?.median_pct) }}</b>
-          · 上涨家数占比 <b>{{ Math.round((marketCtx.latest_day?.breadth_up || 0) * 100) }}%</b>
-        </span>
-        <span v-if="marketCtx.latest_day?.label && marketCtx.latest_day.label !== '—'"
-          class="mb-day" :class="{ rebound: marketCtx.latest_day.rebound }">
-          {{ marketCtx.latest_day.label }}
-        </span>
-      </div>
-      <div v-if="marketCtx.index?.items?.length" class="mb-row mb-index">
-        <span class="mb-tag">大盘指数</span>
-        <span v-for="i in marketCtx.index.items" :key="i.code" class="mb-idx"
-          :class="i.last_pct >= 0 ? 'up' : 'down'">
-          {{ i.name }} <b>{{ pct(i.last_pct) }}</b>
-        </span>
-        <span class="mb-idx-note">近5日 {{ marketCtx.index.items.map((i) => pct(i.window_pct)).join(' / ') }}</span>
-      </div>
-      <div v-if="marketCtx.divergence" class="mb-diverge">⚠ {{ marketCtx.divergence }}</div>
-      <div class="mb-advice">{{ marketCtx.advice }}</div>
-      <div v-if="marketCtx.daily?.length" class="mb-daily">
-        近5日逐日：
-        <span v-for="d in marketCtx.daily" :key="d.date" :class="d.median_pct >= 0 ? 'up' : 'down'">
-          {{ d.date.slice(5) }} {{ pct(d.median_pct) }}/{{ Math.round(d.breadth_up * 100) }}%
-        </span>
-      </div>
-      <div v-if="coldEvidence" class="mb-evidence">{{ coldEvidence }}</div>
-    </section>
-
     <el-alert
       v-if="riskLocked && riskAlert"
       type="error"
@@ -103,14 +64,14 @@
           <section class="smart-hero compact-smart-hero">
             <div>
               <h2>一键智能推荐股票池</h2>
-              <p>结构因子评分为骨架（MACD、布林位置、趋势、动量、资金流等合成，与 12 个月回放同源、经 A/B 验证），已并入「形态智选」的低位拉升形态与「强势股」的相对强度确认——三者共振的标的自动上浮并打标，量化分仍为 proven 的结构分。实时行情用于排除停牌/ST 与展示现价。</p>
+              <p>结构因子评分为骨架（MACD、布林位置、趋势、动量、资金流等合成，与 12 个月回放同源、经 A/B 验证），再叠加盘中涨跌与成交活跃度重排；「形态智选」和「强势股」共振标的自动上浮并打标。每次手动生成都会跳过旧名单缓存，输出当下观察名单。</p>
             </div>
             <div class="smart-inline-settings">
               <label class="strategy-pick">
                 <span>选股模式</span>
                 <el-radio-group v-model="smartPoolForm.strategy" size="default">
-                  <el-radio-button label="balanced">全市场动量优选</el-radio-button>
-                  <el-radio-button label="swing_short">短线波段(1-3日)</el-radio-button>
+                  <el-radio-button value="balanced">全市场动量优选</el-radio-button>
+                  <el-radio-button value="swing_short">短线波段(1-3日)</el-radio-button>
                 </el-radio-group>
               </label>
               <label>
@@ -679,7 +640,6 @@ import {
   type QuantSmartPoolResult,
   type QuantSmartPoolTask,
   type QuantStockPoolResult,
-  type MarketContext,
   type RiskAlert
 } from '@/api/quant'
 import { panelApi, type PanelScore } from '@/api/quant'
@@ -954,40 +914,9 @@ const ensureDataBeforeScan = async () => {
   return true
 }
 
-const marketCtx = ref<MarketContext | null>(null)
 const riskAlert = ref<RiskAlert | null>(null)
 const riskLocked = computed(() => ['危险', '极危'].includes(riskAlert.value?.level || ''))
-const ctxTone = computed(() => {
-  const s = marketCtx.value?.state
-  return s === '偏暖' ? 'warm' : s === '偏冷' ? 'cold' : 'flat'
-})
 const pct = (v?: number | null) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`)
-
-// 偏冷时给回放证据：历史上偏冷期两池超额如何（接口有缓存，<0.1s）
-const coldEvidence = ref('')
-const loadColdEvidence = async () => {
-  if (marketCtx.value?.state !== '偏冷') return
-  try {
-    const rep = await quantApi.replayResults()
-    const parts: string[] = []
-    let bestCold: { label: string; avg: number } | null = null
-    for (const p of rep?.pools || []) {
-      const cold = (p.regimes || []).find((r) => r.regime === '偏冷')
-      if (cold) {
-        const label = p.pool === 'pattern' ? '形态池' : p.pool === 'smart' ? '智能池' : p.pool
-        parts.push(`${label} ${cold.avg_excess > 0 ? '+' : ''}${cold.avg_excess}pp（中位 ${cold.median_excess}pp，${cold.picks} 样本）`)
-        if (!bestCold || cold.avg_excess > bestCold.avg) bestCold = { label, avg: cold.avg_excess }
-      }
-    }
-    if (!parts.length) return
-    // 建议必须跟着数据走：v3 结构因子池在偏冷期仍有正超额，一律劝「停跟」就是在撒谎。
-    // 阈值 +0.5pp：低于此视为贴零（扣掉双边交易成本后不剩什么）。
-    const advice = bestCold && bestCold.avg >= 0.5
-      ? `——弱市里${bestCold.label}历史上仍有正超额，但仓位仍应克制；其余池贴零或为负，优先只跟${bestCold.label}。`
-      : '——各池弱市均无有效超额，建议轻仓或观望。'
-    coldEvidence.value = `历史回放偏冷期 T+5 超额：${parts.join('；')}${advice}`
-  } catch { /* 无回放结果时不展示 */ }
-}
 
 // 各池近30日 T+5 真实胜率（来自选股留痕），样本不足时提示积累中
 const poolStats = ref<Record<string, { win_rate: number | null; samples: number }>>({})
@@ -998,7 +927,6 @@ const poolWinText = (pool: string) => {
 }
 
 onMounted(async () => {
-  quantApi.marketContext().then((ctx) => { marketCtx.value = ctx || null; loadColdEvidence() }).catch(() => {})
   quantApi.riskAlert().then((alert) => { riskAlert.value = alert || null }).catch(() => {})
   quantApi.picksStats(30).then((res) => {
     const map: Record<string, { win_rate: number | null; samples: number }> = {}
@@ -1376,96 +1304,6 @@ const openChart = async (row: any) => {
   }
 }
 
-.market-banner {
-  padding: 14px 18px;
-  border: 1px solid var(--el-border-color-light);
-  border-left: 6px solid var(--el-border-color);
-  border-radius: 10px;
-  background: var(--el-fill-color-extra-light);
-  margin-bottom: 4px;
-
-  .mb-row {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .mb-tag {
-    font-size: 12px;
-    font-weight: 600;
-    color: #fff;
-    background: var(--el-text-color-secondary);
-    padding: 2px 8px;
-    border-radius: 6px;
-  }
-  .mb-state { font-size: 22px; font-weight: 800; }
-  .mb-metrics {
-    font-size: 13px;
-    color: var(--el-text-color-regular);
-    b { font-size: 15px; font-weight: 700; }
-  }
-  .mb-day {
-    font-size: 13px;
-    color: var(--el-text-color-secondary);
-    padding: 2px 8px;
-    border-radius: 4px;
-    background: var(--el-fill-color);
-    b { font-weight: 700; }
-    &.rebound {
-      color: #ef232a;
-      background: rgba(239, 35, 42, .1);
-      b { color: #ef232a; }
-    }
-  }
-  .mb-temp {
-    font-size: 12px;
-    color: var(--el-text-color-secondary);
-    padding: 1px 6px;
-    border: 1px solid var(--el-border-color);
-    border-radius: 4px;
-  }
-  .mb-when {
-    font-weight: 600;
-    &.live { color: #ef232a; }
-  }
-  .mb-index {
-    margin-top: 6px;
-    .mb-idx {
-      font-size: 13px;
-      color: var(--el-text-color-regular);
-      b { font-weight: 700; }
-      &.up b { color: #ef232a; }
-      &.down b { color: #0e9f5a; }
-    }
-    .mb-idx-note { font-size: 12px; color: var(--el-text-color-secondary); }
-  }
-  .mb-diverge {
-    margin-top: 6px;
-    font-size: 13px;
-    font-weight: 600;
-    color: #d46b08;
-  }
-  .mb-advice {
-    margin-top: 6px;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--el-text-color-primary);
-  }
-  .mb-daily {
-    margin-top: 4px;
-    font-size: 12px;
-    color: var(--el-text-color-secondary);
-    span { margin-right: 10px; }
-    .up { color: #ef232a; }
-    .down { color: #0e9f5a; }
-  }
-  .mb-evidence {
-    margin-top: 4px;
-    font-size: 12px;
-    color: var(--el-text-color-secondary);
-  }
-}
-
 .risk-lock-alert {
   margin: 4px 0 8px;
 }
@@ -1475,22 +1313,6 @@ const openChart = async (row: any) => {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-}
-
-.ctx-warm {
-  border-color: #ffb3a7;
-  border-left-color: #ef232a;
-  background: #fff1f0;
-  .mb-tag { background: #ef232a; }
-  .mb-state, .mb-metrics b { color: #ef232a; }
-}
-
-.ctx-cold {
-  border-color: #a7d4b4;
-  border-left-color: #0e9f5a;
-  background: #f0fff4;
-  .mb-tag { background: #0e9f5a; }
-  .mb-state, .mb-metrics b { color: #0e9f5a; }
 }
 
 .health-fresh,

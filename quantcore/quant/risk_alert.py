@@ -130,56 +130,270 @@ def market_risk_gauge(daily: List[Dict], temp: float,
 def scan_sell_signals(metrics: Dict[str, Dict[str, float]],
                       names: Dict[str, str],
                       bad_forecast: Optional[set] = None,
-                      limit: int = 200) -> Dict[str, object]:
-    """全市场卖出信号扫描（批量，非逐只 load_kline）。
+                      limit: int = 200,
+                      realtime_quotes: Optional[Dict[str, dict]] = None,
+                      fundamental_flags: Optional[Dict[str, dict]] = None) -> Dict[str, object]:
+    """多因子持仓风险复核；单一均线破位永不直接触发退出建议。"""
+    import statistics
 
-    metrics: local_store.breakdown_metrics() 输出（close/ma10/ma20/pct/amount）。
-    命中规则（与七不买同口径）：
-    - 破位下行：close < MA10 且 close < MA20；
-    - 问题股：名称含 ST/退 或 业绩预亏集内。
-    严重度：破位 + 当日跌超板块半幅 = 高；破位 = 中；仅问题股 = 中。
-    """
     bad_forecast = bad_forecast or set()
+    realtime_quotes = realtime_quotes or {}
+    fundamental_flags = fundamental_flags or {}
     hits: List[Dict[str, object]] = []
-    breakdown_n = 0
-    for symbol, m in metrics.items():
+    layer_counts = {
+        "new_breakdown": 0,
+        "confirmed_breakdown": 0,
+        "persistent_weakness": 0,
+        "trouble": 0,
+    }
+
+    market_pcts = [float(metric.get("pct", 0)) for metric in metrics.values()]
+    market_median = statistics.median(market_pcts) if market_pcts else 0.0
+    market_up_share = (
+        sum(1 for value in market_pcts if value > 0) / len(market_pcts)
+        if market_pcts else 0.0
+    )
+    breakdown_n = sum(
+        1 for metric in metrics.values()
+        if float(metric.get("close", 0)) > 0
+        and float(metric.get("close", 0)) < float(metric.get("ma10", 0))
+        and float(metric.get("close", 0)) < float(metric.get("ma20", 0))
+    )
+    breakdown_share = breakdown_n / len(metrics) if metrics else 0.0
+    broad_retreat = breakdown_share >= 0.5
+
+    for symbol, metric in metrics.items():
         name = str(names.get(symbol) or symbol)
-        close = float(m.get("close", 0))
-        ma10 = float(m.get("ma10", 0))
-        ma20 = float(m.get("ma20", 0))
-        pct = float(m.get("pct", 0))
-        reasons: List[str] = []
-        severity = 0
+        close = float(metric.get("close", 0))
+        ma10 = float(metric.get("ma10", 0))
+        ma20 = float(metric.get("ma20", 0))
+        ma60 = float(metric.get("ma60", 0))
+        prev_close = float(metric.get("prev_close", 0))
+        prev_ma10 = float(metric.get("prev_ma10", 0))
+        prev_ma20 = float(metric.get("prev_ma20", 0))
+        pct = float(metric.get("pct", 0))
+        amount_ratio = float(metric.get("amount_ratio", 0))
+        capital_flow = float(metric.get("capital_flow_5d", 0))
+        return_20d = float(metric.get("return_20d", 0))
+        close_position = float(metric.get("close_position", 0.5))
+        lower_shadow = float(metric.get("lower_shadow", 0))
+        consecutive_down = int(metric.get("consecutive_down", 0))
+        relative_pct = pct - market_median
+        risk_points = 0
+        protection_points = 0
+        risk_dimensions: set[str] = set()
+        risk_factors: List[str] = []
+        protect_factors: List[str] = []
+        context_factors: List[str] = []
+        layer = ""
+
+        def add_risk(dimension: str, points: int, text: str) -> None:
+            nonlocal risk_points
+            risk_points += points
+            risk_dimensions.add(dimension)
+            risk_factors.append(text)
+
+        def add_protection(points: int, text: str) -> None:
+            nonlocal protection_points
+            protection_points += points
+            protect_factors.append(text)
 
         broke = close > 0 and close < ma10 and close < ma20
+        prev_broke = (
+            prev_close > 0 and prev_ma10 > 0 and prev_ma20 > 0
+            and prev_close < prev_ma10 and prev_close < prev_ma20
+        )
         if broke:
-            breakdown_n += 1
-            reasons.append(f"破位下行：收盘 {close:.2f} 跌破 MA10({ma10:.2f})/MA20({ma20:.2f})")
-            severity = 2 if pct <= -4.0 else 1
+            layer = (
+                "new_breakdown" if not prev_broke
+                else "confirmed_breakdown" if pct <= -2.0 or amount_ratio >= 1.3
+                else "persistent_weakness"
+            )
+            layer_counts[layer] += 1
+            add_risk(
+                "trend", 1,
+                f"趋势：收盘 {close:.2f} 低于 MA10({ma10:.2f})/MA20({ma20:.2f})，仅作为弱证据"
+            )
+            if ma60 > 0 and close < ma60:
+                add_risk("trend", 2, f"中期趋势：同时跌破 MA60({ma60:.2f})")
+            elif ma60 > 0:
+                add_protection(1, f"中期结构仍在 MA60({ma60:.2f}) 上方")
+            depth_to_ma20 = (close / ma20 - 1) * 100 if ma20 > 0 else 0.0
+            if depth_to_ma20 <= -5:
+                add_risk("trend", 1, f"偏离：低于 MA20 {abs(depth_to_ma20):.1f}%")
+            if return_20d <= -15:
+                add_risk("trend", 1, f"近20日累计下跌 {abs(return_20d):.1f}%")
+            elif return_20d >= 8 and ma60 > 0 and close >= ma60:
+                add_protection(1, f"近20日仍上涨 {return_20d:.1f}%，中期强势结构未破")
 
-        trouble = ("ST" in name.upper() or "退" in name)
-        if trouble:
-            reasons.append("问题股：ST/退市风险")
-            severity = max(severity, 1)
-        elif symbol in bad_forecast:
-            reasons.append("问题股：业绩预亏/预减")
-            severity = max(severity, 1)
+        flag = fundamental_flags.get(symbol) or {}
+        trouble_name = "ST" in name.upper() or "退" in name
+        bad_fundamental = trouble_name or symbol in bad_forecast or bool(flag.get("bad_forecast"))
+        if trouble_name:
+            add_risk("fundamental", 6, "基本面硬风险：ST/退市风险标记")
+        elif bad_fundamental:
+            detail = str(flag.get("forecast_type") or "业绩预亏/预减")
+            change = str(flag.get("change") or "").strip()
+            add_risk("fundamental", 5, f"基本面硬风险：{detail}{f'（{change}）' if change else ''}")
+        else:
+            context_factors.append("未命中ST/退市或业绩预亏预减标签，不代表基本面已全面验证")
 
-        if not reasons:
+        if bad_fundamental:
+            if layer:
+                layer_counts[layer] -= 1
+            layer = "trouble"
+            layer_counts["trouble"] += 1
+
+        if not broke and not bad_fundamental:
             continue
+
+        if pct < 0 and amount_ratio >= 1.5:
+            add_risk("volume", 2, f"量能：下跌同时成交额放大至20日均值 {amount_ratio:.1f} 倍")
+        elif broke and 0 < amount_ratio <= 0.9:
+            add_protection(1, f"量能：破位缩量，仅为20日均额 {amount_ratio:.1f} 倍")
+
+        if capital_flow <= -25:
+            add_risk("capital", 2, f"价量资金代理：近5日下跌日成交占优（{capital_flow:.0f}）")
+        elif capital_flow >= 15:
+            add_protection(1, f"价量资金代理：近5日上涨日成交占优（+{capital_flow:.0f}）")
+        else:
+            context_factors.append(f"价量资金代理近5日中性（{capital_flow:+.0f}）")
+
+        if relative_pct <= -3:
+            add_risk(
+                "relative", 1,
+                f"相对市场：跑输全市场中位涨幅 {abs(relative_pct):.1f} 个百分点"
+            )
+        elif relative_pct >= 1:
+            add_protection(1, f"相对市场：跑赢全市场中位涨幅 {relative_pct:.1f} 个百分点")
+
+        if pct <= -3 and close_position <= 0.25:
+            add_risk("price_action", 1, "K线：大跌且收在当日振幅下沿")
+        if lower_shadow >= 0.35:
+            add_protection(1, "K线：长下影显示盘中承接")
+        if consecutive_down >= 3:
+            add_risk("price_action", 1, f"连续性：已连续下跌 {consecutive_down} 个交易日")
+
+        if broad_retreat:
+            context_factors.append(
+                f"市场背景：全市场 {breakdown_share:.0%} 个股处于双均线下方，单只破位区分度下降"
+            )
+            if relative_pct >= -1.5:
+                add_protection(1, "退潮期与市场同步走弱，暂未出现明显独立弱势")
+        else:
+            context_factors.append(
+                f"市场背景：全市场中位涨幅 {market_median:+.2f}%，上涨占比 {market_up_share:.0%}"
+            )
+
+        quote = realtime_quotes.get(symbol) or {}
+        current_price = float(
+            quote.get("price") or quote.get("current_price") or quote.get("close") or 0
+        )
+        current_pct = float(
+            quote.get("change_percent")
+            if quote.get("change_percent") is not None
+            else quote.get("pct_chg") or 0
+        )
+        realtime_recovery = False
+        if current_price > 0:
+            if current_price >= ma10 and current_price >= ma20:
+                realtime_recovery = True
+                add_protection(
+                    4,
+                    f"实时反包：现价 {current_price:.2f}（{current_pct:+.2f}%）已收复 MA10/MA20"
+                )
+            elif current_pct >= 3:
+                add_protection(2, f"实时修复：现价上涨 {current_pct:.2f}%，等待收复均线确认")
+            elif current_pct <= -3 and current_price < ma10 and current_price < ma20:
+                add_risk("realtime", 2, f"实时确认：继续下跌 {abs(current_pct):.2f}% 且仍在双均线下方")
+
+        net_points = max(0, risk_points - protection_points)
+        dimension_count = len(risk_dimensions)
+        if realtime_recovery and not bad_fundamental:
+            signal, severity = "反包观察", 1
+        elif bad_fundamental and broke and risk_points >= 7 and dimension_count >= 3:
+            signal, severity = "退出/止损", 3
+        elif net_points >= 9 and dimension_count >= 4:
+            signal, severity = "退出/止损", 3
+        elif (bad_fundamental and net_points >= 4) or (net_points >= 6 and dimension_count >= 3):
+            signal, severity = "减仓防守", 2
+        else:
+            signal, severity = "持有观察", 1
+
+        confidence = min(95, 40 + abs(net_points) * 5 + dimension_count * 5)
+        summary = (
+            f"{signal}：{dimension_count} 个风险维度，风险点 {risk_points}、保护点 {protection_points}。"
+            "跌破均线未被单独视为卖出依据。"
+        )
         hits.append({
-            "symbol": symbol, "name": name, "pct": round(pct, 2),
+            "symbol": symbol,
+            "name": name,
+            "pct": round(pct, 2),
             "close": round(close, 2),
+            "current_price": round(current_price, 2) if current_price > 0 else None,
+            "current_pct": round(current_pct, 2) if current_price > 0 else None,
             "severity": severity,
-            "signal": "卖出" if severity >= 2 else "减仓/回避",
-            "reason": "；".join(reasons),
-            "amount_yi": round(float(m.get("amount", 0)) / 1e8, 2),
+            "signal": signal,
+            "layer": layer,
+            "confidence": confidence,
+            "risk_score": min(100, net_points * 12),
+            "risk_dimensions": sorted(risk_dimensions),
+            "risk_factors": risk_factors,
+            "protect_factors": protect_factors,
+            "context_factors": context_factors,
+            "reason": summary,
+            "amount_yi": round(float(metric.get("amount", 0)) / 1e8, 2),
+            "amount_ratio": round(amount_ratio, 2),
+            "capital_flow_5d": round(capital_flow, 2),
+            "relative_pct": round(relative_pct, 2),
         })
 
-    # 严重度优先，其次当日跌幅（跌得多的排前面），再按成交额（流动性大的更该关注）
-    hits.sort(key=lambda h: (-h["severity"], h["pct"], -h["amount_yi"]))
+    hits.sort(key=lambda item: (-item["severity"], -item["risk_score"], item["pct"]))
+
+    # 按综合建议配额挑选返回，避免退出/减仓被海量「持有观察」挤出列表；每类内已按严重度排序
+    max_items = max(1, min(limit, 500))
+    quotas = {"退出/止损": 150, "减仓防守": 150, "反包观察": 100, "持有观察": 100}
+    selected: List[Dict[str, object]] = []
+    selected_symbols: set[str] = set()
+    for signal, quota in quotas.items():
+        picked = 0
+        for item in hits:
+            if item["signal"] != signal or str(item["symbol"]) in selected_symbols:
+                continue
+            if picked >= quota:
+                break
+            selected.append(item)
+            selected_symbols.add(str(item["symbol"]))
+            picked += 1
+    if len(selected) < max_items:
+        for item in hits:
+            if str(item["symbol"]) in selected_symbols:
+                continue
+            selected.append(item)
+            selected_symbols.add(str(item["symbol"]))
+            if len(selected) >= max_items:
+                break
+    selected.sort(key=lambda item: (-item["severity"], -item["risk_score"], item["pct"]))
+
+    recommendation_counts = {
+        "exit": sum(1 for item in hits if item["signal"] == "退出/止损"),
+        "reduce": sum(1 for item in hits if item["signal"] == "减仓防守"),
+        "rebound": sum(1 for item in hits if item["signal"] == "反包观察"),
+        "watch": sum(1 for item in hits if item["signal"] == "持有观察"),
+    }
     return {
         "total_flagged": len(hits),
         "breakdown_count": breakdown_n,
-        "items": hits[: max(1, min(limit, 500))],
+        "urgent_count": recommendation_counts["exit"],
+        "actionable_count": recommendation_counts["exit"] + recommendation_counts["reduce"],
+        "recommendation_counts": recommendation_counts,
+        "layer_counts": layer_counts,
+        "market_context": {
+            "median_pct": round(market_median, 2),
+            "up_share": round(market_up_share, 4),
+            "breakdown_share": round(breakdown_share, 4),
+            "broad_retreat": broad_retreat,
+        },
+        "method_note": "均线破位仅为弱证据；退出建议至少需要三个风险维度共振，盘中反包会动态降级。",
+        "items": selected[:max_items],
     }

@@ -3,7 +3,7 @@
     <div class="page-head">
       <div>
         <h1>风险预警</h1>
-        <p>大盘仓位红绿灯 + 全市场卖出信号扫描——回答「什么时候不能再买、什么时候该卖」。</p>
+        <p>大盘仓位红绿灯 + 持仓多因子复核——区分真正风险、普通退潮与次日反包。</p>
       </div>
       <el-button size="small" :loading="loading" @click="loadAll">刷新</el-button>
     </div>
@@ -36,42 +36,96 @@
     </section>
     <el-skeleton v-else-if="loading" :rows="4" animated />
 
-    <!-- 全市场卖出信号 -->
+    <!-- 全市场持仓风险复核 -->
     <section class="scan-card">
       <div class="scan-head">
-        <h2>全市场卖出信号</h2>
+        <h2>全市场持仓风险复核</h2>
         <div class="scan-sub" v-if="scan">
-          共 <b>{{ scan.total_flagged }}</b> 只命中 · 其中破位 <b>{{ scan.breakdown_count }}</b> 只
+          建议退出 <b>{{ scan.recommendation_counts?.exit || 0 }}</b> 只
+          · 减仓防守 <b>{{ scan.recommendation_counts?.reduce || 0 }}</b> 只
+          · 反包观察 <b>{{ scan.recommendation_counts?.rebound || 0 }}</b> 只
+          · 持有观察 <b>{{ scan.recommendation_counts?.watch || 0 }}</b> 只
           <span v-if="scan.universe">/ 全市场 {{ scan.universe }} 只</span>
-          <span v-if="scan.as_of">· 截至 {{ scan.as_of }}</span>
+          <span v-if="scan.as_of">· 日线截至 {{ scan.as_of }}</span>
         </div>
       </div>
-      <el-radio-group v-model="sevFilter" size="small" class="sev-filter">
-        <el-radio-button :value="0">全部</el-radio-button>
-        <el-radio-button :value="2">仅卖出</el-radio-button>
-      </el-radio-group>
+      <div v-if="scan" class="method-note">
+        <b>{{ scan.method_note }}</b>
+        <span v-if="scan.market_context">
+          市场中位涨幅 {{ pct(scan.market_context.median_pct) }} ·
+          双均线下方 {{ (scan.market_context.breakdown_share * 100).toFixed(0) }}% ·
+          {{ scan.market_context.broad_retreat ? '当前为广泛退潮，单只破位会降权' : '当前个股破位仍有区分度' }}
+        </span>
+      </div>
+      <div class="scan-filters">
+        <el-radio-group v-model="layerFilter" size="small" class="sev-filter">
+          <el-radio-button value="actionable">重点复核 {{ scan?.actionable_count || 0 }}</el-radio-button>
+          <el-radio-button value="rebound">反包观察 {{ scan?.recommendation_counts?.rebound || 0 }}</el-radio-button>
+          <el-radio-button value="trouble">问题股 {{ scan?.layer_counts?.trouble || 0 }}</el-radio-button>
+          <el-radio-button value="all">全部</el-radio-button>
+        </el-radio-group>
+        <el-input v-model="keyword" size="small" clearable placeholder="搜索股票/代码" class="stock-search" />
+      </div>
       <el-table v-if="scan" :data="filteredScan" size="small" stripe max-height="520">
-        <el-table-column label="信号" width="90">
+        <el-table-column label="综合建议" width="105" fixed="left">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.severity >= 2 ? 'danger' : 'warning'" effect="dark">{{ row.signal }}</el-tag>
+            <el-tag size="small" :type="signalType(row.signal)" effect="dark">{{ row.signal }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="股票" min-width="150">
+        <el-table-column label="股票" width="150" fixed="left">
           <template #default="{ row }">
             <a class="stk" @click="openStock(row.symbol)">{{ row.name }} <small>{{ row.symbol }}</small></a>
           </template>
         </el-table-column>
-        <el-table-column label="现价" width="80">
-          <template #default="{ row }">{{ row.close }}</template>
+        <el-table-column label="风险分" width="82">
+          <template #default="{ row }">
+            <b :class="row.risk_score >= 70 ? 'risk-hi' : row.risk_score >= 40 ? 'risk-mid' : 'risk-lo'">
+              {{ row.risk_score || 0 }}
+            </b>
+          </template>
         </el-table-column>
-        <el-table-column label="当日" width="90">
-          <template #default="{ row }"><span :class="row.pct >= 0 ? 'up' : 'down'">{{ pct(row.pct) }}</span></template>
+        <el-table-column label="昨日收盘" width="105">
+          <template #default="{ row }">
+            <div>{{ row.close }}</div>
+            <small :class="row.pct >= 0 ? 'up' : 'down'">{{ pct(row.pct) }}</small>
+          </template>
         </el-table-column>
-        <el-table-column label="成交额" width="90">
-          <template #default="{ row }">{{ row.amount_yi }}亿</template>
+        <el-table-column label="盘中修正" width="110">
+          <template #default="{ row }">
+            <template v-if="row.current_price">
+              <div>{{ row.current_price }}</div>
+              <small :class="row.current_pct >= 0 ? 'up' : 'down'">{{ pct(row.current_pct) }}</small>
+            </template>
+            <span v-else>—</span>
+          </template>
         </el-table-column>
-        <el-table-column label="卖出理由" min-width="300">
-          <template #default="{ row }"><span class="reason">{{ row.reason }}</span></template>
+        <el-table-column label="量能" width="95">
+          <template #default="{ row }">
+            <div>{{ row.amount_yi }}亿</div>
+            <small>20日比 {{ row.amount_ratio || 0 }}×</small>
+          </template>
+        </el-table-column>
+        <el-table-column label="价量资金代理" width="110">
+          <template #default="{ row }">
+            <span :class="row.capital_flow_5d >= 0 ? 'up' : 'down'">
+              {{ pct(row.capital_flow_5d || 0) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="风险证据" min-width="360">
+          <template #default="{ row }">
+            <div class="evidence-list risk-evidence">
+              <span v-for="item in row.risk_factors" :key="item">• {{ item }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="保护因素 / 反包修正" min-width="340">
+          <template #default="{ row }">
+            <div class="evidence-list protect-evidence">
+              <span v-for="item in row.protect_factors" :key="item">• {{ item }}</span>
+              <small v-for="item in row.context_factors" :key="item">{{ item }}</small>
+            </div>
+          </template>
         </el-table-column>
       </el-table>
       <el-empty v-else-if="!loading" description="暂无扫描数据" :image-size="80" />
@@ -89,7 +143,8 @@ const router = useRouter()
 const loading = ref(false)
 const alert = ref<RiskAlert | null>(null)
 const scan = ref<RiskScan | null>(null)
-const sevFilter = ref(0)
+const layerFilter = ref('actionable')
+const keyword = ref('')
 
 const levelKey = computed(() => {
   const l = alert.value?.level
@@ -97,9 +152,23 @@ const levelKey = computed(() => {
 })
 const riskTone = (r: number) => (r >= 20 ? 'risk-hi' : r >= 8 ? 'risk-mid' : 'risk-lo')
 const pct = (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(2)}%`
-const filteredScan = computed(() =>
-  (scan.value?.items || []).filter((i) => sevFilter.value === 0 || i.severity >= sevFilter.value),
-)
+const signalType = (signal: string) =>
+  signal === '退出/止损' ? 'danger' : signal === '减仓防守' ? 'warning'
+    : signal === '反包观察' ? 'success' : 'info'
+const filteredScan = computed(() => {
+  const kw = keyword.value.trim().toLowerCase()
+  return (scan.value?.items || []).filter((item) => {
+    // 分类精简：重点复核=退出+减仓（综合评估的可操作清单）/ 反包观察 / 问题股 / 全部
+    const passLayer =
+      layerFilter.value === 'all' ? true
+        : layerFilter.value === 'actionable' ? (item.signal === '退出/止损' || item.signal === '减仓防守')
+          : layerFilter.value === 'rebound' ? item.signal === '反包观察'
+            : layerFilter.value === 'trouble' ? item.layer === 'trouble'
+              : true
+    const passKw = !kw || item.name.toLowerCase().includes(kw) || item.symbol.includes(kw)
+    return passLayer && passKw
+  })
+})
 const openStock = (symbol: string) => router.push({ name: 'stock-analysis', query: { symbol } })
 
 const loadAll = async () => {
@@ -107,7 +176,7 @@ const loadAll = async () => {
   try {
     const [a, s] = await Promise.all([
       quantApi.riskAlert().catch(() => null),
-      quantApi.riskScan(200).catch(() => null),
+      quantApi.riskScan(500).catch(() => null),
     ])
     alert.value = a
     scan.value = s

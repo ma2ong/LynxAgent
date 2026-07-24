@@ -124,6 +124,10 @@ export interface QuantSmartPoolResult {
   source: string
   universe_size: number
   analyzed?: number
+  daily_as_of?: string
+  realtime_as_of?: string
+  ranking_basis?: string
+  force_refreshed?: boolean
   ai_factor?: {
     status?: string
     pick_date?: string
@@ -398,7 +402,7 @@ export const quantApi = {
 
   startSmartPoolTask: async (limit = 20, universeLimit = 300, strategy = 'balanced') =>
     unwrap<QuantSmartPoolTask>(await ApiClient.post('/api/lite/smart-pool/tasks', undefined, {
-      params: { limit, universe_limit: universeLimit, strategy, _ts: nonce() },
+      params: { limit, universe_limit: universeLimit, strategy, force_refresh: true, _ts: nonce() },
       timeout: 15000
     })),
 
@@ -581,14 +585,37 @@ export interface RiskScanItem {
   name: string
   pct: number
   close: number
+  current_price?: number | null
+  current_pct?: number | null
   severity: number
-  signal: string
+  signal: '退出/止损' | '减仓防守' | '反包观察' | '持有观察'
+  layer: 'new_breakdown' | 'confirmed_breakdown' | 'persistent_weakness' | 'trouble'
   reason: string
+  confidence?: number
+  risk_score?: number
+  risk_dimensions?: string[]
+  risk_factors?: string[]
+  protect_factors?: string[]
+  context_factors?: string[]
   amount_yi: number
+  amount_ratio?: number
+  capital_flow_5d?: number
+  relative_pct?: number
 }
 export interface RiskScan {
   total_flagged: number
   breakdown_count: number
+  urgent_count?: number
+  actionable_count?: number
+  layer_counts?: Record<string, number>
+  recommendation_counts?: Record<'exit' | 'reduce' | 'rebound' | 'watch', number>
+  market_context?: {
+    median_pct: number
+    up_share: number
+    breakdown_share: number
+    broad_retreat: boolean
+  }
+  method_note?: string
   universe?: number
   as_of?: string
   items: RiskScanItem[]

@@ -474,42 +474,81 @@ class LocalQuantStore:
                 out[str(symbol).zfill(6)] = {"pct": round((c - p) / p * 100, 2), "amount": _f(amount), "close": c}
         return out
 
-    def breakdown_metrics(self, ma_window: int = 20) -> Dict[str, Dict[str, float]]:
-        """每只股票最新 bar 的 close / MA10 / MA20 / 当日涨跌幅 / 成交额（全市场卖出扫描用）。
-
-        一次窗口查询算完，避免逐只 load_kline（5000 只要几分钟）。破位口径与七不买
-        risk_check 完全一致（close 同时 < MA10 且 < MA20），只是批量算，不重复规则逻辑。
-        只用 amount>0 的真实 bar；不足 20 根的股票跳过。
-        """
+    def breakdown_metrics(self, ma_window: int = 60) -> Dict[str, Dict[str, float]]:
+        """批量生成持仓风险复核所需的趋势、量价和资金代理指标。"""
         from datetime import date as _date, timedelta as _td
-        cutoff = (_date.today() - _td(days=90)).strftime("%Y-%m-%d")
+        cutoff = (_date.today() - _td(days=150)).strftime("%Y-%m-%d")
         sql = """
         WITH ranked AS (
-            SELECT symbol, date, close, amount,
+            SELECT symbol, date, open, high, low, close, volume, amount,
                    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
             FROM daily_kline
             WHERE amount > 0 AND date >= ?
         )
-        SELECT symbol, rn, close, amount FROM ranked WHERE rn <= ?
+        SELECT symbol, rn, open, high, low, close, volume, amount FROM ranked WHERE rn <= ?
         """
         rows_by_symbol: Dict[str, Dict[int, tuple]] = {}
-        for symbol, rn, close, amount in self._conn().execute(sql, (cutoff, ma_window + 1)).fetchall():
-            rows_by_symbol.setdefault(str(symbol).zfill(6), {})[int(rn)] = (_f(close), _f(amount))
+        for row in self._conn().execute(sql, (cutoff, max(60, ma_window) + 1)).fetchall():
+            symbol, rn, open_, high, low, close, volume, amount = row
+            rows_by_symbol.setdefault(str(symbol).zfill(6), {})[int(rn)] = (
+                _f(open_), _f(high), _f(low), _f(close), _f(volume), _f(amount)
+            )
         out: Dict[str, Dict[str, float]] = {}
         for symbol, by_rn in rows_by_symbol.items():
-            if 1 not in by_rn or len(by_rn) < ma_window:
+            if 1 not in by_rn or len(by_rn) < 21:
                 continue
-            closes_desc = [by_rn[r][0] for r in sorted(by_rn) if by_rn[r][0] > 0]
-            if len(closes_desc) < ma_window:
+            ordered = [by_rn[r] for r in sorted(by_rn)]
+            closes_desc = [row[3] for row in ordered if row[3] > 0]
+            if len(closes_desc) < 21:
                 continue
             close = closes_desc[0]
+            open_, high, low, _, volume, amount = ordered[0]
             ma10 = sum(closes_desc[:10]) / 10
             ma20 = sum(closes_desc[:20]) / 20
+            ma60 = sum(closes_desc[:60]) / 60 if len(closes_desc) >= 60 else 0.0
             prev = closes_desc[1] if len(closes_desc) > 1 else 0.0
+            prev_ma10 = sum(closes_desc[1:11]) / 10 if len(closes_desc) >= 11 else ma10
+            prev_ma20 = sum(closes_desc[1:21]) / 20 if len(closes_desc) >= 21 else ma20
+            prev_amounts = [row[5] for row in ordered[1:21] if row[5] > 0]
+            amount_ma20 = sum(prev_amounts) / len(prev_amounts) if prev_amounts else 0.0
             pct = (close / prev - 1) * 100 if prev > 0 else 0.0
+
+            signed_amount = total_amount = 0.0
+            consecutive_down = 0
+            for idx in range(min(5, len(ordered) - 1)):
+                day_close = ordered[idx][3]
+                prior_close = ordered[idx + 1][3]
+                day_amount = ordered[idx][5]
+                if prior_close <= 0 or day_amount <= 0:
+                    continue
+                day_change = day_close / prior_close - 1
+                signed_amount += day_amount if day_change > 0 else (-day_amount if day_change < 0 else 0)
+                total_amount += day_amount
+                if idx == consecutive_down and day_change < 0:
+                    consecutive_down += 1
+
+            day_range = max(0.0, high - low)
+            close_position = (close - low) / day_range if day_range > 0 else 0.5
+            lower_shadow = (min(open_, close) - low) / day_range if day_range > 0 else 0.0
+            return_5d = (close / closes_desc[5] - 1) * 100 if len(closes_desc) >= 6 else 0.0
+            return_20d = (close / closes_desc[20] - 1) * 100 if len(closes_desc) >= 21 else 0.0
             out[symbol] = {"close": round(close, 2), "ma10": round(ma10, 2),
-                           "ma20": round(ma20, 2), "pct": round(pct, 2),
-                           "amount": by_rn[1][1]}
+                           "ma20": round(ma20, 2), "ma60": round(ma60, 2),
+                           "pct": round(pct, 2),
+                           "prev_close": round(prev, 2),
+                           "prev_ma10": round(prev_ma10, 2),
+                           "prev_ma20": round(prev_ma20, 2),
+                           "open": round(open_, 2), "high": round(high, 2),
+                           "low": round(low, 2), "volume": volume,
+                           "amount": amount,
+                           "amount_ratio": round(amount / amount_ma20, 2) if amount_ma20 > 0 else 0.0,
+                           "capital_flow_5d": round(signed_amount / total_amount * 100, 2)
+                           if total_amount > 0 else 0.0,
+                           "return_5d": round(return_5d, 2),
+                           "return_20d": round(return_20d, 2),
+                           "close_position": round(close_position, 3),
+                           "lower_shadow": round(lower_shadow, 3),
+                           "consecutive_down": consecutive_down}
         return out
 
     # ---- 选股留痕与胜率复盘 ----
@@ -785,6 +824,21 @@ class LocalQuantStore:
     def load_bad_forecast_symbols(self) -> set:
         cur = self._conn().execute("SELECT symbol FROM fundamental_flags WHERE bad_forecast=1")
         return {row[0] for row in cur.fetchall()}
+
+    def load_fundamental_flags(self) -> Dict[str, Dict[str, object]]:
+        cur = self._conn().execute(
+            "SELECT symbol,bad_forecast,forecast_type,change,period,updated_at FROM fundamental_flags"
+        )
+        return {
+            str(symbol).zfill(6): {
+                "bad_forecast": bool(bad_forecast),
+                "forecast_type": str(forecast_type or ""),
+                "change": str(change or ""),
+                "period": str(period or ""),
+                "updated_at": str(updated_at or ""),
+            }
+            for symbol, bad_forecast, forecast_type, change, period, updated_at in cur.fetchall()
+        }
 
     def fundamental_flag_count(self) -> int:
         return self._conn().execute("SELECT COUNT(*) FROM fundamental_flags WHERE bad_forecast=1").fetchone()[0]

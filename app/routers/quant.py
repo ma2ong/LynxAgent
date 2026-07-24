@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from typing import List, Optional
@@ -443,6 +444,54 @@ def _cold_excess() -> Optional[float]:
     return None
 
 
+_RISK_SCAN_CACHE: dict = {}
+_RISK_SCAN_LOCK = threading.Lock()
+
+
+def _risk_scan_cached(realtime_quotes: Optional[dict] = None) -> dict:
+    """缓存批量日线指标；综合建议每次结合最新实时行情重新计算。"""
+    import time as _time
+    from quantcore.quant.local_store import get_local_store
+    from quantcore.quant.risk_alert import scan_sell_signals
+
+    inputs = _RISK_SCAN_CACHE.get("inputs")
+    if not inputs or _time.time() - _RISK_SCAN_CACHE.get("at", 0) >= 600:
+        with _RISK_SCAN_LOCK:
+            inputs = _RISK_SCAN_CACHE.get("inputs")
+            if not inputs or _time.time() - _RISK_SCAN_CACHE.get("at", 0) >= 600:
+                store = get_local_store()
+                metrics = store.breakdown_metrics()
+                names = {
+                    str(meta.get("symbol")): str(meta.get("name") or "")
+                    for meta in store.load_meta()
+                }
+                try:
+                    bad = store.load_bad_forecast_symbols()
+                    flags = store.load_fundamental_flags()
+                except Exception:
+                    bad, flags = set(), {}
+                inputs = {
+                    "metrics": metrics,
+                    "names": names,
+                    "bad": bad,
+                    "flags": flags,
+                    "as_of": store.latest_real_bar_date() or "",
+                }
+                _RISK_SCAN_CACHE["inputs"], _RISK_SCAN_CACHE["at"] = inputs, _time.time()
+
+    result = scan_sell_signals(
+        inputs["metrics"],
+        inputs["names"],
+        bad_forecast=inputs["bad"],
+        realtime_quotes=realtime_quotes,
+        fundamental_flags=inputs["flags"],
+        limit=500,
+    )
+    result["as_of"] = inputs["as_of"]
+    result["universe"] = len(inputs["metrics"])
+    return result
+
+
 @router.get("/risk-alert")
 async def quant_risk_alert():
     """市场级风险仪表：赚钱效应温度/连续走弱/跌停潮/广度骤降 → 风险等级 + 明确仓位动作。"""
@@ -473,17 +522,10 @@ async def quant_risk_alert():
         # 破位广度：全市场跌破 MA10&MA20 占比（结构性下跌强度）。复用卖出扫描缓存，
         # 缓存冷时才现算一次 breakdown_metrics（单次窗口查询，秒级）
         def _breakdown_share():
-            from quantcore.quant.local_store import get_local_store
-            cached = _RISK_SCAN_CACHE.get("data")
-            import time as _t
-            if cached and _t.time() - _RISK_SCAN_CACHE.get("at", 0) < 600 and cached.get("universe"):
-                return (cached.get("breakdown_count") or 0) / cached["universe"]
-            metrics = get_local_store().breakdown_metrics()
-            if not metrics:
+            scan = _risk_scan_cached(snapshot)
+            if not scan.get("universe"):
                 return None
-            broke = sum(1 for m in metrics.values()
-                        if m["close"] > 0 and m["close"] < m["ma10"] and m["close"] < m["ma20"])
-            return broke / len(metrics)
+            return (scan.get("breakdown_count") or 0) / scan["universe"]
         try:
             breakdown_share = await _run_light(_breakdown_share)
         except Exception:
@@ -500,40 +542,15 @@ async def quant_risk_alert():
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-_RISK_SCAN_CACHE: dict = {}
-
-
 @router.get("/risk-scan")
 async def quant_risk_scan(limit: int = 200):
-    """全市场卖出信号扫描：破位下行（跌破 MA10/MA20）+ 问题股（ST/退市/预亏），10 分钟缓存。"""
-    import time as _time
-    cached = _RISK_SCAN_CACHE.get("data")
-    if cached and _time.time() - _RISK_SCAN_CACHE.get("at", 0) < 600:
-        return cached
-
-    def _run():
-        from quantcore.quant.local_store import get_local_store
-        from quantcore.quant.risk_alert import scan_sell_signals
-        store = get_local_store()
-        metrics = store.breakdown_metrics()
-        names = {str(m.get("symbol")): str(m.get("name") or "") for m in store.load_meta()}
-        try:
-            bad = store.load_bad_forecast_symbols()
-        except Exception:
-            bad = set()
-        result = scan_sell_signals(metrics, names, bad_forecast=bad, limit=limit)
-        result["as_of"] = ""
-        try:
-            result["as_of"] = store.latest_real_bar_date() or ""
-        except Exception:
-            pass
-        result["universe"] = len(metrics)
-        return result
-
+    """全市场持仓风险复核：日线批量指标缓存，建议结合最新实时行情动态更新。"""
     try:
-        data = await _run_light(_run)
-        _RISK_SCAN_CACHE["data"], _RISK_SCAN_CACHE["at"] = data, _time.time()
-        return data
+        snapshot = await _load_snapshot()
+        data = await _run_light(_risk_scan_cached, snapshot)
+        result = dict(data)
+        result["items"] = list(data.get("items") or [])[: max(1, min(limit, 500))]
+        return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

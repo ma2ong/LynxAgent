@@ -389,6 +389,36 @@ async def quant_market_context():
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/symbol-lookup")
+async def quant_symbol_lookup(q: str, limit: int = 8):
+    """代码/名称模糊查询 → 候选股列表。个股深研支持"名称或代码"二选一输入靠它解析。"""
+    kw = str(q or "").strip()
+    if not kw:
+        return {"items": []}
+
+    def _run():
+        from quantcore.quant.local_store import get_local_store
+        meta = get_local_store().load_meta()
+        kw_low = kw.lower()
+        exact, prefix, contains = [], [], []
+        for m in meta:
+            sym = str(m.get("symbol") or "")
+            name = str(m.get("name") or "")
+            row = {"symbol": sym, "name": name}
+            if sym == kw or name == kw:
+                exact.append(row)
+            elif sym.startswith(kw) or name.startswith(kw):
+                prefix.append(row)
+            elif kw_low in sym.lower() or kw_low in name.lower():
+                contains.append(row)
+        return {"items": (exact + prefix + contains)[: max(1, min(limit, 20))]}
+
+    try:
+        return await _run_light(_run)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/picks/stats")
 async def quant_picks_stats(days: int = 30, pool: str = ""):
     """选股留痕复盘：各池 T+1/T+3/T+5 真实胜率与平均收益（数据来自每日扫描自动留痕）。"""

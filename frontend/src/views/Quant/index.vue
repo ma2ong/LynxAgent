@@ -629,6 +629,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+defineOptions({ name: 'QuantPage' })  // keep-alive 保活标识，勿改
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { DataLine, Search, TrendCharts } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'

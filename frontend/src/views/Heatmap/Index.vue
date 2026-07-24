@@ -22,7 +22,8 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onActivated, onBeforeUnmount, onMounted, ref } from 'vue'
+defineOptions({ name: 'HeatmapPage' })  // keep-alive 保活标识，勿改
 import { useRouter } from 'vue-router'
 import { echarts, type ECharts } from '@/utils/echarts'
 import { heatmapApi, type HeatmapData, type HeatmapItem } from '@/api/quant'
@@ -104,6 +105,8 @@ onMounted(() => {
   load()
   window.addEventListener('resize', onResize)
 })
+// keep-alive：从详情页返回时组件被重新激活，treemap 若在隐藏期间容器尺寸变过需重算
+onActivated(() => nextTick(() => chart?.resize()))
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onResize)
   chart?.dispose()

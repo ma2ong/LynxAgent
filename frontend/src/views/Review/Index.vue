@@ -63,7 +63,7 @@
 
     <el-empty
       v-if="!loading && !pools.length"
-      description="暂无留痕数据。从今天起，每次「形态智选 / 智能推荐 / 短线波段」扫描都会自动留痕，运行几个交易日后这里会出现真实胜率统计。"
+      description="暂无留痕数据。从今天起，每次「一键智选推荐 / 竞价优选」扫描都会自动留痕，运行几个交易日后这里会出现真实胜率统计。"
       :image-size="90"
     />
 
@@ -72,10 +72,7 @@
         <h2>留痕明细</h2>
         <el-radio-group v-model="poolFilter" size="small">
           <el-radio-button value="">全部</el-radio-button>
-          <el-radio-button value="pattern">形态智选</el-radio-button>
-          <el-radio-button value="smart">智能推荐</el-radio-button>
-          <el-radio-button value="strength">强势股</el-radio-button>
-          <el-radio-button value="swing">短线波段</el-radio-button>
+          <el-radio-button value="smart">一键智选推荐</el-radio-button>
           <el-radio-button value="auction">竞价优选</el-radio-button>
         </el-radio-group>
         <el-radio-group v-model="retMode" size="small">
@@ -243,16 +240,22 @@ const horizons = [
 ]
 
 const POOL_LABELS: Record<string, string> = {
+  smart: '一键智选推荐',
+  auction: '竞价优选',
+  // 以下为已合并/退役的旧池，仅解析历史留痕用，复盘页不再展示
   pattern: '形态智选',
-  smart: '智能推荐',
   strength: '强势股',
   swing: '短线波段',
-  auction: '竞价优选',
-  // 换评分公式必须换池名：旧公式的战绩不能挂在新公式名下（2026-07-14 v2→v3）
   smart_v2: '智能推荐 v2（已退役）',
   smart_fac: '因子实验（已转正为 v3）',
 }
 const poolLabel = (key: string) => POOL_LABELS[key] || key
+
+// 复盘页只保留最新在用的两个池：一键智选推荐 + 竞价优选。
+// 形态智选/强势股已并入一键智选，智能推荐 v2 已退役，历史留痕不再单列。
+const VISIBLE_POOLS = ['smart', 'auction']
+const keepVisible = <T extends { pool: string }>(list: T[]) =>
+  list.filter((p) => VISIBLE_POOLS.includes(p.pool))
 
 const stat = (p: PicksPoolStat, key: 't1' | 't3' | 't5') => p.horizons?.[key]
 
@@ -275,8 +278,8 @@ const load = async () => {
   error.value = ''
   try {
     const res = await quantApi.picksStats(days.value)
-    pools.value = res?.pools || []
-    items.value = res?.items || []
+    pools.value = keepVisible(res?.pools || [])
+    items.value = (res?.items || []).filter((it: PicksStatsItem) => VISIBLE_POOLS.includes(it.pool))
   } catch (e: any) {
     error.value = e?.message || '加载复盘数据失败'
   } finally {
@@ -331,7 +334,7 @@ const loadReplay = async () => {
   try {
     const res = await quantApi.replayResults()
     if (res?.pools?.length) {
-      replay.value = res
+      replay.value = { ...res, pools: keepVisible(res.pools) }
       renderReplayChart()
     }
   } catch { /* 无结果时忽略 */ }

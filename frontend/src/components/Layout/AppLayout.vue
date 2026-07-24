@@ -46,7 +46,12 @@
     </el-aside>
     <el-main class="content">
       <MacroBar />
-      <router-view />
+      <!-- 搜索类页面保活：点进个股详情再返回时，保留已搜出的结果不重跑 -->
+      <router-view v-slot="{ Component }">
+        <keep-alive :include="CACHED_VIEWS">
+          <component :is="Component" />
+        </keep-alive>
+      </router-view>
     </el-main>
   </el-container>
 </template>
@@ -65,6 +70,10 @@ import MacroBar from '@/components/MacroBar.vue'
 
 const route = useRoute()
 const router = useRouter()
+
+// 需要保活的搜索类页面（组件 name 必须与此一致）。个股深研/复盘不保活：
+// 深研每次点开都要跟着新代码重新分析，不能复用上一只票的旧结果。
+const CACHED_VIEWS = ['QuantPage', 'CallAuctionPage', 'LimitUpPage', 'HeatmapPage']
 
 const billingInfo = ref<BillingMe | null>(null)
 const mobileMenuOpen = ref(false)

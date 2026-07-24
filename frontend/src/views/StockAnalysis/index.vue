@@ -1,9 +1,14 @@
 <template>
   <div class="stock-analysis">
     <div class="page-head">
-      <div>
-        <h1>个股深研</h1>
-        <p>深度研究单只个股，或按赛道浏览龙头股，点击进入研报。</p>
+      <div class="head-left">
+        <el-button v-if="canGoBack" class="back-btn" plain @click="goBack">
+          <el-icon><ArrowLeft /></el-icon> 返回
+        </el-button>
+        <div>
+          <h1>个股深研</h1>
+          <p>深度研究单只个股，或按赛道浏览龙头股，点击进入研报。</p>
+        </div>
       </div>
     </div>
 
@@ -11,7 +16,7 @@
     <div class="search-bar">
       <el-input
         v-model="symbolInput"
-        placeholder="输入股票代码，如 600519"
+        placeholder="输入股票名称或代码，如 贵州茅台 / 600519"
         clearable
         size="large"
         style="max-width:320px"
@@ -488,10 +493,10 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { echarts, type ECharts } from '@/utils/echarts'
 import { ElMessage } from 'element-plus'
-import { Search, Clock, Close } from '@element-plus/icons-vue'
+import { Search, Clock, Close, ArrowLeft } from '@element-plus/icons-vue'
 import { ApiClient } from '@/api/request'
 import { quantApi, type RiskCheckResult } from '@/api/quant'
 
@@ -518,6 +523,14 @@ const loadPanel = () => {
 const klineEl = ref<HTMLDivElement>()
 let klineChart: ECharts | null = null
 const route = useRoute()
+const router = useRouter()
+
+// 是否从站内其他页跳转而来（有则显示「返回」，返回后保活页会带回搜索结果）
+const canGoBack = ref(!!window.history.state?.back)
+const goBack = () => {
+  if (window.history.state?.back) router.back()
+  else router.push('/quant')
+}
 
 const HISTORY_KEY = 'stock_analysis_history'
 type HistItem = { code: string; name: string }
@@ -775,11 +788,30 @@ const loadRiskCheck = async (s: string) => {
   } catch { /* 本地日线不足等情况静默，不阻塞主分析 */ }
 }
 
-const analyze = async (sym?: string) => {
-  const s = (sym || symbolInput.value).trim()
-  if (!s) return
-  symbolInput.value = s
+// 输入既支持代码也支持名称：6 位纯数字直接用，否则走后端模糊解析取首个匹配
+const resolveSymbol = async (raw: string): Promise<string | null> => {
+  const s = raw.trim()
+  if (/^\d{6}$/.test(s)) return s
+  try {
+    const res: any = await ApiClient.get('/api/quant/symbol-lookup', { q: s }, { timeout: 8000 })
+    const hit = (res?.items || [])[0]
+    return hit?.symbol || null
+  } catch {
+    return null
+  }
+}
+
+const analyze = async (raw?: string) => {
+  const input = (raw || symbolInput.value).trim()
+  if (!input) return
   loading.value = true
+  const s = await resolveSymbol(input)
+  if (!s) {
+    loading.value = false
+    ElMessage.warning(`未找到与「${input}」匹配的股票`)
+    return
+  }
+  symbolInput.value = s
   data.value = null
   panel.value = null
   riskCheck.value = null
@@ -896,6 +928,8 @@ onUnmounted(() => {
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 8px;
   h1 { margin: 0 0 4px; font-size: 24px; }
   p { margin: 0; color: var(--el-text-color-secondary); font-size: 13px; }
+  .head-left { display: flex; align-items: center; gap: 12px; }
+  .back-btn { align-self: center; }
 }
 
 /* 赛道龙头入口 */

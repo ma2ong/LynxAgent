@@ -134,6 +134,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+defineOptions({ name: 'LimitUpPage' })  // keep-alive 保活标识，勿改
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ApiClient } from '@/api/request'

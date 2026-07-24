@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily AStockPick SQLite backup
+
+[Timer]
+OnCalendar=*-*-* 20:30:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

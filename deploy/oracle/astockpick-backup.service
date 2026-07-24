@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up AStockPick SQLite databases
+
+[Service]
+Type=oneshot
+User=astockpick
+Group=astockpick
+ExecStart=/opt/astockpick/current/deploy/oracle/backup.sh

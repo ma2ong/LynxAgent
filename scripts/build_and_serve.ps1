@@ -1,34 +1,128 @@
-﻿# 生产构建 + 重启后端：改完代码跑这个，线上才会是新版本。
+# Production frontend build with an on-demand backend restart.
 #
-# 后端直接托管 frontend/dist（单一来源，隧道只需暴露 8001），
-# 所以前端不重新构建的话，线上永远停在旧页面——这是最容易踩的上线坑。
+# The backend serves frontend/dist. Frontend-only releases must not restart the
+# API because doing so creates avoidable public downtime.
+
+param(
+    [switch]$ForceRestart
+)
 
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $root
 
-Write-Host "[1/3] 构建前端…"
+function Test-BackendHealthy {
+    try {
+        $response = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/health" -TimeoutSec 5
+        return $response.status -eq "healthy"
+    } catch {
+        return $false
+    }
+}
+
+function Get-BackendSignature {
+    $backendPaths = @(
+        "app",
+        "quantcore",
+        "scripts/backend_watchdog.ps1",
+        "requirements.txt",
+        "requirements-prod.txt",
+        "pyproject.toml"
+    )
+    $head = (& git rev-parse HEAD 2>$null | Out-String).Trim()
+    $diff = (& git diff --no-ext-diff --binary HEAD -- $backendPaths 2>$null | Out-String)
+    $untracked = (& git ls-files --others --exclude-standard -- $backendPaths 2>$null | Out-String)
+    $environment = @(".env", ".env.local") |
+        Where-Object { Test-Path $_ } |
+        ForEach-Object { "$_`n$(Get-Content -Raw $_)" } |
+        Out-String
+    $payload = "$head`n$diff`n$untracked`n$environment"
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha256.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+    }
+}
+
+Write-Host "[1/3] Building frontend..."
 Push-Location (Join-Path $root "frontend")
-# vite/rollup 的告警走 stderr（如 @vueuse 的 /*#__PURE__*/ 注释），PS 5.1 会把每行 stderr
-# 包成 ErrorRecord，叠加 ErrorActionPreference=Stop 会让构建"成功却中止"。
-# 用 cmd /c 在 cmd 层合并 stderr（PS 只拿到纯文本），再用退出码判定真成败。
 cmd /c "npm run build 2>&1"
 $buildExit = $LASTEXITCODE
 Pop-Location
-if ($buildExit -ne 0) { throw "前端构建失败（npm run build 退出码 $buildExit）" }
-
-Write-Host "[2/3] 重启后端（看门狗会在 60 秒内自动拉起）…"
-$conn = Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue
-if ($conn) { Stop-Process -Id $conn.OwningProcess -Force }
-
-Write-Host "[3/3] 等待健康检查…"
-for ($i = 0; $i -lt 20; $i++) {
-    Start-Sleep -Seconds 5
-    try {
-        $r = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/health" -TimeoutSec 5
-        if ($r.status -eq "healthy") { Write-Host "后端已就绪：$($r.service)"; break }
-    } catch { }
+if ($buildExit -ne 0) {
+    throw "Frontend build failed (npm run build exit code $buildExit)"
 }
 
+$signatureFile = Join-Path $root "runtime\backend.deploy.signature"
+$currentSignature = Get-BackendSignature
+$deployedSignature = if (Test-Path $signatureFile) {
+    (Get-Content -Raw $signatureFile).Trim()
+} else {
+    ""
+}
+$backendHealthy = Test-BackendHealthy
+$needsRestart = $ForceRestart -or -not $backendHealthy -or $currentSignature -ne $deployedSignature
+
+if (-not $needsRestart) {
+    Write-Host "[2/3] Backend unchanged; keeping the current process (zero downtime)."
+    Write-Host "[3/3] Health check passed."
+    Write-Host ""
+    Write-Host "Deployment complete."
+    exit 0
+}
+
+$reason = if ($ForceRestart) {
+    "forced"
+} elseif (-not $backendHealthy) {
+    "health check failed"
+} elseif (-not $deployedSignature) {
+    "initial deployment signature"
+} else {
+    "backend changed"
+}
+Write-Host "[2/3] Restarting backend ($reason)..."
+$connections = Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue
+if ($connections) {
+    $connections | Select-Object -ExpandProperty OwningProcess -Unique |
+        ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+}
+
+for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    if (-not (Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue)) {
+        break
+    }
+    Start-Sleep -Milliseconds 250
+}
+
+try {
+    Start-ScheduledTask -TaskName "LynxAgentBackend"
+} catch {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\backend_watchdog.ps1")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Backend watchdog failed (exit code $LASTEXITCODE)"
+    }
+}
+
+Write-Host "[3/3] Waiting for backend health..."
+$ready = $false
+for ($attempt = 0; $attempt -lt 30; $attempt++) {
+    Start-Sleep -Seconds 2
+    if (Test-BackendHealthy) {
+        $ready = $true
+        break
+    }
+}
+if (-not $ready) {
+    throw "Backend did not recover within 60 seconds; inspect backend.err.log"
+}
+
+[System.IO.File]::WriteAllText(
+    $signatureFile,
+    $currentSignature,
+    (New-Object System.Text.UTF8Encoding($false))
+)
+
 Write-Host ""
-Write-Host "完成。线上地址见 Cloudflare 隧道（scripts\deploy_cloudflare.ps1）。"
+Write-Host "Deployment complete; backend is healthy."

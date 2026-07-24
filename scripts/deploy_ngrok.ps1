@@ -41,7 +41,7 @@ authtoken: $Authtoken
 tunnels:
   lynxagent:
     proto: http
-    addr: $Port
+    addr: 127.0.0.1:$Port
     domain: $Domain
 "@
 $cfgPath = Join-Path $cfgDir "ngrok.yml"

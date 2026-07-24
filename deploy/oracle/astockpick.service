@@ -1,0 +1,25 @@
+[Unit]
+Description=AStockPick FastAPI service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=astockpick
+Group=astockpick
+WorkingDirectory=/opt/astockpick/current
+EnvironmentFile=-/etc/astockpick.env
+Environment=PYTHONUTF8=1
+Environment=PYTHONUNBUFFERED=1
+Environment=USE_MONGODB_STORAGE=false
+Environment=NO_PROXY=localhost,127.0.0.1,.eastmoney.com,eastmoney.com,.sina.com.cn,sina.com.cn,sinajs.cn,.sse.com.cn,sse.com.cn,.szse.cn,szse.cn,csindex.com.cn,gtimg.cn,qt.gtimg.cn,.163.com,163.com,baostock.com,tushare.pro,cninfo.com.cn,akfamily.xyz
+ExecStart=/opt/astockpick/venv/bin/uvicorn app.lite_main:app --host 127.0.0.1 --port 8001
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=30
+KillSignal=SIGINT
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -2,13 +2,6 @@
   <div class="dash">
     <!-- 盘面环境：从智能选股页迁移到首页，盘中自动刷新 -->
     <section class="market-overview" :class="`ctx-${ctxTone}`">
-      <div v-if="risk" class="risk-verdict" :class="`risk-verdict-${riskKey}`">
-        <div class="risk-verdict-title">
-          <b>{{ verdict.word }}</b>
-          <span>{{ verdict.sub }}</span>
-        </div>
-        <div class="risk-verdict-action">{{ risk.action }}</div>
-      </div>
       <div class="market-head">
         <div class="mb-row">
           <span class="mb-tag">赚钱效应</span>
@@ -51,6 +44,13 @@
         </span>
       </div>
       <div v-if="coldEvidence" class="mb-evidence">{{ coldEvidence }}</div>
+      <div v-if="risk" class="risk-verdict" :class="`risk-verdict-${riskKey}`">
+        <div class="risk-verdict-title">
+          <b>{{ verdict.word }}</b>
+          <span>{{ verdict.sub }}</span>
+        </div>
+        <div class="risk-verdict-action">{{ risk.action }}</div>
+      </div>
       <div class="market-foot">每 60 秒自动刷新 · 规则化提示，不构成投资建议</div>
     </section>
 
@@ -443,7 +443,7 @@ onUnmounted(stopHeroPolling)
 .market-overview { padding: 16px 20px; border: 1px solid var(--el-border-color-light);
   border-left: 6px solid var(--el-border-color); border-radius: 14px;
   background: var(--el-fill-color-extra-light); }
-.risk-verdict { display: flex; align-items: center; gap: 18px; margin-bottom: 12px; padding: 10px 14px;
+.risk-verdict { display: flex; align-items: center; gap: 18px; margin-top: 12px; padding: 10px 14px;
   border-left: 4px solid var(--el-border-color); border-radius: 9px; background: rgba(255, 255, 255, .72); }
 .risk-verdict-title { display: flex; align-items: baseline; gap: 10px; min-width: 280px;
   b { font-size: 28px; font-weight: 800; line-height: 1.1; white-space: nowrap; }

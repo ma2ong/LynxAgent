@@ -510,6 +510,12 @@ export const quantApi = {
   marketContext: async () =>
     unwrap<MarketContext>(await ApiClient.get('/api/quant/market-context', { _ts: nonce() }, { timeout: 30000 })),
 
+  riskAlert: async () =>
+    unwrap<RiskAlert>(await ApiClient.get('/api/quant/risk-alert', { _ts: nonce() }, { timeout: 30000 })),
+
+  riskScan: async (limit = 200) =>
+    unwrap<RiskScan>(await ApiClient.get('/api/quant/risk-scan', { limit, _ts: nonce() }, { timeout: 60000 })),
+
   replayRun: async (months = 12, step = 5, topN = 20) =>
     unwrap<ReplayStatus>(await ApiClient.post(`/api/quant/replay/run?months=${months}&step=${step}&top_n=${topN}`, undefined, { timeout: 30000 })),
 
@@ -550,6 +556,42 @@ export interface MarketContext {
   /** 实时快照的行情时刻 HH:MM（intraday 时有值） */
   as_of_time?: string
   advice?: string
+}
+
+export interface RiskSignal {
+  key: string
+  name: string
+  value: number
+  risk: number
+  detail: string
+}
+export interface RiskAlert {
+  score: number
+  level: '安全' | '警惕' | '危险' | '极危'
+  action: string
+  signals: RiskSignal[]
+  history_anchor?: string
+  disclaimer?: string
+  market_state?: string
+  as_of?: string
+  intraday?: boolean
+}
+export interface RiskScanItem {
+  symbol: string
+  name: string
+  pct: number
+  close: number
+  severity: number
+  signal: string
+  reason: string
+  amount_yi: number
+}
+export interface RiskScan {
+  total_flagged: number
+  breakdown_count: number
+  universe?: number
+  as_of?: string
+  items: RiskScanItem[]
 }
 
 export interface PicksHorizonStat {

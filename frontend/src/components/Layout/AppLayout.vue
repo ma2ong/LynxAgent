@@ -27,6 +27,7 @@
         <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
         <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
         <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
+        <el-menu-item index="/risk-alert"><el-icon><Warning /></el-icon><span>风险预警</span></el-menu-item>
         <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
         <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
         <el-menu-item index="/review"><el-icon><DataAnalysis /></el-icon><span>选股复盘</span></el-menu-item>
@@ -62,7 +63,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   TrendCharts, Star, SwitchButton,
   DocumentChecked, Menu,
-  MagicStick, Medal, Setting, DataLine, Sunrise, DataAnalysis, Histogram,
+  MagicStick, Medal, Setting, DataLine, Sunrise, DataAnalysis, Histogram, Warning,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'
@@ -73,7 +74,7 @@ const router = useRouter()
 
 // 需要保活的搜索类页面（组件 name 必须与此一致）。个股深研/复盘不保活：
 // 深研每次点开都要跟着新代码重新分析，不能复用上一只票的旧结果。
-const CACHED_VIEWS = ['QuantPage', 'CallAuctionPage', 'LimitUpPage', 'HeatmapPage']
+const CACHED_VIEWS = ['QuantPage', 'CallAuctionPage', 'LimitUpPage', 'HeatmapPage', 'RiskAlertPage']
 
 const billingInfo = ref<BillingMe | null>(null)
 const mobileMenuOpen = ref(false)

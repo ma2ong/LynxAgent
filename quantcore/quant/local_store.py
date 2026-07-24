@@ -474,6 +474,44 @@ class LocalQuantStore:
                 out[str(symbol).zfill(6)] = {"pct": round((c - p) / p * 100, 2), "amount": _f(amount), "close": c}
         return out
 
+    def breakdown_metrics(self, ma_window: int = 20) -> Dict[str, Dict[str, float]]:
+        """每只股票最新 bar 的 close / MA10 / MA20 / 当日涨跌幅 / 成交额（全市场卖出扫描用）。
+
+        一次窗口查询算完，避免逐只 load_kline（5000 只要几分钟）。破位口径与七不买
+        risk_check 完全一致（close 同时 < MA10 且 < MA20），只是批量算，不重复规则逻辑。
+        只用 amount>0 的真实 bar；不足 20 根的股票跳过。
+        """
+        from datetime import date as _date, timedelta as _td
+        cutoff = (_date.today() - _td(days=90)).strftime("%Y-%m-%d")
+        sql = """
+        WITH ranked AS (
+            SELECT symbol, date, close, amount,
+                   ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+            FROM daily_kline
+            WHERE amount > 0 AND date >= ?
+        )
+        SELECT symbol, rn, close, amount FROM ranked WHERE rn <= ?
+        """
+        rows_by_symbol: Dict[str, Dict[int, tuple]] = {}
+        for symbol, rn, close, amount in self._conn().execute(sql, (cutoff, ma_window + 1)).fetchall():
+            rows_by_symbol.setdefault(str(symbol).zfill(6), {})[int(rn)] = (_f(close), _f(amount))
+        out: Dict[str, Dict[str, float]] = {}
+        for symbol, by_rn in rows_by_symbol.items():
+            if 1 not in by_rn or len(by_rn) < ma_window:
+                continue
+            closes_desc = [by_rn[r][0] for r in sorted(by_rn) if by_rn[r][0] > 0]
+            if len(closes_desc) < ma_window:
+                continue
+            close = closes_desc[0]
+            ma10 = sum(closes_desc[:10]) / 10
+            ma20 = sum(closes_desc[:20]) / 20
+            prev = closes_desc[1] if len(closes_desc) > 1 else 0.0
+            pct = (close / prev - 1) * 100 if prev > 0 else 0.0
+            out[symbol] = {"close": round(close, 2), "ma10": round(ma10, 2),
+                           "ma20": round(ma20, 2), "pct": round(pct, 2),
+                           "amount": by_rn[1][1]}
+        return out
+
     # ---- 选股留痕与胜率复盘 ----
     def record_picks(self, pool: str, items: List[Dict[str, object]]) -> int:
         """记录一次选股结果。当日同池同股只保留首次快照（INSERT OR IGNORE），供 T+N 复盘。"""

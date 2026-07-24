@@ -419,6 +419,125 @@ async def quant_symbol_lookup(q: str, limit: int = 8):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+async def _load_snapshot() -> dict:
+    try:
+        from app.lite_main import _load_realtime_quotes_snapshot
+        return await asyncio.wait_for(
+            asyncio.to_thread(_load_realtime_quotes_snapshot, 30), timeout=8.0) or {}
+    except Exception:
+        return {}
+
+
+def _cold_excess() -> Optional[float]:
+    """回放偏冷期一键智选池 T+5 平均超额，作市场风险的历史锚。取不到返回 None。"""
+    try:
+        from quantcore.quant.replay import latest_replay_summary
+        summary = latest_replay_summary() or {}
+        for p in summary.get("pools", []):
+            if p.get("pool") == "smart":
+                for r in p.get("regimes", []):
+                    if r.get("regime") == "偏冷":
+                        return float(r.get("avg_excess"))
+    except Exception:
+        pass
+    return None
+
+
+@router.get("/risk-alert")
+async def quant_risk_alert():
+    """市场级风险仪表：赚钱效应温度/连续走弱/跌停潮/广度骤降 → 风险等级 + 明确仓位动作。"""
+    try:
+        from quantcore.quant.engine import market_context
+        from quantcore.quant.risk_alert import market_risk_gauge
+
+        snapshot = await _load_snapshot()
+        ctx = await _run_light(market_context, snapshot) or {}
+        daily = ctx.get("daily") or []
+        temp = float(ctx.get("temp") if ctx.get("temp") is not None else 50.0)
+
+        limitdown_share = None
+        if snapshot:
+            severe = total = 0
+            for q in snapshot.values():
+                pct = q.get("change_percent")
+                if pct is None:
+                    pct = q.get("pct_chg")
+                if pct is None:
+                    continue
+                total += 1
+                if float(pct) <= -9.0:
+                    severe += 1
+            if total >= 500:
+                limitdown_share = severe / total
+
+        # 破位广度：全市场跌破 MA10&MA20 占比（结构性下跌强度）。复用卖出扫描缓存，
+        # 缓存冷时才现算一次 breakdown_metrics（单次窗口查询，秒级）
+        def _breakdown_share():
+            from quantcore.quant.local_store import get_local_store
+            cached = _RISK_SCAN_CACHE.get("data")
+            import time as _t
+            if cached and _t.time() - _RISK_SCAN_CACHE.get("at", 0) < 600 and cached.get("universe"):
+                return (cached.get("breakdown_count") or 0) / cached["universe"]
+            metrics = get_local_store().breakdown_metrics()
+            if not metrics:
+                return None
+            broke = sum(1 for m in metrics.values()
+                        if m["close"] > 0 and m["close"] < m["ma10"] and m["close"] < m["ma20"])
+            return broke / len(metrics)
+        try:
+            breakdown_share = await _run_light(_breakdown_share)
+        except Exception:
+            breakdown_share = None
+
+        gauge = market_risk_gauge(daily, temp, limitdown_share=limitdown_share,
+                                  breakdown_share=breakdown_share, cold_excess=_cold_excess())
+        # 环境标签与横幅同源，一并回传方便前端对齐
+        gauge["market_state"] = ctx.get("state")
+        gauge["as_of"] = ctx.get("as_of")
+        gauge["intraday"] = ctx.get("intraday")
+        return gauge
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+_RISK_SCAN_CACHE: dict = {}
+
+
+@router.get("/risk-scan")
+async def quant_risk_scan(limit: int = 200):
+    """全市场卖出信号扫描：破位下行（跌破 MA10/MA20）+ 问题股（ST/退市/预亏），10 分钟缓存。"""
+    import time as _time
+    cached = _RISK_SCAN_CACHE.get("data")
+    if cached and _time.time() - _RISK_SCAN_CACHE.get("at", 0) < 600:
+        return cached
+
+    def _run():
+        from quantcore.quant.local_store import get_local_store
+        from quantcore.quant.risk_alert import scan_sell_signals
+        store = get_local_store()
+        metrics = store.breakdown_metrics()
+        names = {str(m.get("symbol")): str(m.get("name") or "") for m in store.load_meta()}
+        try:
+            bad = store.load_bad_forecast_symbols()
+        except Exception:
+            bad = set()
+        result = scan_sell_signals(metrics, names, bad_forecast=bad, limit=limit)
+        result["as_of"] = ""
+        try:
+            result["as_of"] = store.latest_real_bar_date() or ""
+        except Exception:
+            pass
+        result["universe"] = len(metrics)
+        return result
+
+    try:
+        data = await _run_light(_run)
+        _RISK_SCAN_CACHE["data"], _RISK_SCAN_CACHE["at"] = data, _time.time()
+        return data
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/picks/stats")
 async def quant_picks_stats(days: int = 30, pool: str = ""):
     """选股留痕复盘：各池 T+1/T+3/T+5 真实胜率与平均收益（数据来自每日扫描自动留痕）。"""

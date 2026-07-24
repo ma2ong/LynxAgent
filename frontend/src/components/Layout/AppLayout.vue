@@ -24,6 +24,7 @@
         class="menu"
         @select="mobileMenuOpen = false"
       >
+        <el-menu-item index="/dashboard"><el-icon><HomeFilled /></el-icon><span>首页</span></el-menu-item>
         <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
         <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
         <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
@@ -63,7 +64,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   TrendCharts, Star, SwitchButton,
   DocumentChecked, Menu,
-  MagicStick, Medal, Setting, DataLine, Sunrise, DataAnalysis, Histogram, Warning,
+  MagicStick, Medal, Setting, DataLine, Sunrise, DataAnalysis, Histogram, Warning, HomeFilled,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'
@@ -74,7 +75,7 @@ const router = useRouter()
 
 // 需要保活的搜索类页面（组件 name 必须与此一致）。个股深研/复盘不保活：
 // 深研每次点开都要跟着新代码重新分析，不能复用上一只票的旧结果。
-const CACHED_VIEWS = ['QuantPage', 'CallAuctionPage', 'LimitUpPage', 'HeatmapPage', 'RiskAlertPage']
+const CACHED_VIEWS = ['DashboardPage', 'QuantPage', 'CallAuctionPage', 'LimitUpPage', 'HeatmapPage', 'RiskAlertPage']
 
 const billingInfo = ref<BillingMe | null>(null)
 const mobileMenuOpen = ref(false)

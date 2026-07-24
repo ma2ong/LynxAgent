@@ -9,7 +9,8 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/components/Layout/AppLayout.vue'),
     meta: { requiresAuth: true },
     children: [
-      { path: '', redirect: '/quant' },
+      { path: '', redirect: '/dashboard' },
+      { path: 'dashboard', name: 'dashboard', component: () => import('@/views/Dashboard/Index.vue') },
       { path: 'limit-up', name: 'limit-up', component: () => import('@/views/LimitUp/Index.vue') },
       { path: 'heatmap', name: 'heatmap', component: () => import('@/views/Heatmap/Index.vue') },
       { path: 'call-auction', name: 'call-auction', component: () => import('@/views/CallAuction/Index.vue') },
@@ -38,7 +39,7 @@ router.beforeEach(async (to) => {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
   if (to.name === 'login' && token) {
-    return { name: 'quant' }
+    return { name: 'dashboard' }
   }
   if (to.meta.requiresAdmin) {
     const { loadCurrentUser } = await import('@/stores/user')

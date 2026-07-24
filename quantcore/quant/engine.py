@@ -16,7 +16,7 @@ from .datalake import AKShareDataLake
 from .local_store import get_local_store
 from .screening import REASON_LABELS, exclusion_reason
 from .factor_agent import FactorResearchAgent
-from .factors import composite_score, compute_factor_scores, indicator_snapshot, latest_adx, latest_atr, ml_feature_snapshot, risk_metrics, signal_from_score, swing_short_score, trade_plan
+from .factors import blend_intraday_score, composite_score, compute_factor_scores, indicator_snapshot, intraday_strength_score, latest_adx, latest_atr, ml_feature_snapshot, risk_metrics, signal_from_score, swing_short_score, trade_plan
 from .hmm import multi_asset_hmm
 from .integrations import integration_capabilities, kronos_style_forecast, recognize_patterns, run_akquant_backtest_adapter
 from .models import BacktestResult, ForecastResult, PatternRecognitionResult, QuantAnalysisResult, QuantPick
@@ -118,6 +118,12 @@ def _fetch_tencent_quote_chunk(chunk: List[str]) -> Dict[str, Dict[str, object]]
             "amount": _safe_float(fields[37], 0) * 10000 if len(fields) > 37 else 0,
             "turnover_rate": _safe_float(fields[38], 0) if len(fields) > 38 else 0,
             "volume_ratio": _safe_float(fields[49], 0) if len(fields) > 49 else 0,
+            "updated_at": (
+                f"{fields[30][0:4]}-{fields[30][4:6]}-{fields[30][6:8]} "
+                f"{fields[30][8:10]}:{fields[30][10:12]}:{fields[30][12:14]}"
+                if len(fields) > 30 and len(fields[30]) >= 14
+                else ""
+            ),
         }
     return out
 
@@ -546,20 +552,42 @@ class QuantEngine:
         errors: Dict[str, str] = {}
         symbols = [str(meta.get("symbol") or "").strip().zfill(6) for meta in pool]
         quote_map = _fetch_tencent_quotes(symbols)
+        ranked_amounts = sorted(
+            (
+                _safe_float(quote.get("amount"), 0),
+                symbol,
+            )
+            for symbol, quote in quote_map.items()
+            if _safe_float(quote.get("amount"), 0) > 0
+        )
+        amount_percentiles = {
+            symbol: (rank + 1) / len(ranked_amounts) * 100
+            for rank, (_, symbol) in enumerate(ranked_amounts)
+        } if ranked_amounts else {}
 
         _FACTOR_LABELS = {"trend": "趋势", "momentum": "动量", "macd": "MACD",
                           "bollinger": "布林位置", "capital_flow": "资金流",
-                          "rsi": "RSI", "risk_control": "风控", "liquidity": "流动性"}
+                          "rsi": "RSI", "risk_control": "风控", "liquidity": "流动性",
+                          "intraday_strength": "盘中强度"}
 
         def _build_item(meta: Dict[str, object], scored: Dict[str, object]) -> Dict[str, object]:
             symbol = str(scored["symbol"])
             quote = quote_map.get(symbol, {})
             rt_amount = _safe_float(quote.get("amount"), 0)
-            smart_score = float(scored["score"])
-            factors: Dict[str, float] = scored["factors"]
+            base_score = float(scored["score"])
+            factors: Dict[str, float] = dict(scored["factors"])
+            has_realtime = _safe_float(quote.get("price"), 0) > 0
+            intraday_score = intraday_strength_score(
+                _safe_float(quote.get("pct_chg"), 0),
+                amount_percentiles.get(symbol, 0),
+            ) if has_realtime else base_score
+            smart_score = blend_intraday_score(base_score, intraday_score) if has_realtime else base_score
+            factors["intraday_strength"] = intraday_score
             close_price = _safe_float(quote.get("price"), 0) or float(scored["close_local"] or 0)
             top_factors = sorted(factors.items(), key=lambda kv: -kv[1])[:3]
-            reasons = [f"结构因子分 {smart_score:.0f}（回放验证口径）"]
+            reasons = [
+                f"综合分 {smart_score:.0f}（日K结构 {base_score:.0f} + 盘中强度 {intraday_score:.0f}）"
+            ]
             reasons += [f"{_FACTOR_LABELS.get(k, k)} {v:.0f}" for k, v in top_factors]
             reasons.append(f"成交额 {max(rt_amount, float(scored['amount_local'] or 0)) / 1e8:.2f}亿")
             return {
@@ -569,6 +597,8 @@ class QuantEngine:
                 "market": meta.get("market") or "A股",
                 "score": smart_score,
                 "quant_score": smart_score,
+                "daily_structure_score": round(base_score, 2),
+                "intraday_strength_score": round(intraday_score, 2),
                 "signal": signal_from_score(smart_score),
                 "close": close_price,
                 "pct_chg": _safe_float(quote.get("pct_chg"), 0),
@@ -665,11 +695,17 @@ class QuantEngine:
             pass
 
         return _json_safe({
-            "source": f"quant-engine-smart-pool-v3-factor:{pool_source}",
+            "source": f"quant-engine-smart-pool-v4-intraday:{pool_source}",
             "universe_size": len(pool),
             "analyzed": len(items),
             "items": final_items,
             "market_context": market_context(),
+            "daily_as_of": get_local_store().latest_real_bar_date(),
+            "realtime_as_of": max(
+                (str(quote.get("updated_at") or "") for quote in quote_map.values()),
+                default="",
+            ),
+            "ranking_basis": "日K结构分78% + 盘中涨跌和成交活跃度22%；每次手动生成强制重新计算。",
             "errors": errors,
         })
 

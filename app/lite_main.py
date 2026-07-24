@@ -2676,24 +2676,37 @@ async def _compute_lite_smart_pool(
     limit: int = 30,
     universe_limit: int = 500,
     task_id: str | None = None,
+    force_refresh: bool = False,
 ) -> dict[str, Any]:
+    from quantcore.quant.local_store import get_local_store
+
     preset = SMART_POOL_RECOMMENDER
     safe_limit = max(5, min(limit, 50))
     # 全市场评分（与回放口径一致：回放在全市场上取每期 top-N）。v3 结构因子分走进程池，
     # 3700 只约 32 秒，5000 只的上限扛得住；旧的 1200 截断会让线上池和回放验证的池不是一回事。
     safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
-    cache_key = f"smart-pool:factor-v3-confluence:{strategy}:{safe_limit}:{safe_universe}"
-    _smart_pool_task_update(task_id, progress=5, phase="cache", message="检查最近智能推荐缓存")
-    cached = _cache_get(cache_key, 900)
-    if cached:
-        _smart_pool_task_update(task_id, progress=95, phase="realtime", message="缓存命中，刷新实时价格")
-        return await _enrich_smart_pool_realtime(cached)
-    persistent_cached = _persistent_cache_get(cache_key, 3600)
-    if persistent_cached:
-        _cache_set(cache_key, persistent_cached)
-        _smart_pool_task_update(task_id, progress=95, phase="realtime", message="历史缓存命中，刷新实时价格")
-        return await _enrich_smart_pool_realtime(persistent_cached)
+    daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
+    cache_key = (
+        f"smart-pool:factor-v4-intraday:{daily_as_of}:"
+        f"{strategy}:{safe_limit}:{safe_universe}"
+    )
+    _smart_pool_task_update(
+        task_id,
+        progress=5,
+        phase="cache",
+        message="手动刷新：跳过旧名单缓存" if force_refresh else "检查最近智能推荐缓存",
+    )
+    if not force_refresh:
+        cached = _cache_get(cache_key, 900)
+        if cached:
+            _smart_pool_task_update(task_id, progress=95, phase="realtime", message="缓存命中，刷新实时价格")
+            return await _enrich_smart_pool_realtime(cached)
+        persistent_cached = _persistent_cache_get(cache_key, 3600)
+        if persistent_cached:
+            _cache_set(cache_key, persistent_cached)
+            _smart_pool_task_update(task_id, progress=95, phase="realtime", message="历史缓存命中，刷新实时价格")
+            return await _enrich_smart_pool_realtime(persistent_cached)
 
     # 短线波段档：6 维共振低吸选股，独立于动量/AI 因子路径。
     if strategy == "swing_short":
@@ -2760,6 +2773,8 @@ async def _compute_lite_smart_pool(
                 "raw_score": score,
                 "score": display_score,
                 "quant_score": score,
+                "daily_structure_score": to_float(raw.get("daily_structure_score"), score),
+                "intraday_strength_score": to_float(raw.get("intraday_strength_score"), score),
                 "ai_factor_score": round(ai_factor_score, 1),
                 "ai_factor_rank": ai_factor.get("rank") if ai_factor else None,
                 "ai_factor_source": "lightgbm_topk" if ai_factor else "ml_feature_proxy",
@@ -2796,6 +2811,10 @@ async def _compute_lite_smart_pool(
                 "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
                 "universe_size": quant_pool.get("universe_size") or len(items),
                 "analyzed": quant_pool.get("analyzed") or len(items),
+                "daily_as_of": quant_pool.get("daily_as_of") or daily_as_of,
+                "realtime_as_of": quant_pool.get("realtime_as_of") or "",
+                "ranking_basis": quant_pool.get("ranking_basis") or "",
+                "force_refreshed": force_refresh,
                 "items": items,
                 "ai_factor": {
                     "status": ai_factor_pool.get("status"),
@@ -2829,6 +2848,7 @@ async def _compute_lite_smart_pool(
     candidates_by_symbol = {item["symbol"]: item for item in _smart_pool_candidates(events)}
     for item in ai_factor_pool.get("picks") or []:
         candidates_by_symbol.setdefault(item["symbol"], item)
+    realtime_snapshot: dict[str, dict[str, Any]] = {}
     try:
         realtime_snapshot = await asyncio.wait_for(
             asyncio.to_thread(_load_realtime_quotes_snapshot, 10), timeout=10.0
@@ -3066,6 +3086,12 @@ async def _compute_lite_smart_pool(
         "strategy": "all_market_recommend",
         "preset": preset,
         "updated_at": datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S"),
+        "daily_as_of": daily_as_of,
+        "realtime_as_of": datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S")
+        if realtime_snapshot
+        else "",
+        "ranking_basis": "日K结构 + 盘中涨跌与成交活跃度综合重排",
+        "force_refreshed": force_refresh,
         "universe_size": len(candidates),
         "ai_factor": {
             "status": ai_factor_pool.get("status"),
@@ -3088,10 +3114,13 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
     return await _compute_lite_smart_pool(strategy, limit, universe_limit)
 
 
-async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int, universe_limit: int) -> None:
+async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int,
+                                    universe_limit: int, force_refresh: bool = True) -> None:
     try:
         _smart_pool_task_update(task_id, status="running", progress=2, phase="queued", message="任务已进入后台")
-        result = await _compute_lite_smart_pool(strategy, limit, universe_limit, task_id=task_id)
+        result = await _compute_lite_smart_pool(
+            strategy, limit, universe_limit, task_id=task_id, force_refresh=force_refresh
+        )
         lite_smart_pool_tasks[task_id].update(
             {
                 "status": "completed",
@@ -3118,7 +3147,8 @@ async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int, uni
 
 
 @app.post("/api/lite/smart-pool/tasks")
-async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 30, universe_limit: int = 500):
+async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 30,
+                                     universe_limit: int = 500, force_refresh: bool = True):
     safe_limit = max(5, min(limit, 50))
     # 与 _compute_lite_smart_pool 同口径：全市场评分，才和回放验证的池是同一个池
     safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
@@ -3129,6 +3159,7 @@ async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 30
             and existing.get("strategy") == strategy
             and existing.get("limit") == safe_limit
             and existing.get("universe_limit") == safe_universe
+            and bool(existing.get("force_refresh", True)) == force_refresh
         ):
             return {"success": True, "data": existing, "message": "reused"}
     _smart_pool_task_cleanup()
@@ -3143,10 +3174,15 @@ async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 30
         "strategy": strategy,
         "limit": safe_limit,
         "universe_limit": safe_universe,
+        "force_refresh": force_refresh,
         "created_at": now,
         "updated_at": now,
     }
-    asyncio.create_task(_run_lite_smart_pool_task(task_id, strategy, safe_limit, safe_universe))
+    asyncio.create_task(
+        _run_lite_smart_pool_task(
+            task_id, strategy, safe_limit, safe_universe, force_refresh=force_refresh
+        )
+    )
     return {"success": True, "data": lite_smart_pool_tasks[task_id], "message": "started"}
 
 
@@ -3326,7 +3362,7 @@ async def lite_call_auction(
     # 形态（抢筹/诱多/洗盘/分歧）。只算候选池这十几只——全市场形态计数对决策没有用处，
     # 而且要几千次请求。盘后照样能算，不依赖后端在竞价窗口在线。
     try:
-        from quantcore.quant.auction_tape import classify_symbols, tape_summary
+        from quantcore.quant.auction_tape import classify_symbols, gate_candidates, tape_summary
         codes = [str(c.get("code") or "") for c in (result.get("buy_candidates") or [])]
         patterns = await asyncio.to_thread(classify_symbols, codes)
         tape = tape_summary(patterns)
@@ -3335,10 +3371,13 @@ async def lite_call_auction(
             "resolved": tape["resolved"], "pattern_counts": tape["pattern_counts"],
             "note": "四形态来自当日 09:15-09:25 逐分钟虚拟撮合价，盘中盘后均可回溯。",
         }
-        for c in result.get("buy_candidates") or []:
-            pat = patterns.get(str(c.get("code") or "").zfill(6))
-            if pat and pat.get("pattern") != "insufficient":
-                c["auction_pattern"] = pat
+        allowed, rejected = gate_candidates(result.get("buy_candidates") or [], patterns)
+        result["buy_candidates"] = allowed
+        result["auction_rejected"] = rejected
+        result["auction_gate_reason"] = (
+            f"四形态硬闸门排除 {len(rejected)} 只：仅主力抢筹/洗盘低吸保留为买入候选；"
+            "诱多出货、多空分歧、方向不明或数据不足只列入风险观察。"
+        )
     except Exception:
         pass
 

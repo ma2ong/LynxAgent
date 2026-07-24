@@ -2,12 +2,59 @@
 
 轨迹取自东财盘前分时（09:15-09:25 逐分钟虚拟撮合价），竞价段无成交量，故只用价格判形态。
 """
-from quantcore.quant.auction_tape import classify_trajectory, tape_summary
+import requests
+
+from quantcore.quant.auction_tape import (
+    classify_trajectory,
+    fetch_auction_trend,
+    gate_candidates,
+    tape_summary,
+)
 
 
 def _traj(prices):
     """[(hh:mm, 虚拟撮合价), …]，09:15 起逐分钟。"""
     return [(f"09:{15 + i:02d}", p) for i, p in enumerate(prices)]
+
+
+def test_fetch_falls_back_when_primary_endpoint_is_unreachable(monkeypatch):
+    """主 HTTPS 域名被代理/运营商断开时，必须继续尝试可用镜像，不能把整池判成数据不足。"""
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": {
+                    "preClose": 10.0,
+                    "trends": [
+                        "2026-07-24 09:15,10.0,10.0,10.0,10.0,0,0,10.0",
+                        "2026-07-24 09:16,10.2,10.1,10.2,10.1,0,0,10.0",
+                        "2026-07-24 09:17,10.3,10.2,10.3,10.2,0,0,10.0",
+                        "2026-07-24 09:18,10.4,10.3,10.4,10.3,0,0,10.0",
+                    ],
+                }
+            }
+
+    class Session:
+        trust_env = True
+
+        def get(self, url, **kwargs):
+            calls.append((url, self.trust_env))
+            if len(calls) == 1:
+                raise requests.ConnectionError("primary unavailable")
+            return Response()
+
+    monkeypatch.setattr("quantcore.quant.auction_tape.requests.Session", Session)
+    prev_close, points = fetch_auction_trend("600000")
+
+    assert prev_close == 10.0
+    assert points == [("09:16", 10.1), ("09:17", 10.2), ("09:18", 10.3)]
+    assert len(calls) == 2
+    assert calls[0][1] is True
+    assert calls[1][1] is False
 
 
 def test_insufficient_samples():
@@ -94,3 +141,25 @@ def test_summary_counts_only_given_candidates():
     assert summary["available"] is True
 
     assert tape_summary({"600001": results["600001"]})["available"] is False
+
+
+def test_candidate_gate_only_keeps_bullish_auction_patterns():
+    candidates = [
+        {"code": "600001", "rank": 1},
+        {"code": "600002", "rank": 2},
+        {"code": "600003", "rank": 3},
+        {"code": "600004", "rank": 4},
+    ]
+    patterns = {
+        "600001": {"pattern": "accumulation"},
+        "600002": {"pattern": "shakeout"},
+        "600003": {"pattern": "distribution"},
+        "600004": {"pattern": "insufficient"},
+    }
+
+    allowed, rejected = gate_candidates(candidates, patterns)
+
+    assert [item["code"] for item in allowed] == ["600001", "600002"]
+    assert [item["rank"] for item in allowed] == [1, 2]
+    assert [item["code"] for item in rejected] == ["600003", "600004"]
+    assert rejected[0]["auction_pattern"]["pattern"] == "distribution"

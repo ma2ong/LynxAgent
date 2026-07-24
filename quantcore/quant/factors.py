@@ -193,6 +193,20 @@ def composite_score(factors: Dict[str, float]) -> float:
     return round(_clip_score(score), 2)
 
 
+def intraday_strength_score(pct_chg: float, amount_percentile: float) -> float:
+    """盘中强度：价格表现为主、成交活跃度为辅，输出 0-100。"""
+    price_score = _clip_score(50.0 + float(pct_chg or 0) * 5.0)
+    activity_score = _clip_score(float(amount_percentile or 0))
+    return round(price_score * 0.75 + activity_score * 0.25, 2)
+
+
+def blend_intraday_score(base_score: float, intraday_score: float,
+                         intraday_weight: float = 0.22) -> float:
+    """把实时横截面强度并入日K结构分，使盘中重新生成时能够真实换榜。"""
+    weight = max(0.0, min(float(intraday_weight), 0.4))
+    return round(_clip_score(float(base_score) * (1 - weight) + float(intraday_score) * weight), 2)
+
+
 def smart_factor_chunk(payload: Dict[str, object]) -> list:
     """进程池 worker：一段股票的结构因子评分（绕开 GIL；线程池实测 3700 只近乎串行 4 分钟）。
 

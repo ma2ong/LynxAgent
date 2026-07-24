@@ -10,6 +10,7 @@ from typing import Any
 from unittest.mock import patch
 
 import app.lite_main as lite_main
+from quantcore.quant.factors import blend_intraday_score, intraday_strength_score
 
 
 def _fake_pool(scores: list[float]) -> dict[str, Any]:
@@ -65,3 +66,43 @@ def test_pool_ranked_desc_and_capped_by_limit():
     data = _compute([70.0, 90.0, 50.0])
     scores = [float(i["quant_score"]) for i in data["items"]]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_intraday_strength_changes_same_daily_structure_rank():
+    base = 80.0
+    weak = blend_intraday_score(base, intraday_strength_score(-5.0, 70.0))
+    strong = blend_intraday_score(base, intraday_strength_score(5.0, 70.0))
+
+    assert strong > weak + 8
+
+
+def test_manual_generation_bypasses_old_pool_cache():
+    pool = _fake_pool([88.0, 82.0])
+    stale = {
+        "success": True,
+        "data": {
+            "source": "stale-cache",
+            "universe_size": 1,
+            "items": [{"symbol": "000001", "name": "旧名单", "score": 99}],
+        },
+    }
+    with patch.object(lite_main, "_cache_get", return_value=stale) as memory_cache, \
+         patch.object(lite_main, "_persistent_cache_get", return_value=stale) as disk_cache, \
+         patch.object(lite_main, "_cache_set"), \
+         patch.object(lite_main, "_persistent_cache_set"), \
+         patch.object(lite_main, "run_scan", new=_async_return(pool)), \
+         patch.object(lite_main, "_load_ai_factor_pool", return_value={"status": "pending", "scores": {}}), \
+         patch.object(lite_main, "_enrich_smart_pool_industries", new=_async_identity()):
+        result = asyncio.run(
+            lite_main._compute_lite_smart_pool(
+                limit=20,
+                universe_limit=5000,
+                force_refresh=True,
+            )
+        )
+
+    data = result.get("data", result)
+    assert data["force_refreshed"] is True
+    assert {item["symbol"] for item in data["items"]} == {"600001", "600002"}
+    memory_cache.assert_not_called()
+    disk_cache.assert_not_called()

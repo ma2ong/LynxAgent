@@ -39,6 +39,22 @@
       <div v-if="coldEvidence" class="mb-evidence">{{ coldEvidence }}</div>
     </section>
 
+    <el-alert
+      v-if="riskLocked && riskAlert"
+      type="error"
+      show-icon
+      :closable="false"
+      class="risk-lock-alert"
+    >
+      <template #title>
+        当前风险等级「{{ riskAlert.level }}」：智能推荐已切换为观察名单
+      </template>
+      <div class="risk-lock-body">
+        <span>{{ riskAlert.action }}</span>
+        <el-button size="small" type="danger" plain @click="router.push('/risk-alert')">查看风险明细</el-button>
+      </div>
+    </el-alert>
+
     <section class="page-head">
       <div>
         <h1>智能选股</h1>
@@ -109,9 +125,11 @@
             <div class="smart-actions">
               <el-button type="success" size="large" native-type="button" :loading="smartPoolLoading" @click="loadSmartPool">
                 <el-icon><Search /></el-icon>
-                一键智能推荐
+                {{ riskLocked ? '生成强势观察名单' : '一键智能推荐' }}
               </el-button>
-              <span v-if="smartPoolResult?.items.length">已推荐 {{ smartPoolResult.items.length }} 只</span>
+              <span v-if="smartPoolResult?.items.length">
+                {{ riskLocked ? '观察' : '已推荐' }} {{ smartPoolResult.items.length }} 只
+              </span>
               <button class="winrate-chip" type="button" @click="router.push('/review')">{{ poolWinText('smart') }}</button>
             </div>
           </section>
@@ -137,8 +155,14 @@
             </div>
             <div v-if="smartPoolResult?.items.length" class="mini-summary">
               <span>自动候选 {{ smartPoolResult.universe_size }} 只</span>
-              <b>推荐 {{ smartPoolResult.items.length }} 只</b>
+              <b>{{ riskLocked ? '观察名单' : '推荐' }} {{ smartPoolResult.items.length }} 只</b>
               <span v-if="smartPoolResult.analyzed">已分析 {{ smartPoolResult.analyzed }} 只</span>
+              <el-tag v-if="smartPoolResult.daily_as_of" size="small" type="info" effect="plain">
+                日K {{ smartPoolResult.daily_as_of }}
+              </el-tag>
+              <el-tag v-if="smartPoolResult.realtime_as_of" size="small" type="success" effect="plain">
+                盘中重排 {{ smartPoolResult.realtime_as_of }}
+              </el-tag>
               <el-tag
                 v-if="smartPoolResult.ai_factor"
                 size="small"
@@ -156,7 +180,7 @@
                   批量分析
                 </el-button>
                 <el-button size="small" type="success" plain @click="addAllSmartToFavorites">
-                  一键全选加入自选
+                  全部加入观察
                 </el-button>
               </div>
             </div>
@@ -210,7 +234,12 @@
               </el-table-column>
               <el-table-column label="买卖计划" width="156">
                 <template #default="{ row }">
-                  <div v-if="row.trade_plan && row.trade_plan.buy_price" class="trade-plan-cell">
+                  <div v-if="riskLocked" class="trade-plan-cell risk-paused">
+                    <el-tag size="small" type="danger" effect="dark">暂停新增买入</el-tag>
+                    <span>当前仅作为观察名单</span>
+                    <em>市场风险降至警惕/安全后再显示买入计划</em>
+                  </div>
+                  <div v-else-if="row.trade_plan && row.trade_plan.buy_price" class="trade-plan-cell">
                     <el-tag v-if="row.limit_up" size="small" type="danger" effect="dark" class="limit-up-tag">
                       已涨停 · 买不到此价
                     </el-tag>
@@ -650,7 +679,8 @@ import {
   type QuantSmartPoolResult,
   type QuantSmartPoolTask,
   type QuantStockPoolResult,
-  type MarketContext
+  type MarketContext,
+  type RiskAlert
 } from '@/api/quant'
 import { panelApi, type PanelScore } from '@/api/quant'
 
@@ -925,6 +955,8 @@ const ensureDataBeforeScan = async () => {
 }
 
 const marketCtx = ref<MarketContext | null>(null)
+const riskAlert = ref<RiskAlert | null>(null)
+const riskLocked = computed(() => ['危险', '极危'].includes(riskAlert.value?.level || ''))
 const ctxTone = computed(() => {
   const s = marketCtx.value?.state
   return s === '偏暖' ? 'warm' : s === '偏冷' ? 'cold' : 'flat'
@@ -967,6 +999,7 @@ const poolWinText = (pool: string) => {
 
 onMounted(async () => {
   quantApi.marketContext().then((ctx) => { marketCtx.value = ctx || null; loadColdEvidence() }).catch(() => {})
+  quantApi.riskAlert().then((alert) => { riskAlert.value = alert || null }).catch(() => {})
   quantApi.picksStats(30).then((res) => {
     const map: Record<string, { win_rate: number | null; samples: number }> = {}
     for (const p of res?.pools || []) {
@@ -1433,6 +1466,17 @@ const openChart = async (row: any) => {
   }
 }
 
+.risk-lock-alert {
+  margin: 4px 0 8px;
+}
+.risk-lock-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .ctx-warm {
   border-color: #ffb3a7;
   border-left-color: #ef232a;
@@ -1828,6 +1872,10 @@ const openChart = async (row: any) => {
     margin-bottom: 2px;
   }
   .tp-warn { color: var(--el-color-danger); }
+  &.risk-paused {
+    color: var(--el-color-danger);
+    em { color: var(--el-color-danger-light-3); }
+  }
 }
 
 .mini-summary {

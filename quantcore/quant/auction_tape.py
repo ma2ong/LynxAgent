@@ -22,7 +22,11 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import requests
 
-_EM_TRENDS_URL = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"
+_EM_TRENDS_URLS = (
+    ("https://push2.eastmoney.com/api/qt/stock/trends2/get", True),
+    ("https://push2his.eastmoney.com/api/qt/stock/trends2/get", False),
+    ("http://push2his.eastmoney.com/api/qt/stock/trends2/get", False),
+)
 _EM_UT = "fa5fd1943c7b386f172d6893dbfba10b"
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
 _AUCTION_MINUTES = {f"09:{m:02d}" for m in range(15, 26)}
@@ -47,13 +51,19 @@ def fetch_auction_trend(code: str, timeout: float = 8.0) -> Tuple[float, List[Tu
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
         "ut": _EM_UT, "ndays": 1, "iscr": 1, "iscca": 0, "secid": _secid(code),
     }
-    session = requests.Session()
-    session.trust_env = False  # 本机代理会挡掉东财，见 CLAUDE.md 取数约定
-    try:
-        resp = session.get(_EM_TRENDS_URL, params=params, headers=_HEADERS, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json().get("data") or {}
-    except (requests.RequestException, ValueError):
+    data = {}
+    for url, trust_env in _EM_TRENDS_URLS:
+        session = requests.Session()
+        session.trust_env = trust_env
+        try:
+            resp = session.get(url, params=params, headers=_HEADERS, timeout=timeout)
+            resp.raise_for_status()
+            data = resp.json().get("data") or {}
+            if data:
+                break
+        except (requests.RequestException, ValueError):
+            continue
+    if not data:
         return 0.0, []
 
     try:
@@ -168,6 +178,26 @@ def classify_symbols(codes: Sequence[str], max_workers: int = 12) -> Dict[str, d
             for code, res in pool.map(_one, missing):
                 cache[code] = res
     return {c: cache[c] for c in wanted if c in cache}
+
+
+def gate_candidates(
+    candidates: Sequence[dict],
+    patterns: Dict[str, dict],
+) -> Tuple[List[dict], List[dict]]:
+    """仅保留主力抢筹和洗盘低吸，其余形态进入风险观察。"""
+    bullish_patterns = {"accumulation", "shakeout"}
+    allowed: List[dict] = []
+    rejected: List[dict] = []
+    for raw_candidate in candidates:
+        candidate = dict(raw_candidate)
+        pattern = patterns.get(str(candidate.get("code") or "").zfill(6))
+        if pattern:
+            candidate["auction_pattern"] = pattern
+        target = allowed if (pattern or {}).get("pattern") in bullish_patterns else rejected
+        target.append(candidate)
+    for rank, candidate in enumerate(allowed, start=1):
+        candidate["rank"] = rank
+    return allowed, rejected
 
 
 def tape_summary(results: Optional[Dict[str, dict]] = None) -> dict:

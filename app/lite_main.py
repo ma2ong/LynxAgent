@@ -2688,7 +2688,7 @@ async def _compute_lite_smart_pool(
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     cache_key = (
-        f"smart-pool:factor-v4-intraday:{daily_as_of}:"
+        f"smart-pool:factor-v5-structure:{daily_as_of}:"
         f"{strategy}:{safe_limit}:{safe_universe}"
     )
     _smart_pool_task_update(
@@ -3090,7 +3090,7 @@ async def _compute_lite_smart_pool(
         "realtime_as_of": datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S")
         if realtime_snapshot
         else "",
-        "ranking_basis": "日K结构 + 盘中涨跌与成交活跃度综合重排",
+        "ranking_basis": "按日K结构因子分排序（回放验证口径）；盘中强度仅作参考展示，不参与排序",
         "force_refreshed": force_refresh,
         "universe_size": len(candidates),
         "ai_factor": {

@@ -16,7 +16,7 @@ from .datalake import AKShareDataLake
 from .local_store import get_local_store
 from .screening import REASON_LABELS, exclusion_reason
 from .factor_agent import FactorResearchAgent
-from .factors import blend_intraday_score, composite_score, compute_factor_scores, indicator_snapshot, intraday_strength_score, latest_adx, latest_atr, ml_feature_snapshot, risk_metrics, signal_from_score, swing_short_score, trade_plan
+from .factors import composite_score, compute_factor_scores, indicator_snapshot, intraday_strength_score, latest_adx, latest_atr, ml_feature_snapshot, risk_metrics, signal_from_score, swing_short_score, trade_plan
 from .hmm import multi_asset_hmm
 from .integrations import integration_capabilities, kronos_style_forecast, recognize_patterns, run_akquant_backtest_adapter
 from .models import BacktestResult, ForecastResult, PatternRecognitionResult, QuantAnalysisResult, QuantPick
@@ -577,18 +577,23 @@ class QuantEngine:
             base_score = float(scored["score"])
             factors: Dict[str, float] = dict(scored["factors"])
             has_realtime = _safe_float(quote.get("price"), 0) > 0
+            # 盘中强度仅作展示：不并入排序/留痕分。把 22% 动量混进评分等于回到被 A/B 否掉的
+            # 「追涨」口径（旧实时评分中位为负、不显著），还会把弱结构的涨停股排到强结构股
+            # 之上，并让实盘池与回放验证的结构池脱钩、污染复盘胜率。排序与留痕严格用结构分。
             intraday_score = intraday_strength_score(
                 _safe_float(quote.get("pct_chg"), 0),
                 amount_percentiles.get(symbol, 0),
             ) if has_realtime else base_score
-            smart_score = blend_intraday_score(base_score, intraday_score) if has_realtime else base_score
+            smart_score = base_score
             factors["intraday_strength"] = intraday_score
             close_price = _safe_float(quote.get("price"), 0) or float(scored["close_local"] or 0)
-            top_factors = sorted(factors.items(), key=lambda kv: -kv[1])[:3]
-            reasons = [
-                f"综合分 {smart_score:.0f}（日K结构 {base_score:.0f} + 盘中强度 {intraday_score:.0f}）"
-            ]
+            # top 因子只从结构因子里挑，盘中强度不算结构因子
+            structure_factors = {k: v for k, v in factors.items() if k != "intraday_strength"}
+            top_factors = sorted(structure_factors.items(), key=lambda kv: -kv[1])[:3]
+            reasons = [f"结构因子分 {base_score:.0f}（回放验证口径，实盘可回放）"]
             reasons += [f"{_FACTOR_LABELS.get(k, k)} {v:.0f}" for k, v in top_factors]
+            if has_realtime:
+                reasons.append(f"盘中强度 {intraday_score:.0f}（仅参考，不参与排序）")
             reasons.append(f"成交额 {max(rt_amount, float(scored['amount_local'] or 0)) / 1e8:.2f}亿")
             return {
                 "symbol": symbol,
@@ -695,7 +700,7 @@ class QuantEngine:
             pass
 
         return _json_safe({
-            "source": f"quant-engine-smart-pool-v4-intraday:{pool_source}",
+            "source": f"quant-engine-smart-pool-v3-structure:{pool_source}",
             "universe_size": len(pool),
             "analyzed": len(items),
             "items": final_items,
@@ -705,7 +710,7 @@ class QuantEngine:
                 (str(quote.get("updated_at") or "") for quote in quote_map.values()),
                 default="",
             ),
-            "ranking_basis": "日K结构分78% + 盘中涨跌和成交活跃度22%；每次手动生成强制重新计算。",
+            "ranking_basis": "按日K结构因子分排序并留痕（回放验证口径，实盘可回放）；盘中强度、实时价格仅用于排除与展示，不参与排序。",
             "errors": errors,
         })
 

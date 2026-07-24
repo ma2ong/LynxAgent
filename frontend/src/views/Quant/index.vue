@@ -122,7 +122,7 @@
                 日K {{ smartPoolResult.daily_as_of }}
               </el-tag>
               <el-tag v-if="smartPoolResult.realtime_as_of" size="small" type="success" effect="plain">
-                盘中重排 {{ smartPoolResult.realtime_as_of }}
+                实时价 {{ smartPoolResult.realtime_as_of }}
               </el-tag>
               <el-tag
                 v-if="smartPoolResult.ai_factor"

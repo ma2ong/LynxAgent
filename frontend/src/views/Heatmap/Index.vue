@@ -6,6 +6,11 @@
         <p class="sub">
           面积=总市值 · 颜色=当日涨跌幅（红涨绿跌）
           <template v-if="data"> · {{ data.source === 'realtime' ? '实时行情' : '本地日线' }} · {{ data.updated_at }}</template>
+          <template v-if="!currentIndustry && data?.coverage?.classified">
+            · 已归类 {{ data.coverage.classified }} 只<span
+              v-if="(data.coverage.unclassified || 0) > 0"
+              class="cov-note">（未归类 {{ data.coverage.unclassified }} 只，行业源不全暂不计入）</span>
+          </template>
         </p>
       </div>
       <div class="actions">
@@ -123,4 +128,5 @@ onBeforeUnmount(() => {
 .chart-wrap { position: relative; flex: 1; min-height: 520px; }
 .chart { width: 100%; height: 100%; min-height: 520px; }
 .hint { margin: 8px 0 0; font-size: 12px; color: var(--el-text-color-placeholder); }
+.cov-note { color: var(--el-text-color-placeholder); }
 </style>

@@ -820,6 +820,11 @@ export interface HeatmapData {
   items: HeatmapItem[]
   source: string
   updated_at: string
+  coverage?: {
+    classified?: number
+    unclassified?: number
+    unmapped_value_share?: number
+  }
 }
 
 export const heatmapApi = {

@@ -1040,12 +1040,16 @@ def _load_industry_map(ttl_hours: int = 24) -> dict[str, str]:
     except Exception:
         mapping = {}
     if mapping:
-        _industry_map_cache = (now, mapping)
+        # 累积合并而非整体替换：东财分页并发常被限流，单次只回来一部分。直接覆盖会让
+        # 覆盖度在「多→少」间抖动（热力图行业块忽有忽无）；合并保证覆盖度只增不减。
+        merged = dict(_industry_map_cache[1]) if _industry_map_cache else {}
+        merged.update(mapping)
+        _industry_map_cache = (now, merged)
         _industry_fetch_last_failure = None
         try:
             os.makedirs(os.path.dirname(_INDUSTRY_MAP_PATH), exist_ok=True)
             with open(_INDUSTRY_MAP_PATH, "w", encoding="utf-8") as fh:
-                json.dump(mapping, fh, ensure_ascii=False)
+                json.dump(merged, fh, ensure_ascii=False)
         except Exception:
             pass
     else:
@@ -3875,14 +3879,17 @@ async def lite_heatmap(level: str = "industry", industry: str = ""):
         except Exception:
             snapshot = {}
 
+    coverage: dict[str, Any] = {}
     if level == "industry":
+        from quantcore.quant.heatmap import heatmap_coverage
         items = build_heatmap_industry(snapshot, industry_map)
+        coverage = heatmap_coverage(snapshot, industry_map)
     else:
         items = build_heatmap_stocks(snapshot, industry_map, industry.strip())
     payload = {
         "success": True,
         "data": {"level": level, "industry": industry.strip() or None, "items": items,
-                 "source": source, "mapped": len(industry_map),
+                 "source": source, "mapped": len(industry_map), "coverage": coverage,
                  "updated_at": datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S")},
     }
     if items:

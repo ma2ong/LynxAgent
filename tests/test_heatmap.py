@@ -41,7 +41,7 @@ def test_latest_daily_stats_needs_two_bars(store):
     assert "600003" not in store.latest_daily_stats()
 
 
-from quantcore.quant.heatmap import build_heatmap_industry, build_heatmap_stocks
+from quantcore.quant.heatmap import build_heatmap_industry, build_heatmap_stocks, heatmap_coverage
 
 SNAP = {
     # 腾讯口径：total_mv 单位亿
@@ -60,15 +60,24 @@ IND = {"600001": "白酒", "600002": "白酒", "600003": "银行"}  # 600004 未
 def test_build_heatmap_industry_aggregates_and_weights():
     items = build_heatmap_industry(SNAP, IND)
     by_name = {i["name"]: i for i in items}
-    assert set(by_name) == {"白酒", "银行", "其他"}
+    # 「其他」（未归类）不进热力图，否则数千只未归类股会碾压真实行业
+    assert set(by_name) == {"白酒", "银行"}
     baijiu = by_name["白酒"]
     assert baijiu["count"] == 2
     assert baijiu["value"] == 300.0  # 200 + 100 亿
     assert baijiu["pct"] == 3.0      # (5*200 + -1*100) / 300 市值加权
     assert by_name["银行"]["value"] == 500.0   # 5e10 元 -> 500 亿
-    assert by_name["其他"]["value"] == 3.0     # 3e8 成交额 -> 3 亿兜底
-    # 面积降序
-    assert [i["name"] for i in items] == ["银行", "白酒", "其他"]
+    # 面积降序，不含其他
+    assert [i["name"] for i in items] == ["银行", "白酒"]
+
+
+def test_heatmap_coverage_reports_unmapped_honestly():
+    cov = heatmap_coverage(SNAP, IND)
+    # 600001/600002/600003 已归类；600004 未归类；600005 无涨跌幅不计
+    assert cov["classified"] == 3
+    assert cov["unclassified"] == 1
+    # 未归类市值占比 = 3 /(200+100+500+3)
+    assert 0 < cov["unmapped_value_share"] < 0.01
 
 
 def test_build_heatmap_stocks_filters_by_industry():

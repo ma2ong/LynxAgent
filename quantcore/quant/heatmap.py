@@ -40,13 +40,21 @@ def _stock_item(symbol: str, q: Dict) -> Optional[Dict]:
 
 
 def build_heatmap_industry(snapshot: Dict[str, Dict], industry_map: Dict[str, str]) -> List[Dict]:
-    """行业块列表：面积=行业总市值（亿），颜色=市值加权当日涨跌幅，按面积降序。"""
+    """行业块列表：面积=行业总市值（亿），颜色=市值加权当日涨跌幅，按面积降序。
+
+    不含「其他」（未归类）：行业源覆盖不全时，未归类桶会聚起数千只股票、市值总和碾压
+    所有真实行业，把整张热力图变成一块灰色巨块。它不是一个行业，放进来只会误导——
+    宁可只画已归类的行业，覆盖度由接口另行如实报告。
+    """
     groups: Dict[str, List[Dict]] = {}
     for symbol, q in snapshot.items():
         item = _stock_item(symbol, q)
         if item is None:
             continue
-        groups.setdefault(industry_map.get(symbol) or _UNMAPPED, []).append(item)
+        name = industry_map.get(symbol) or _UNMAPPED
+        if name == _UNMAPPED:
+            continue
+        groups.setdefault(name, []).append(item)
     out: List[Dict] = []
     for name, items in groups.items():
         total = sum(i["value"] for i in items)
@@ -58,6 +66,25 @@ def build_heatmap_industry(snapshot: Dict[str, Dict], industry_map: Dict[str, st
                     "amount_yi": round(sum(i["amount_yi"] for i in items), 2)})
     out.sort(key=lambda x: x["value"], reverse=True)
     return out
+
+
+def heatmap_coverage(snapshot: Dict[str, Dict], industry_map: Dict[str, str]) -> Dict[str, float]:
+    """已归类 vs 未归类的诚实覆盖度：股票数 + 未归类市值占比。热力图副标题据此提示。"""
+    classified = unclassified = 0
+    mapped_val = unmapped_val = 0.0
+    for symbol, q in snapshot.items():
+        item = _stock_item(symbol, q)
+        if item is None:
+            continue
+        if industry_map.get(symbol):
+            classified += 1
+            mapped_val += item["value"]
+        else:
+            unclassified += 1
+            unmapped_val += item["value"]
+    total_val = mapped_val + unmapped_val
+    return {"classified": classified, "unclassified": unclassified,
+            "unmapped_value_share": round(unmapped_val / total_val, 4) if total_val > 0 else 0.0}
 
 
 def build_heatmap_stocks(snapshot: Dict[str, Dict], industry_map: Dict[str, str], industry: str) -> List[Dict]:

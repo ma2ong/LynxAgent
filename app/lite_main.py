@@ -3362,7 +3362,7 @@ async def lite_call_auction(
     # 形态（抢筹/诱多/洗盘/分歧）。只算候选池这十几只——全市场形态计数对决策没有用处，
     # 而且要几千次请求。盘后照样能算，不依赖后端在竞价窗口在线。
     try:
-        from quantcore.quant.auction_tape import classify_symbols, gate_candidates, tape_summary
+        from quantcore.quant.auction_tape import classify_symbols, tape_summary
         codes = [str(c.get("code") or "") for c in (result.get("buy_candidates") or [])]
         patterns = await asyncio.to_thread(classify_symbols, codes)
         tape = tape_summary(patterns)
@@ -3371,13 +3371,13 @@ async def lite_call_auction(
             "resolved": tape["resolved"], "pattern_counts": tape["pattern_counts"],
             "note": "四形态来自当日 09:15-09:25 逐分钟虚拟撮合价，盘中盘后均可回溯。",
         }
-        allowed, rejected = gate_candidates(result.get("buy_candidates") or [], patterns)
-        result["buy_candidates"] = allowed
-        result["auction_rejected"] = rejected
-        result["auction_gate_reason"] = (
-            f"四形态硬闸门排除 {len(rejected)} 只：仅主力抢筹/洗盘低吸保留为买入候选；"
-            "诱多出货、多空分歧、方向不明或数据不足只列入风险观察。"
-        )
+        # 四形态是「盘口提示」而非硬筛：买入候选由强势板块+健康高开决定，形态只做每只的
+        # 标注（诱多/分歧标黄提醒）。硬闸门会在多数高开于竞价小幅回落的日子把整张清单清空，
+        # 反而丢掉主要输出，故只标注不剔除。
+        for c in result.get("buy_candidates") or []:
+            pat = patterns.get(str(c.get("code") or "").zfill(6))
+            if pat and pat.get("pattern") != "insufficient":
+                c["auction_pattern"] = pat
     except Exception:
         pass
 

@@ -107,9 +107,7 @@
         <!-- 竞价买入推荐 -->
         <section class="panel">
           <div class="panel-title">竞价买入候选 <em>近段强势板块 · 由强到弱排序，点击进深研</em></div>
-          <div v-if="!data.buy_candidates.length" class="empty">
-            四形态硬闸门后无可买候选——诱多出货/分歧/方向不明不进入买入名单
-          </div>
+          <div v-if="!data.buy_candidates.length" class="empty">当日近段强势板块无符合条件的高开候选（弱势竞价）</div>
           <button
             v-for="c in data.buy_candidates" :key="c.code"
             type="button" class="cand-card" :class="{ top: c.rank === 1 }" @click="openStock(c.code)"
@@ -132,25 +130,10 @@
               <div class="cc-pct up">+{{ c.open_pct }}%</div>
             </div>
           </button>
-          <div v-if="data.auction_rejected?.length" class="rejected-box">
-            <div class="rejected-title">
-              竞价风险排除 <b>{{ data.auction_rejected.length }}</b> 只
-            </div>
-            <button
-              v-for="c in data.auction_rejected"
-              :key="`rejected-${c.code}`"
-              type="button"
-              class="rejected-row"
-              @click="openStock(c.code)"
-            >
-              <span>{{ c.name }} <small>{{ c.code }}</small></span>
-              <el-tag size="small" type="danger" effect="plain">
-                {{ c.auction_pattern?.label || '数据不足' }}
-              </el-tag>
-              <em>{{ c.open_pct >= 0 ? '+' : '' }}{{ c.open_pct }}%</em>
-            </button>
-            <p>{{ data.auction_gate_reason }}</p>
-          </div>
+          <p v-if="data.buy_candidates.length" class="cand-hint">
+            标签为 09:15-09:25 竞价盘口形态：<span class="pat-tag p-dist">诱多出货</span
+            ><span class="pat-tag p-div">多空分歧</span> 为提示而非排除项，仍按板块强度排序，自行结合开盘量价判断。
+          </p>
         </section>
       </div>
 
@@ -304,16 +287,8 @@ onMounted(load)
 .cc-price { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .cc-pct { font-size: 13px; font-weight: 600; }
 
-.rejected-box { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--el-border-color-lighter); }
-.rejected-title { margin-bottom: 8px; font-size: 13px; font-weight: 700; color: var(--el-color-danger); }
-.rejected-row {
-  width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px dashed var(--el-border-color-lighter);
-}
-.rejected-row span { font-size: 13px; font-weight: 600; }
-.rejected-row small { color: var(--el-text-color-secondary); font-variant-numeric: tabular-nums; }
-.rejected-row em { color: var(--el-color-danger); font-style: normal; font-weight: 700; font-variant-numeric: tabular-nums; }
-.rejected-box p { margin: 8px 0 0; color: var(--el-text-color-secondary); font-size: 11px; line-height: 1.6; }
+.cand-hint { margin: 10px 2px 0; font-size: 11px; line-height: 1.7; color: var(--el-text-color-secondary);
+  .pat-tag { margin: 0 2px; vertical-align: middle; } }
 
 .disclaimer { font-size: 11px; color: var(--el-text-color-placeholder); margin: 4px 0 0; }
 

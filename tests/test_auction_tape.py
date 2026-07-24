@@ -7,7 +7,6 @@ import requests
 from quantcore.quant.auction_tape import (
     classify_trajectory,
     fetch_auction_trend,
-    gate_candidates,
     tape_summary,
 )
 
@@ -141,25 +140,3 @@ def test_summary_counts_only_given_candidates():
     assert summary["available"] is True
 
     assert tape_summary({"600001": results["600001"]})["available"] is False
-
-
-def test_candidate_gate_only_keeps_bullish_auction_patterns():
-    candidates = [
-        {"code": "600001", "rank": 1},
-        {"code": "600002", "rank": 2},
-        {"code": "600003", "rank": 3},
-        {"code": "600004", "rank": 4},
-    ]
-    patterns = {
-        "600001": {"pattern": "accumulation"},
-        "600002": {"pattern": "shakeout"},
-        "600003": {"pattern": "distribution"},
-        "600004": {"pattern": "insufficient"},
-    }
-
-    allowed, rejected = gate_candidates(candidates, patterns)
-
-    assert [item["code"] for item in allowed] == ["600001", "600002"]
-    assert [item["rank"] for item in allowed] == [1, 2]
-    assert [item["code"] for item in rejected] == ["600003", "600004"]
-    assert rejected[0]["auction_pattern"]["pattern"] == "distribution"

@@ -180,26 +180,6 @@ def classify_symbols(codes: Sequence[str], max_workers: int = 12) -> Dict[str, d
     return {c: cache[c] for c in wanted if c in cache}
 
 
-def gate_candidates(
-    candidates: Sequence[dict],
-    patterns: Dict[str, dict],
-) -> Tuple[List[dict], List[dict]]:
-    """仅保留主力抢筹和洗盘低吸，其余形态进入风险观察。"""
-    bullish_patterns = {"accumulation", "shakeout"}
-    allowed: List[dict] = []
-    rejected: List[dict] = []
-    for raw_candidate in candidates:
-        candidate = dict(raw_candidate)
-        pattern = patterns.get(str(candidate.get("code") or "").zfill(6))
-        if pattern:
-            candidate["auction_pattern"] = pattern
-        target = allowed if (pattern or {}).get("pattern") in bullish_patterns else rejected
-        target.append(candidate)
-    for rank, candidate in enumerate(allowed, start=1):
-        candidate["rank"] = rank
-    return allowed, rejected
-
-
 def tape_summary(results: Optional[Dict[str, dict]] = None) -> dict:
     """候选池形态概况（供竞价页展示）。results 缺省时用当日缓存里已判过的票。"""
     items: Dict[str, dict] = results if results is not None else dict(_CACHE.get("items") or {})  # type: ignore

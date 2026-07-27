@@ -5,7 +5,7 @@ from fastapi import HTTPException
 
 
 def test_paper_trading_disabled_by_default():
-    from app.lite_main import PAPER_TRADING_ENABLED, require_paper_trading_enabled
+    from app.routers.paper import PAPER_TRADING_ENABLED, require_paper_trading_enabled
 
     assert PAPER_TRADING_ENABLED is False
     with pytest.raises(HTTPException) as exc:

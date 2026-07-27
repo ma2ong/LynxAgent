@@ -123,6 +123,11 @@
                 class="dc-filter" @click="smartDualOnly = !smartDualOnly"
                 :title="'结构因子 + 低位形态双确认，最高把握子集。点击' + (smartDualOnly ? '取消筛选' : '只看双确认')"
               >{{ smartDualOnly ? '✓ ' : '' }}双确认 {{ smartPoolResult.dual_confirm_count }} 只</el-tag>
+              <el-tag
+                v-if="smartPoolResult.excluded_severe_count"
+                size="small" type="danger" effect="plain"
+                title="命中七不买重度风险（回避级）已被风控剔除，不进推荐池"
+              >风控剔除 {{ smartPoolResult.excluded_severe_count }} 只雷票</el-tag>
               <span v-if="smartPoolResult.analyzed">已分析 {{ smartPoolResult.analyzed }} 只</span>
               <el-tag v-if="smartPoolResult.daily_as_of" size="small" type="info" effect="plain">
                 日K {{ smartPoolResult.daily_as_of }}
@@ -1069,7 +1074,20 @@ const pollSmartPoolTask = async (taskId: string) => {
       selectedSmartRows.value = []
       loadPanelScores('smart')
       finishSmartPoolTask()
-      ElMessage.success(`智能推荐完成：${task.result.items.length} 只`)
+      const _res = task.result
+      const _exc = _res.excluded_severe_count || 0
+      if (!_res.items.length) {
+        // ③a 弱市/风控清空 → 弹窗说明今日高风险不推荐
+        const parts = [] as string[]
+        if (_res.position_gate?.note) parts.push(_res.position_gate.note)
+        if (_exc) parts.push(`另有 ${_exc} 只候选命中「七不买」重度风险，已被风控剔除（宁可没得选也不给雷票）。`)
+        parts.push('评分阈值不随行情放宽、风控不给雷票——今日暂无达标推荐，建议观望或等市场转暖。')
+        ElMessageBox.alert(parts.join('\n\n'), '今日高风险 · 暂无推荐', {
+          confirmButtonText: '知道了', type: 'warning',
+        }).catch(() => {})
+      } else {
+        ElMessage.success(`智能推荐完成：${_res.items.length} 只` + (_exc ? `（已剔除 ${_exc} 只雷票）` : ''))
+      }
       return
     }
     if (task.status === 'failed') {

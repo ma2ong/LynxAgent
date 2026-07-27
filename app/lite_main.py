@@ -2566,6 +2566,17 @@ def _confluence_enrich_items(items: list[dict[str, Any]]) -> None:
         except Exception:
             matched = []
         item["patterns"] = matched
+        # ③a 七不买硬闸门：kline 已加载，顺带跑风险检查，重度(risk_count≥2=回避)后续剔除。
+        try:
+            from quantcore.quant.risk_check import check_risks as _check_risks
+            _rc = _check_risks(symbol, str(item.get("name") or symbol), data)
+            item["risk_check"] = {
+                "risk_count": int(_rc.get("risk_count") or 0),
+                "advice": _rc.get("advice") or "",
+                "flags": [f.get("name") for f in (_rc.get("flags") or []) if f.get("level") == "risk"],
+            }
+        except Exception:
+            item["risk_check"] = {"risk_count": 0}
         try:
             sm = compute_strength_metrics(data)
         except Exception:
@@ -2609,6 +2620,18 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
             await asyncio.to_thread(_confluence_enrich_items, items)
         except Exception as exc:  # noqa: BLE001 — 融合富化失败不能阻断推荐主流程
             print(f"confluence enrich failed: {exc}")
+        # ③a 风控硬闸门：命中重度风险(七不买 risk_count≥2=回避)的直接剔除出池——
+        # 宁可没得选也不给雷票。被剔的记数+样例，前端弱市空池时弹窗说明。
+        kept = [it for it in items if int((it.get("risk_check") or {}).get("risk_count") or 0) < 2]
+        excluded = [it for it in items if int((it.get("risk_check") or {}).get("risk_count") or 0) >= 2]
+        data["items"] = kept
+        data["excluded_severe_count"] = len(excluded)
+        data["excluded_severe_samples"] = [
+            {"name": it.get("name"), "symbol": it.get("symbol") or it.get("code"),
+             "reason": (it.get("risk_check") or {}).get("advice") or "命中七不买重度风险"}
+            for it in excluded[:5]
+        ]
+        items = kept
         # ①c 双确认子集计数，供前端展示/筛选
         data["dual_confirm_count"] = sum(1 for it in items if it.get("dual_confirm"))
         data["triple_confirm_count"] = sum(1 for it in items if it.get("triple_confirm"))

@@ -146,6 +146,8 @@ export interface QuantSmartPoolResult {
   }
   dual_confirm_count?: number
   triple_confirm_count?: number
+  excluded_severe_count?: number
+  excluded_severe_samples?: Array<{ name?: string; symbol?: string; reason?: string }>
   items: QuantSmartPoolItem[]
   errors?: Record<string, string>
 }
@@ -376,6 +378,8 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     position_gate: raw?.position_gate,
     dual_confirm_count: raw?.dual_confirm_count,
     triple_confirm_count: raw?.triple_confirm_count,
+    excluded_severe_count: raw?.excluded_severe_count,
+    excluded_severe_samples: raw?.excluded_severe_samples,
     items,
     errors: raw?.errors || {}
   }

@@ -8,14 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app.core.engine import lite_quant_engine, resolve_stock
+from app.core.engine import resolve_stock
 from app.core.market_data import _apply_realtime_quote, _realtime_quotes, _safe_number
 from app.core.schema import ensure_lite_favorites_table
 from app.lite_auth import get_current_lite_user, store
@@ -161,30 +160,29 @@ async def favorites_portfolio_diagnostics(user: dict[str, Any] = Depends(get_cur
         *[_resolve_real_industry(item["symbol"], item["name"], set()) for item in items],
         return_exceptions=True,
     )
-    # analyze() 是 CPU 密集（pandas 指标计算），线程并发被 GIL 串行化，所以 N 只持仓的
-    # 总耗时约等于 N × 单只耗时，而不是并行。而这些协程是同时起跑的 —— 用「单只耗时」
-    # 当超时，持仓一多就必然集体超时。故按持仓数给预算，并留 20s 上限保护端点。
-    # 旧值写死 8s，恰好卡在单只耗时附近，实际效果是每只都超时、量化分全部落 0 分兜底。
-    quant_timeout = min(20.0, 6.0 + 2.5 * len(items))
+    # 这里只需要评分、trend/momentum/risk_control 三个因子和波动/回撤，全部出自
+    # compute_factor_scores + risk_metrics，是毫秒级的。原来却调整个 engine.analyze()，
+    # 顺带算了形态识别、Kronos 预测、Wyckoff、ML 特征、跨资产 HMM —— 结果一个都没用上，
+    # 单只约 3 秒；N 只协程同时起跑又被 GIL 串行化，于是集体撞上超时、量化分全落 0 分。
+    # 改成直接用同一份本地日线算需要的部分，顺带省掉原先重复的一次 kline 加载。
+    def _quant_from_kline(symbol: str) -> tuple[str, dict[str, Any], Any]:
+        from quantcore.quant.factors import composite_score, compute_factor_scores, risk_metrics
 
-    async def load_quant(symbol: str) -> dict[str, Any]:
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(lambda target=symbol: asdict(lite_quant_engine.analyze(target))),
-                timeout=quant_timeout,
-            )
+            df = load_local_kline(symbol, 420)
+            if df is None or df.empty:
+                return symbol, {"score": 0, "factors": {}, "risk": {}}, None
+            factors = compute_factor_scores(df)
+            return symbol, {"score": composite_score(factors), "factors": factors,
+                            "risk": risk_metrics(df)}, df
         except Exception:
-            return {"score": 0, "factors": {}, "risk": {}, "latest": {}}
+            return symbol, {"score": 0, "factors": {}, "risk": {}}, None
 
-    async def load_returns(symbol: str) -> tuple[str, Any]:
-        try:
-            df = await asyncio.wait_for(asyncio.to_thread(load_local_kline, symbol, 180), timeout=3)
-            return symbol, df
-        except Exception:
-            return symbol, None
-
-    quant_results = await asyncio.gather(*(load_quant(item["symbol"]) for item in items))
-    kline_results = dict(await asyncio.gather(*(load_returns(item["symbol"]) for item in items)))
+    computed = await asyncio.gather(
+        *(asyncio.to_thread(_quant_from_kline, item["symbol"]) for item in items)
+    )
+    quant_results = [c[1] for c in computed]
+    kline_results = {c[0]: c[2] for c in computed}
 
     frames: dict[str, pd.Series] = {}
     analyzed_items: list[dict[str, Any]] = []

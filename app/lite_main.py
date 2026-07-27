@@ -91,10 +91,12 @@ from app.routers.notifications import router as notifications_router  # noqa: E4
 from app.routers.config import router as config_router  # noqa: E402
 from app.routers.paper import router as paper_router  # noqa: E402
 from app.routers.favorites import router as favorites_router  # noqa: E402
+from app.routers.reports import router as reports_router  # noqa: E402
 app.include_router(notifications_router)
 app.include_router(config_router)
 app.include_router(paper_router)
 app.include_router(favorites_router)
+app.include_router(reports_router)
 
 # ---- 每日全市场 AI 因子模型刷新（收盘 + 数据同步后入缓存）----
 _ml_factor_scheduler: "AsyncIOScheduler | None" = None
@@ -5564,23 +5566,6 @@ async def multi_source_sources_status():
         ],
         "message": "SaaS Lite 多数据源状态",
     }
-
-
-@app.get("/api/reports/list")
-async def reports_list(page: int = 1, page_size: int = 20):
-    return {
-        "success": True,
-        "data": {"reports": [], "total": 0, "page": page, "page_size": page_size},
-        "message": "SaaS Lite 未连接 MongoDB，报告列表为空",
-    }
-
-
-@app.get("/api/reports/search")
-async def reports_search(q: str = "", limit: int = 20):
-    if not q.strip():
-        return {"success": False, "data": [], "message": "请输入搜索关键词"}
-    results = _search_reports_fts(q.strip(), limit)
-    return {"success": True, "data": results, "message": f"共 {len(results)} 条结果"}
 
 
 @app.post("/api/lite/datalake/sync")

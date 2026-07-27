@@ -54,8 +54,12 @@ if ($listening) {
 
     "[$(Get-Date -Format o)] health failed for 120s; restarting backend" |
         Out-File -FilePath $log -Append -Encoding utf8
+    # Kill the whole process tree (/T): the backend's ProcessPoolExecutor scan
+    # worker is a child process; killing only the backend PID orphans it and
+    # orphans accumulate across restarts. cmd /c + >nul swallows taskkill output
+    # so its stderr isn't treated as an error.
     $listening | Select-Object -ExpandProperty OwningProcess -Unique |
-        ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+        ForEach-Object { cmd /c "taskkill /PID $_ /T /F >nul 2>&1" }
     Start-Sleep -Seconds 2
 }
 

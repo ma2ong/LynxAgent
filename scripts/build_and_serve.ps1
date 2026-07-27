@@ -29,7 +29,16 @@ function Get-BackendSignature {
         "requirements-prod.txt",
         "pyproject.toml"
     )
-    $head = (& git rev-parse HEAD 2>$null | Out-String).Trim()
+    # Hash each backend path's tree/blob, not the global HEAD: otherwise a
+    # frontend-only commit bumps HEAD and forces a needless backend restart.
+    # --verify -q fails cleanly (no output / no stderr) on paths that don't exist.
+    $head = (
+        $backendPaths | ForEach-Object {
+            $p = $_
+            $h = & git rev-parse --verify -q "HEAD:$p" 2>$null
+            if ($h) { "$h".Trim() }
+        } | Where-Object { $_ }
+    ) -join ";"
     $diff = (& git diff --no-ext-diff --binary HEAD -- $backendPaths 2>$null | Out-String)
     $untracked = (& git ls-files --others --exclude-standard -- $backendPaths 2>$null | Out-String)
     $environment = @(".env", ".env.local") |
@@ -85,8 +94,12 @@ $reason = if ($ForceRestart) {
 Write-Host "[2/3] Restarting backend ($reason)..."
 $connections = Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue
 if ($connections) {
+    # Kill the whole process tree (/T): the backend's ProcessPoolExecutor scan
+    # worker is a child process; killing only the backend PID orphans it, and
+    # orphans accumulate across restarts and eat memory. cmd /c + >nul swallows
+    # taskkill output so its stderr can't abort the script under -EA Stop.
     $connections | Select-Object -ExpandProperty OwningProcess -Unique |
-        ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+        ForEach-Object { cmd /c "taskkill /PID $_ /T /F >nul 2>&1" }
 }
 
 for ($attempt = 0; $attempt -lt 20; $attempt++) {

@@ -200,6 +200,13 @@ async def _start_ml_factor_scheduler() -> None:
     _ml_factor_scheduler.start()
 
 
+@app.on_event("startup")
+async def _start_board_refresher() -> None:
+    """交易时段后台保温各重板块缓存，让首页秒开全貌、各页秒读不超时。"""
+    from app.core import board_refresh
+    board_refresh.start()
+
+
 lite_quant_engine = QuantEngine()
 lite_trader_bridge = EasyTraderBridge()
 lite_analysis_tasks: dict[str, dict[str, Any]] = {}
@@ -2612,7 +2619,7 @@ async def _compute_lite_swing_pool(
     """短线波段档：调用量化引擎 6 维共振扫描，映射为智能推荐池响应（带 ATR 买卖点）。"""
     _smart_pool_task_update(task_id, progress=30, phase="swing", message="扫描短线波段共振信号")
     swing = await run_scan(
-        lite_quant_engine.swing_pool, limit=limit, universe_limit=universe
+        "swing_pool", limit=limit, universe_limit=universe
     )
     items: list[dict[str, Any]] = []
     for raw in swing.get("items") or []:
@@ -2677,6 +2684,7 @@ async def _compute_lite_smart_pool(
     universe_limit: int = 500,
     task_id: str | None = None,
     force_refresh: bool = False,
+    cache_only: bool = False,
 ) -> dict[str, Any]:
     from quantcore.quant.local_store import get_local_store
 
@@ -2702,11 +2710,16 @@ async def _compute_lite_smart_pool(
         if cached:
             _smart_pool_task_update(task_id, progress=95, phase="realtime", message="缓存命中，刷新实时价格")
             return await _enrich_smart_pool_realtime(cached)
-        persistent_cached = _persistent_cache_get(cache_key, 3600)
+        # cache_only（进页面秒显）时放宽到一天，宁可端出稍旧名单也不现算阻塞。
+        persistent_cached = _persistent_cache_get(cache_key, 86400 if cache_only else 3600)
         if persistent_cached:
             _cache_set(cache_key, persistent_cached)
             _smart_pool_task_update(task_id, progress=95, phase="realtime", message="历史缓存命中，刷新实时价格")
             return await _enrich_smart_pool_realtime(persistent_cached)
+        if cache_only:
+            # 彻底冷缓存：不现算(否则阻塞~100s)，返回 warming 占位，交给后台保温器算好。
+            return {"items": [], "universe_size": 0, "analyzed": 0, "source": "warming",
+                    "warming": True, "daily_as_of": daily_as_of, "market_context": {}}
 
     # 短线波段档：6 维共振低吸选股，独立于动量/AI 因子路径。
     if strategy == "swing_short":
@@ -2728,7 +2741,7 @@ async def _compute_lite_smart_pool(
 
         _smart_pool_task_update(task_id, progress=28, phase="quant_center", message="调用量化中心一键推荐模型")
         quant_pool = await run_scan(
-            lite_quant_engine.smart_pool,
+            "smart_pool",
             limit=safe_limit,
             universe_limit=safe_universe,
         )
@@ -3110,8 +3123,9 @@ async def _compute_lite_smart_pool(
 
 
 @app.get("/api/lite/smart-pool")
-async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_limit: int = 500):
-    return await _compute_lite_smart_pool(strategy, limit, universe_limit)
+async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_limit: int = 500,
+                          cache_only: bool = False):
+    return await _compute_lite_smart_pool(strategy, limit, universe_limit, cache_only=cache_only)
 
 
 async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int,
@@ -3214,8 +3228,8 @@ async def _run_lite_pattern_pool_task(task_id: str, limit: int, universe_limit: 
     try:
         task.update({"status": "running", "progress": 5, "phase": "scan",
                      "message": "全市场形态扫描中（约 1-2 分钟）"})
-        result = await run_scan(lite_quant_engine.pattern_pool, limit, universe_limit,
-                                min_strength, exclude_fundamental)
+        result = await run_scan("pattern_pool", limit=limit, universe_limit=universe_limit,
+                                min_strength=min_strength, exclude_fundamental=exclude_fundamental)
         items = result.get("items") if isinstance(result, dict) else None
         if items:
             try:

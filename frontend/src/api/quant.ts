@@ -395,8 +395,8 @@ export const quantApi = {
   capabilities: async () =>
     unwrap<QuantCapabilitiesResult>(await ApiClient.get('/api/quant/capabilities', undefined, { timeout: 60000 })),
 
-  smartPool: async (limit = 20, universeLimit = 300) => {
-    const raw = unwrap<any>(await ApiClient.get('/api/lite/smart-pool', { limit, universe_limit: universeLimit, _ts: nonce() }, { timeout: 300000 }))
+  smartPool: async (limit = 20, universeLimit = 300, cacheOnly = false) => {
+    const raw = unwrap<any>(await ApiClient.get('/api/lite/smart-pool', { limit, universe_limit: universeLimit, cache_only: cacheOnly, _ts: nonce() }, { timeout: cacheOnly ? 20000 : 300000 }))
     return normalizeSmartPoolResult(raw)
   },
 

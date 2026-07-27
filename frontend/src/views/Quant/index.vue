@@ -927,6 +927,10 @@ const poolWinText = (pool: string) => {
 }
 
 onMounted(async () => {
+  // 进页面即读后台保温器暖好的缓存池，秒显最新推荐；不触发全市场重算，点「一键智能推荐」才刷新。
+  quantApi.smartPool(smartPoolForm.value.limit, smartPoolForm.value.universe_limit, true)
+    .then((res) => { if (res?.items?.length) smartPoolResult.value = res })
+    .catch(() => {})
   quantApi.riskAlert().then((alert) => { riskAlert.value = alert || null }).catch(() => {})
   quantApi.picksStats(30).then((res) => {
     const map: Record<string, { win_rate: number | null; samples: number }> = {}

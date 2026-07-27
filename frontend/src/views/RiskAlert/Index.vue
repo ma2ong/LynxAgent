@@ -20,6 +20,7 @@
           <span v-if="alert.as_of">· {{ alert.intraday ? `${alert.as_of} 盘中` : `截至 ${alert.as_of} 收盘` }}</span>
         </div>
       </div>
+      <div class="gauge-scale">分档（分越高越危险）：0–34 安全 · 35–54 警惕 · 55–74 危险 · 75–100 极危</div>
       <div class="gauge-action">{{ alert.action }}</div>
       <div class="signal-grid">
         <div v-for="s in alert.signals" :key="s.key" class="signal-cell">
@@ -202,6 +203,7 @@ onMounted(loadAll)
 .gauge-level { font-size: 26px; font-weight: 800; }
 .gauge-score { font-size: 14px; color: var(--el-text-color-secondary); }
 .gauge-meta { font-size: 13px; color: var(--el-text-color-secondary); display: flex; gap: 6px; flex-wrap: wrap; }
+.gauge-scale { margin-top: 6px; font-size: 12px; color: var(--el-text-color-placeholder); }
 .gauge-action { margin: 10px 0 14px; font-size: 15px; font-weight: 700; }
 .signal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
 .signal-cell { background: var(--el-bg-color); border: 1px solid var(--el-border-color-lighter);

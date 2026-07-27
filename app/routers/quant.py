@@ -117,7 +117,7 @@ async def quant_data_sources():
 @router.get("/smart-pool")
 async def quant_smart_pool(limit: int = 20, universe_limit: int = 300):
     try:
-        return await run_scan(engine.smart_pool, limit, universe_limit)
+        return await run_scan("smart_pool", limit=limit, universe_limit=universe_limit)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -126,7 +126,8 @@ async def quant_smart_pool(limit: int = 20, universe_limit: int = 300):
 async def quant_pattern_pool(limit: int = 20, universe_limit: int = 5000, min_strength: float = 70.0,
                             exclude_fundamental: bool = True):
     try:
-        result = await run_scan(engine.pattern_pool, limit, universe_limit, min_strength, exclude_fundamental)
+        result = await run_scan("pattern_pool", limit=limit, universe_limit=universe_limit,
+                                min_strength=min_strength, exclude_fundamental=exclude_fundamental)
         # 补全「行业/板块」：stock_meta 行业常为空，按 cninfo 给返回项补行业（并行+整体超时，不拖死端点）。
         items = result.get("items") if isinstance(result, dict) else None
         if items:
@@ -146,8 +147,9 @@ async def quant_rs_pool(limit: int = 30, universe_limit: int = 5000,
                         require_ema: bool = True, exclude_fundamental: bool = True):
     """相对强度筛选器（强势股研究清单）。"""
     try:
-        result = await run_scan(engine.strength_pool, limit, universe_limit,
-                                dist_min, adr_min, require_ema, exclude_fundamental)
+        result = await run_scan("strength_pool", limit=limit, universe_limit=universe_limit,
+                                dist_min=dist_min, adr_min=adr_min, require_ema=require_ema,
+                                exclude_fundamental=exclude_fundamental)
         items = result.get("items") if isinstance(result, dict) else None
         if items:
             try:
@@ -448,36 +450,49 @@ _RISK_SCAN_CACHE: dict = {}
 _RISK_SCAN_LOCK = threading.Lock()
 
 
-def _risk_scan_cached(realtime_quotes: Optional[dict] = None) -> dict:
-    """缓存批量日线指标；综合建议每次结合最新实时行情重新计算。"""
+def _risk_scan_cached(realtime_quotes: Optional[dict] = None,
+                      compute_if_cold: bool = True) -> dict:
+    """缓存批量日线指标；综合建议每次结合最新实时行情重新计算。
+
+    ``compute_if_cold``：True（后台保温器）冷缓存时现算全市场 breakdown（~10s）；
+    False（用户端点）冷缓存时不阻塞——有旧值用旧值，彻底冷则返回 warming 占位，
+    把现算的活留给后台保温器，端点秒回、永不超时。
+    """
     import time as _time
     from quantcore.quant.local_store import get_local_store
     from quantcore.quant.risk_alert import scan_sell_signals
 
     inputs = _RISK_SCAN_CACHE.get("inputs")
-    if not inputs or _time.time() - _RISK_SCAN_CACHE.get("at", 0) >= 600:
-        with _RISK_SCAN_LOCK:
-            inputs = _RISK_SCAN_CACHE.get("inputs")
-            if not inputs or _time.time() - _RISK_SCAN_CACHE.get("at", 0) >= 600:
-                store = get_local_store()
-                metrics = store.breakdown_metrics()
-                names = {
-                    str(meta.get("symbol")): str(meta.get("name") or "")
-                    for meta in store.load_meta()
-                }
-                try:
-                    bad = store.load_bad_forecast_symbols()
-                    flags = store.load_fundamental_flags()
-                except Exception:
-                    bad, flags = set(), {}
-                inputs = {
-                    "metrics": metrics,
-                    "names": names,
-                    "bad": bad,
-                    "flags": flags,
-                    "as_of": store.latest_real_bar_date() or "",
-                }
-                _RISK_SCAN_CACHE["inputs"], _RISK_SCAN_CACHE["at"] = inputs, _time.time()
+    is_fresh = bool(inputs) and (_time.time() - _RISK_SCAN_CACHE.get("at", 0) < 600)
+    if not is_fresh:
+        if not compute_if_cold:
+            # 端点路径：有旧值(inputs)就用旧值，彻底冷则返回 warming 占位交给后台。
+            if not inputs:
+                return {"items": [], "universe": 0, "breakdown_count": 0,
+                        "as_of": "", "warming": True}
+        else:
+            with _RISK_SCAN_LOCK:
+                inputs = _RISK_SCAN_CACHE.get("inputs")
+                if not inputs or _time.time() - _RISK_SCAN_CACHE.get("at", 0) >= 600:
+                    store = get_local_store()
+                    metrics = store.breakdown_metrics()
+                    names = {
+                        str(meta.get("symbol")): str(meta.get("name") or "")
+                        for meta in store.load_meta()
+                    }
+                    try:
+                        bad = store.load_bad_forecast_symbols()
+                        flags = store.load_fundamental_flags()
+                    except Exception:
+                        bad, flags = set(), {}
+                    inputs = {
+                        "metrics": metrics,
+                        "names": names,
+                        "bad": bad,
+                        "flags": flags,
+                        "as_of": store.latest_real_bar_date() or "",
+                    }
+                    _RISK_SCAN_CACHE["inputs"], _RISK_SCAN_CACHE["at"] = inputs, _time.time()
 
     result = scan_sell_signals(
         inputs["metrics"],
@@ -522,7 +537,8 @@ async def quant_risk_alert():
         # 破位广度：全市场跌破 MA10&MA20 占比（结构性下跌强度）。复用卖出扫描缓存，
         # 缓存冷时才现算一次 breakdown_metrics（单次窗口查询，秒级）
         def _breakdown_share():
-            scan = _risk_scan_cached(snapshot)
+            # 端点只读缓存：冷缓存不现算(否则阻塞~10s)，交给后台保温器；缺则不给破位广度信号
+            scan = _risk_scan_cached(snapshot, compute_if_cold=False)
             if not scan.get("universe"):
                 return None
             return (scan.get("breakdown_count") or 0) / scan["universe"]
@@ -547,7 +563,8 @@ async def quant_risk_scan(limit: int = 200):
     """全市场持仓风险复核：日线批量指标缓存，建议结合最新实时行情动态更新。"""
     try:
         snapshot = await _load_snapshot()
-        data = await _run_light(_risk_scan_cached, snapshot)
+        # 端点只读缓存：冷缓存不现算(否则阻塞~10s)，交给后台保温器
+        data = await _run_light(_risk_scan_cached, snapshot, False)
         result = dict(data)
         result["items"] = list(data.get("items") or [])[: max(1, min(limit, 500))]
         return result

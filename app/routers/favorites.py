@@ -161,11 +161,17 @@ async def favorites_portfolio_diagnostics(user: dict[str, Any] = Depends(get_cur
         *[_resolve_real_industry(item["symbol"], item["name"], set()) for item in items],
         return_exceptions=True,
     )
+    # analyze() 是 CPU 密集（pandas 指标计算），线程并发被 GIL 串行化，所以 N 只持仓的
+    # 总耗时约等于 N × 单只耗时，而不是并行。而这些协程是同时起跑的 —— 用「单只耗时」
+    # 当超时，持仓一多就必然集体超时。故按持仓数给预算，并留 20s 上限保护端点。
+    # 旧值写死 8s，恰好卡在单只耗时附近，实际效果是每只都超时、量化分全部落 0 分兜底。
+    quant_timeout = min(20.0, 6.0 + 2.5 * len(items))
+
     async def load_quant(symbol: str) -> dict[str, Any]:
         try:
             return await asyncio.wait_for(
                 asyncio.to_thread(lambda target=symbol: asdict(lite_quant_engine.analyze(target))),
-                timeout=8,
+                timeout=quant_timeout,
             )
         except Exception:
             return {"score": 0, "factors": {}, "risk": {}, "latest": {}}

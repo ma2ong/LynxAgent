@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from typing import Optional
 
@@ -58,6 +59,10 @@ def default_start_date(days: int = 420) -> str:
     return (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
 
 
+def _is_a_share(symbol: str) -> bool:
+    return bool(re.fullmatch(r"\d{6}", str(symbol or "").strip()))
+
+
 def _fetch_from_akshare(symbol: str, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
     from .data_sources import AKShareSource
 
@@ -93,7 +98,32 @@ def _fetch_from_yfinance(symbol: str, start_date: Optional[str], end_date: Optio
 
 
 def fetch_stock_dataframe(symbol: str, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
+    """个股日线。A 股优先本地库，网络源只作兜底。
+
+    本地优先不是性能优化，是正确性修复。原来这里直接打网络三源，三源在本机全部
+    不可用（akshare 走东财被代理挡、efinance 的 get_quote_history 签名对不上、
+    baostock 超时），于是每次都掉到最后的 yfinance 兜底。而 yfinance 在这里有两个
+    致命问题：
+
+    1. 并发不安全——两只股票同时取，实测第二只会拿到第一只的 K 线（600519 拿回了
+       300308 的收盘价）。凡是并发调 analyze() 的路径都会张冠李戴：组合诊断的
+       asyncio.gather、engine.screen() 的 8 线程池。
+    2. A 股价格本身就不对——600519 给 1279.58，本地库与实时报价都是 1289.50。
+
+    本地库（daily_kline，5525 只、每日同步）无这两个问题，且是毫秒级：analyze() 单只
+    从约 22 秒降到近乎瞬时。非 A 股代码或本地无数据时，仍按原顺序走网络源。
+    """
     from .data_sources import fetch_history
+
+    if _is_a_share(symbol):
+        local = load_local_kline(symbol)
+        if not local.empty:
+            if start_date:
+                local = local[local["date"] >= pd.to_datetime(start_date)]
+            if end_date:
+                local = local[local["date"] <= pd.to_datetime(end_date)]
+            if not local.empty:
+                return local.reset_index(drop=True)
 
     try:
         df, _, _ = fetch_history(symbol, start_date, end_date)

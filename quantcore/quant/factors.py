@@ -16,6 +16,28 @@ _WEIGHTS = {
     "capital_flow": 0.05,
 }
 
+# 权重 A/B 实验用的覆盖开关（生产不设此变量，走上面的默认值）。
+# 必须走环境变量而不是运行时改字典：回放的评分跑在 ProcessPoolExecutor 的子进程里，
+# Windows 用 spawn 启动，子进程重新 import 本模块，父进程里的猴补丁根本传不过去。
+# 值为 JSON，如 {"trend":0.16,...}；键必须与默认权重完全一致，写错就报错而不是静默跑偏。
+def _load_weight_override() -> None:
+    import json
+    import os
+
+    raw = os.getenv("LYNX_FACTOR_WEIGHTS")
+    if not raw:
+        return
+    override = json.loads(raw)
+    if set(override) != set(_WEIGHTS):
+        raise ValueError(
+            f"LYNX_FACTOR_WEIGHTS 的因子集合与默认不一致："
+            f"多了 {set(override) - set(_WEIGHTS)}，少了 {set(_WEIGHTS) - set(override)}"
+        )
+    _WEIGHTS.update({k: float(v) for k, v in override.items()})
+
+
+_load_weight_override()
+
 
 def _last(series: pd.Series, default: float = 0.0) -> float:
     clean = series.dropna()

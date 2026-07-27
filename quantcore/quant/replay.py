@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
@@ -330,8 +331,16 @@ def run_replay(months: int = 12, step: int = 5, top_n: int = 20,
         raise ValueError("本地日线不足，无法回放")
 
     conn = store._conn()
-    # 上一次运行如果被杀，会留下 status='running' 的僵尸行，统一标记失败
-    conn.execute("UPDATE replay_runs SET status='failed' WHERE status='running'")
+    # 上一次运行如果被杀，会留下 status='running' 的僵尸行，统一标记失败。
+    # 这几句写在建 run 行之前，任何异常（典型是数据同步占着写锁 → database is locked）
+    # 都还没有 run_id 可挂错误，必须自己带上下文抛出，否则调用方只看到一个空的 failed 行。
+    try:
+        conn.execute("UPDATE replay_runs SET status='failed' WHERE status='running'")
+    except Exception as exc:
+        raise RuntimeError(
+            f"回放启动失败，拿不到 SQLite 写锁（{exc}）。通常是数据同步/其他写入正占着库，"
+            f"稍后重试；要彻底避开竞争就对库做快照后在副本上跑。"
+        ) from exc
     conn.execute(
         "INSERT OR REPLACE INTO replay_runs(run_id, created_at, params_json, status, progress) "
         "VALUES(?,?,?,?,0)",
@@ -581,7 +590,7 @@ def start_replay_async(months: int = 12, step: int = 5, top_n: int = 20, workers
     with _run_lock:
         if _progress.get("running"):
             return {"started": False, "reason": "已有回放在运行", **replay_status()}
-        _progress.update({"running": True, "phase": "starting", "done": 0, "total": 0})
+        _progress.update({"running": True, "phase": "starting", "done": 0, "total": 0, "error": ""})
     threading.Thread(
         target=lambda: _safe_run(months, step, top_n, workers, anchor), daemon=True,
     ).start()
@@ -589,10 +598,17 @@ def start_replay_async(months: int = 12, step: int = 5, top_n: int = 20, workers
 
 
 def _safe_run(months: int, step: int, top_n: int, workers: int, anchor: Optional[str] = None) -> None:
+    """后台线程入口：异常不能外泄（会静默杀掉线程），但必须留下可诊断的痕迹。
+
+    之前这里是 `except: pass`，注释说"失败状态已写入 replay_runs"——只有建了 run 行
+    之后的失败才写得进去。启动阶段抢不到写锁时连行都没有，于是回放从 2026-07-18 起
+    连续失败了九天而没有任何人能看出原因。错误现在既进日志也进 _progress（/status 端点）。
+    """
     try:
         run_replay(months=months, step=step, top_n=top_n, workers=workers, anchor=anchor)
-    except Exception:
-        pass  # 失败状态已写入 replay_runs
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("replay").exception("replay run failed")
+        _progress["error"] = str(exc)[:300]
 
 
 def replay_status() -> Dict[str, object]:

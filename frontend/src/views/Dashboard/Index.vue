@@ -18,7 +18,8 @@
           </span>
         </div>
         <div class="market-actions">
-          <span v-if="risk" class="risk-pill" :class="riskToneClass">
+          <span v-if="risk" class="risk-pill" :class="riskToneClass"
+            title="风险分档（分越高越危险）：0–34 安全 · 35–54 警惕 · 55–74 危险 · 75–100 极危">
             风险 {{ risk.level }} {{ risk.score }}
           </span>
           <el-button link type="primary" size="small" :loading="heroLoading" @click="loadHero()">刷新</el-button>
@@ -51,6 +52,7 @@
         </div>
         <div class="risk-verdict-action">{{ risk.action }}</div>
       </div>
+      <div v-if="risk" class="risk-verdict-scale">风险分档（分越高越危险）：0–34 安全 · 35–54 警惕 · 55–74 危险 · 75–100 极危</div>
       <div class="market-foot">每 60 秒自动刷新 · 规则化提示，不构成投资建议</div>
     </section>
 
@@ -449,6 +451,7 @@ onUnmounted(stopHeroPolling)
   b { font-size: 28px; font-weight: 800; line-height: 1.1; white-space: nowrap; }
   span { color: var(--el-text-color-secondary); font-size: 13px; white-space: nowrap; } }
 .risk-verdict-action { flex: 1; font-size: 13px; font-weight: 600; line-height: 1.6; }
+.risk-verdict-scale { margin-top: 6px; font-size: 12px; color: var(--el-text-color-placeholder); }
 .risk-verdict-safe { border-left-color: #0e9f5a; .risk-verdict-title b { color: #0e9f5a; } }
 .risk-verdict-warn { border-left-color: #d48806; .risk-verdict-title b { color: #d48806; } }
 .risk-verdict-danger { border-left-color: #ef232a; .risk-verdict-title b { color: #ef232a; } }

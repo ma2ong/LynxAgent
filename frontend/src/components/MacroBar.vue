@@ -17,7 +17,7 @@
       <span class="label">两市成交</span>
       <span>{{ data.breadth.amount_yi }}亿</span>
     </span>
-    <span v-if="risk" class="item risk-chip" :class="`lv-${riskKey}`" title="点击查看风险预警详情" @click="goRisk">
+    <span v-if="risk" class="item risk-chip" :class="`lv-${riskKey}`" title="点击查看风险预警详情 ｜ 风险分档（分越高越危险）：0–34 安全 · 35–54 警惕 · 55–74 危险 · 75–100 极危" @click="goRisk">
       <span class="label">风险</span>
       <b>{{ risk.level }}</b>
       <span class="risk-score">{{ risk.score }}</span>

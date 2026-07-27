@@ -88,7 +88,9 @@ app.include_router(quant_router, dependencies=[Depends(get_current_lite_user)])
 app.include_router(billing_router)
 app.include_router(admin_router)
 from app.routers.notifications import router as notifications_router  # noqa: E402
+from app.routers.config import router as config_router  # noqa: E402
 app.include_router(notifications_router)
+app.include_router(config_router)
 
 # ---- 每日全市场 AI 因子模型刷新（收盘 + 数据同步后入缓存）----
 _ml_factor_scheduler: "AsyncIOScheduler | None" = None
@@ -4008,87 +4010,6 @@ async def validate_config():
             ] + ["SaaS Lite 使用本地 SQLite，不启用 MongoDB/Redis 队列。"],
         },
         "message": "ready" if valid else "commercial config incomplete",
-    }
-
-
-@app.get("/api/config/settings")
-async def config_settings():
-    return {
-        "success": True,
-        "data": {
-            "quick_analysis_model": "qwen-turbo",
-            "deep_analysis_model": "qwen-max",
-            "default_market": "A股",
-            "default_depth": 3,
-            "runtime_mode": "saas-lite",
-        },
-        "message": "SaaS Lite 默认配置",
-    }
-
-
-@app.put("/api/config/settings")
-async def update_config_settings(settings: dict[str, Any]):
-    return {"success": True, "data": {"message": "SaaS Lite 已接收配置", "settings": settings}, "message": "ok"}
-
-
-@app.get("/api/config/llm")
-async def config_llm():
-    return {
-        "success": True,
-        "data": [
-            {
-                "provider": "qwen",
-                "model_name": "qwen-turbo",
-                "model_display_name": "qwen-turbo",
-                "max_tokens": 4096,
-                "temperature": 0.7,
-                "timeout": 60,
-                "retry_times": 2,
-                "enabled": True,
-                "description": "SaaS Lite 默认快速分析模型",
-                "capability_level": 2,
-                "suitable_roles": ["quick_analysis", "both"],
-                "features": ["fast_response", "cost_effective"],
-                "recommended_depths": ["快速", "基础", "标准"],
-                "performance_metrics": {"speed": 5, "cost": 5, "quality": 3},
-            },
-            {
-                "provider": "qwen",
-                "model_name": "qwen-max",
-                "model_display_name": "qwen-max",
-                "max_tokens": 8192,
-                "temperature": 0.5,
-                "timeout": 120,
-                "retry_times": 2,
-                "enabled": True,
-                "description": "SaaS Lite 默认深度分析模型",
-                "capability_level": 4,
-                "suitable_roles": ["deep_analysis", "both"],
-                "features": ["reasoning", "long_context"],
-                "recommended_depths": ["标准", "深度", "全面"],
-                "performance_metrics": {"speed": 3, "cost": 3, "quality": 4},
-            },
-        ],
-        "message": "SaaS Lite 默认模型列表",
-    }
-
-
-@app.post("/api/model-capabilities/recommend")
-async def recommend_models(payload: dict[str, Any]):
-    depth = payload.get("research_depth") or "标准"
-    return {
-        "success": True,
-        "data": {
-            "research_depth": depth,
-            "quick_analysis_model": "qwen-turbo",
-            "deep_analysis_model": "qwen-max",
-            "recommendations": {
-                "quick_model": "qwen-turbo",
-                "deep_model": "qwen-max",
-            },
-            "reason": "SaaS Lite 使用本地默认模型配置，重点保证页面流程可运行。",
-        },
-        "message": "ok",
     }
 
 

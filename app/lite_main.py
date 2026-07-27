@@ -2591,6 +2591,10 @@ def _confluence_enrich_items(items: list[dict[str, Any]]) -> None:
         if bonus:
             item["confluence_bonus"] = round(min(bonus, 4.0), 1)
             item["confluence_tags"] = tags
+        # ①c 双确认：结构因子(池底座) + 低位形态 = 双确认；再叠相对强度 = 三重确认。
+        # 交集是最高把握子集——回放里结构分本就 proven，形态是低位反转确认。
+        item["dual_confirm"] = "形态" in tags
+        item["triple_confirm"] = "形态" in tags and "强度" in tags
     # 排序键 = 结构分 + 共振加成（加成小、只让共振票在近分档里上浮，量化分本身不改）
     items.sort(key=lambda it: float(it.get("smart_score") or it.get("score") or 0)
                + float(it.get("confluence_bonus") or 0), reverse=True)
@@ -2598,12 +2602,16 @@ def _confluence_enrich_items(items: list[dict[str, Any]]) -> None:
 
 async def _apply_confluence(response: dict[str, Any]) -> None:
     """在缓存前给智能池 items 就地补形态/强度共振（重活丢线程池，缓存命中不再重算）。"""
-    items = (response.get("data") or {}).get("items") or []
+    data = response.get("data") or {}
+    items = data.get("items") or []
     if items:
         try:
             await asyncio.to_thread(_confluence_enrich_items, items)
         except Exception as exc:  # noqa: BLE001 — 融合富化失败不能阻断推荐主流程
             print(f"confluence enrich failed: {exc}")
+        # ①c 双确认子集计数，供前端展示/筛选
+        data["dual_confirm_count"] = sum(1 for it in items if it.get("dual_confirm"))
+        data["triple_confirm_count"] = sum(1 for it in items if it.get("triple_confirm"))
 
 
 def _smart_pool_task_update(task_id: str | None, **patch: Any) -> None:

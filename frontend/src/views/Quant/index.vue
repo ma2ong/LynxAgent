@@ -117,6 +117,12 @@
             <div v-if="smartPoolResult?.items.length" class="mini-summary">
               <span>自动候选 {{ smartPoolResult.universe_size }} 只</span>
               <b>{{ riskLocked ? '观察名单' : '推荐' }} {{ smartPoolResult.items.length }} 只</b>
+              <el-tag
+                v-if="smartPoolResult.dual_confirm_count"
+                size="small" :type="smartDualOnly ? 'success' : 'info'" effect="plain"
+                class="dc-filter" @click="smartDualOnly = !smartDualOnly"
+                :title="'结构因子 + 低位形态双确认，最高把握子集。点击' + (smartDualOnly ? '取消筛选' : '只看双确认')"
+              >{{ smartDualOnly ? '✓ ' : '' }}双确认 {{ smartPoolResult.dual_confirm_count }} 只</el-tag>
               <span v-if="smartPoolResult.analyzed">已分析 {{ smartPoolResult.analyzed }} 只</span>
               <el-tag v-if="smartPoolResult.daily_as_of" size="small" type="info" effect="plain">
                 日K {{ smartPoolResult.daily_as_of }}
@@ -162,7 +168,7 @@
             <el-table
               v-if="smartPoolResult?.items.length"
               ref="smartTableRef"
-              :data="smartPoolResult.items"
+              :data="smartDisplayItems"
               max-height="520"
               size="small"
               @selection-change="handleSmartSelectionChange"
@@ -191,7 +197,13 @@
                 </template>
               </el-table-column>
               <el-table-column prop="symbol" label="代码" width="100" />
-              <el-table-column prop="name" label="名称" width="120" />
+              <el-table-column label="名称" width="140">
+                <template #default="{ row }">
+                  <span>{{ row.name }}</span>
+                  <el-tag v-if="row.triple_confirm" size="small" type="danger" effect="dark" class="dc-tag" title="结构因子 + 低位形态 + 相对强度 三重确认">三重</el-tag>
+                  <el-tag v-else-if="row.dual_confirm" size="small" type="success" effect="dark" class="dc-tag" title="结构因子 + 低位形态 双确认">双确认</el-tag>
+                </template>
+              </el-table-column>
               <el-table-column label="行业/板块" width="130">
                 <template #default="{ row }">{{ row.industry || row.board || '-' }}</template>
               </el-table-column>
@@ -696,6 +708,12 @@ const smartPoolResult = ref<QuantSmartPoolResult | null>(null)
 const smartPoolTask = ref<QuantSmartPoolTask | null>(null)
 const smartTableRef = ref<any>()
 const selectedSmartRows = ref<QuantSmartPoolItem[]>([])
+// ①c 双确认筛选：只看结构因子+低位形态双确认的最高把握子集
+const smartDualOnly = ref(false)
+const smartDisplayItems = computed(() => {
+  const items = smartPoolResult.value?.items || []
+  return smartDualOnly.value ? items.filter((it) => it.dual_confirm) : items
+})
 const smartElapsed = ref(0)
 let smartProgressTimer: number | undefined
 let smartTaskTimer: number | undefined
@@ -1741,6 +1759,8 @@ const openChart = async (row: any) => {
 .env-gate.env-neutral .env-gate-head { color: #d48806; }
 .env-gate.env-warm { background: rgba(14,159,90,.10); border-left-color: #0e9f5a; }
 .env-gate.env-warm .env-gate-head { color: #0e9f5a; }
+.dc-tag { margin-left: 6px; }
+.dc-filter { cursor: pointer; user-select: none; }
 
 .table-actions {
   margin-left: auto;

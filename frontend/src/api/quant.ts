@@ -88,6 +88,10 @@ export interface QuantSmartPoolItem {
   limit_up?: boolean
   /** 七不买体检命中的风险/提示项 */
   risk_flags?: RiskFlag[]
+  /** ①c 双确认：结构因子 + 低位形态；triple 再叠相对强度 */
+  dual_confirm?: boolean
+  triple_confirm?: boolean
+  confluence_tags?: string[]
 }
 
 export interface RiskFlag {
@@ -140,6 +144,8 @@ export interface QuantSmartPoolResult {
     label?: string
     note?: string
   }
+  dual_confirm_count?: number
+  triple_confirm_count?: number
   items: QuantSmartPoolItem[]
   errors?: Record<string, string>
 }
@@ -368,6 +374,8 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     daily_as_of: raw?.daily_as_of,
     realtime_as_of: raw?.realtime_as_of,
     position_gate: raw?.position_gate,
+    dual_confirm_count: raw?.dual_confirm_count,
+    triple_confirm_count: raw?.triple_confirm_count,
     items,
     errors: raw?.errors || {}
   }

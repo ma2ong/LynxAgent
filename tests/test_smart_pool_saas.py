@@ -29,6 +29,8 @@ def _fake_pool(scores: list[float]) -> dict[str, Any]:
 
 
 def _compute(scores: list[float]) -> dict[str, Any]:
+    # _confluence_enrich_items 必须 stub：假池的 6000xx 是真实 A 股代码，不 stub 就会去读
+    # 本地真实 kline，形态/强度共振加成会按当日行情改变排序，断言随数据漂移。
     pool = _fake_pool(scores)
     with patch.object(lite_main, "_cache_get", return_value=None), \
          patch.object(lite_main, "_persistent_cache_get", return_value=None), \
@@ -36,6 +38,7 @@ def _compute(scores: list[float]) -> dict[str, Any]:
          patch.object(lite_main, "_persistent_cache_set"), \
          patch.object(lite_main, "run_scan", new=_async_return(pool)), \
          patch.object(lite_main, "_load_ai_factor_pool", return_value={"status": "pending", "scores": {}}), \
+         patch.object(lite_main, "_confluence_enrich_items", new=lambda _items: None), \
          patch.object(lite_main, "_enrich_smart_pool_industries", new=_async_identity()):
         res = asyncio.run(lite_main._compute_lite_smart_pool(limit=20, universe_limit=5000))
     return res.get("data", res)
@@ -104,5 +107,11 @@ def test_manual_generation_bypasses_old_pool_cache():
     data = result.get("data", result)
     assert data["force_refreshed"] is True
     assert {item["symbol"] for item in data["items"]} == {"600001", "600002"}
-    memory_cache.assert_not_called()
-    disk_cache.assert_not_called()
+    # 只断言「没读智选池缓存」——_cache_get 现在也服务环境仓位闸门等其他键，整体
+    # assert_not_called 会被无关调用误伤。
+    assert not _smart_pool_reads(memory_cache), "手动刷新不应读内存里的旧名单"
+    assert not _smart_pool_reads(disk_cache), "手动刷新不应读磁盘里的旧名单"
+
+
+def _smart_pool_reads(mock) -> list:
+    return [c for c in mock.call_args_list if str(c.args[0] if c.args else "").startswith("smart-pool:")]

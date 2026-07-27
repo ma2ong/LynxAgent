@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.lite_auth import get_current_lite_user
 from app.lite_billing import require_quota
+from app.core.market_data import _load_realtime_quotes_snapshot
 from app.core.scan_gate import run_scan
 from quantcore.quant import QuantEngine
 from quantcore.quant.chart_service import build_chart_payload
@@ -382,7 +383,6 @@ async def quant_market_context():
 
         snapshot = {}
         try:  # 延迟导入：lite_main 在启动时 import 本模块，顶层导入会成环
-            from app.lite_main import _load_realtime_quotes_snapshot
             snapshot = await asyncio.wait_for(
                 asyncio.to_thread(_load_realtime_quotes_snapshot, 30), timeout=8.0) or {}
         except Exception:
@@ -424,7 +424,6 @@ async def quant_symbol_lookup(q: str, limit: int = 8):
 
 async def _load_snapshot() -> dict:
     try:
-        from app.lite_main import _load_realtime_quotes_snapshot
         return await asyncio.wait_for(
             asyncio.to_thread(_load_realtime_quotes_snapshot, 30), timeout=8.0) or {}
     except Exception:
@@ -622,7 +621,6 @@ async def quant_risk_check(symbol: str):
 
     snapshot = {}
     try:
-        from app.lite_main import _load_realtime_quotes_snapshot
         snapshot = await asyncio.wait_for(
             asyncio.to_thread(_load_realtime_quotes_snapshot, 30), timeout=8.0) or {}
     except Exception:

@@ -3,9 +3,9 @@
 从 lite_main 拆出。该功能由 LYNX_ENABLE_PAPER_TRADING 开关控制（默认关闭，
 商用版下线），所有路由前置 require_paper_trading_enabled 守卫。
 
-耦合处理：store/鉴权直接从 app.lite_auth 导入；实时报价 _realtime_quotes 与共享
-的 lite_trader_bridge 在 handler/helper 内懒导入，避免与 lite_main 成环。paper 的
-SQLite 表由 lite_main 启动时建好，这里只读写。
+耦合处理：store/鉴权与实时报价直接从 app.lite_auth / app.core.market_data 顶层导入；
+仍留在 lite_main 的 lite_trader_bridge 在 handler 内懒导入，避免与 lite_main 成环。
+paper 的 SQLite 表由启动时的 app.core.schema.init_all 建好，这里只读写。
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from quantcore.trading import EasyTraderOrder
+from app.core.market_data import _realtime_quotes
 from app.lite_auth import get_current_lite_user, store
 
 router = APIRouter(tags=["paper"])
@@ -59,8 +60,6 @@ def _paper_account_row(username: str) -> dict[str, Any]:
 
 
 async def _paper_quote_price(code: str) -> float:
-    from app.lite_main import _realtime_quotes  # lazy: 避免与 lite_main 成环
-
     quotes = await _realtime_quotes([code])
     quote = quotes.get(code) or {}
     price = quote.get("price") or quote.get("close") or quote.get("current_price")

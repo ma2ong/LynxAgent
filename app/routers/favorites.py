@@ -1,18 +1,22 @@
 """自选股 + 组合诊断 + 价格预警刷新路由（从 lite_main 拆出）。
 
-store/鉴权直接从 app.lite_auth 导入；lite_main 的共享 helper 在各 handler 内懒导入，
-避免与 lite_main 成环（同 paper 模式）。路径不变（无 prefix）。/api/tags/ 是个空 stub，一并落此。
+行情/建表底座从 app.core 顶层 import；仍留在 lite_main 的 helper（行业解析、预警、
+个股解析、量化引擎）在各 handler 内懒导入，避免与 lite_main 成环。
+路径不变（无 prefix）。/api/tags/ 是个空 stub，一并落此。
 """
 from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.core.market_data import _apply_realtime_quote, _realtime_quotes, _safe_number
+from app.core.schema import ensure_lite_favorites_table
 from app.lite_auth import get_current_lite_user, store
 
 router = APIRouter(tags=["favorites"])
@@ -31,7 +35,7 @@ class LiteFavoriteRequest(BaseModel):
 
 @router.get("/api/favorites/")
 async def favorites(user: dict[str, Any] = Depends(get_current_lite_user)):
-    from app.lite_main import (_realtime_quotes, _resolve_real_industry, _apply_realtime_quote, _safe_number, ensure_lite_favorites_table, _check_and_record_price_alert, resolve_stock, lite_quant_engine)  # noqa: F401,E501
+    from app.lite_main import _resolve_real_industry, _check_and_record_price_alert, resolve_stock, lite_quant_engine  # noqa: F401,E501
     ensure_lite_favorites_table()
     with store.connect() as conn:
         rows = conn.execute(
@@ -108,7 +112,7 @@ def _portfolio_max_drawdown(values: list[float]) -> float:
 
 
 async def _favorite_portfolio_items(username: str) -> list[dict[str, Any]]:
-    from app.lite_main import (_realtime_quotes, _resolve_real_industry, _apply_realtime_quote, _safe_number, ensure_lite_favorites_table, _check_and_record_price_alert, resolve_stock, lite_quant_engine)  # noqa: F401,E501
+    from app.lite_main import _resolve_real_industry, _check_and_record_price_alert, resolve_stock, lite_quant_engine  # noqa: F401,E501
     ensure_lite_favorites_table()
     with store.connect() as conn:
         rows = conn.execute(
@@ -129,7 +133,7 @@ async def _favorite_portfolio_items(username: str) -> list[dict[str, Any]]:
 
 @router.get("/api/favorites/portfolio/diagnostics")
 async def favorites_portfolio_diagnostics(user: dict[str, Any] = Depends(get_current_lite_user)):
-    from app.lite_main import (_realtime_quotes, _resolve_real_industry, _apply_realtime_quote, _safe_number, ensure_lite_favorites_table, _check_and_record_price_alert, resolve_stock, lite_quant_engine)  # noqa: F401,E501
+    from app.lite_main import _resolve_real_industry, _check_and_record_price_alert, resolve_stock, lite_quant_engine  # noqa: F401,E501
     import pandas as pd
     from quantcore.quant.data import load_local_kline
 
@@ -336,7 +340,7 @@ async def favorites_portfolio_diagnostics(user: dict[str, Any] = Depends(get_cur
 
 @router.post("/api/favorites/")
 async def add_favorite(payload: LiteFavoriteRequest, user: dict[str, Any] = Depends(get_current_lite_user)):
-    from app.lite_main import (_realtime_quotes, _resolve_real_industry, _apply_realtime_quote, _safe_number, ensure_lite_favorites_table, _check_and_record_price_alert, resolve_stock, lite_quant_engine)  # noqa: F401,E501
+    from app.lite_main import _resolve_real_industry, _check_and_record_price_alert, resolve_stock, lite_quant_engine  # noqa: F401,E501
     raw_query = (payload.symbol or payload.stock_code or payload.stock_name or "").strip()
     if not raw_query:
         return {"success": False, "data": None, "message": "请输入股票代码或股票名称", "code": 400}
@@ -397,7 +401,7 @@ async def add_favorite(payload: LiteFavoriteRequest, user: dict[str, Any] = Depe
 
 @router.get("/api/favorites/check/{symbol}")
 async def check_favorite(symbol: str, user: dict[str, Any] = Depends(get_current_lite_user)):
-    from app.lite_main import (_realtime_quotes, _resolve_real_industry, _apply_realtime_quote, _safe_number, ensure_lite_favorites_table, _check_and_record_price_alert, resolve_stock, lite_quant_engine)  # noqa: F401,E501
+    from app.lite_main import _resolve_real_industry, _check_and_record_price_alert, resolve_stock, lite_quant_engine  # noqa: F401,E501
     ensure_lite_favorites_table()
     with store.connect() as conn:
         row = conn.execute(
@@ -409,19 +413,19 @@ async def check_favorite(symbol: str, user: dict[str, Any] = Depends(get_current
 
 @router.get("/api/favorites/tags")
 async def favorite_tags():
-    from app.lite_main import (_realtime_quotes, _resolve_real_industry, _apply_realtime_quote, _safe_number, ensure_lite_favorites_table, _check_and_record_price_alert, resolve_stock, lite_quant_engine)  # noqa: F401,E501
+    from app.lite_main import _resolve_real_industry, _check_and_record_price_alert, resolve_stock, lite_quant_engine  # noqa: F401,E501
     return {"success": True, "data": [], "message": "ok"}
 
 
 @router.get("/api/tags/")
 async def tags():
-    from app.lite_main import (_realtime_quotes, _resolve_real_industry, _apply_realtime_quote, _safe_number, ensure_lite_favorites_table, _check_and_record_price_alert, resolve_stock, lite_quant_engine)  # noqa: F401,E501
+    from app.lite_main import _resolve_real_industry, _check_and_record_price_alert, resolve_stock, lite_quant_engine  # noqa: F401,E501
     return {"success": True, "data": [], "message": "ok"}
 
 
 @router.put("/api/favorites/{symbol}")
 async def update_favorite(symbol: str, payload: LiteFavoriteRequest, user: dict[str, Any] = Depends(get_current_lite_user)):
-    from app.lite_main import (_realtime_quotes, _resolve_real_industry, _apply_realtime_quote, _safe_number, ensure_lite_favorites_table, _check_and_record_price_alert, resolve_stock, lite_quant_engine)  # noqa: F401,E501
+    from app.lite_main import _resolve_real_industry, _check_and_record_price_alert, resolve_stock, lite_quant_engine  # noqa: F401,E501
     now = datetime.now(timezone.utc).isoformat()
     ensure_lite_favorites_table()
     with store.connect() as conn:
@@ -447,7 +451,7 @@ async def update_favorite(symbol: str, payload: LiteFavoriteRequest, user: dict[
 
 @router.delete("/api/favorites/{symbol}")
 async def remove_favorite(symbol: str, user: dict[str, Any] = Depends(get_current_lite_user)):
-    from app.lite_main import (_realtime_quotes, _resolve_real_industry, _apply_realtime_quote, _safe_number, ensure_lite_favorites_table, _check_and_record_price_alert, resolve_stock, lite_quant_engine)  # noqa: F401,E501
+    from app.lite_main import _resolve_real_industry, _check_and_record_price_alert, resolve_stock, lite_quant_engine  # noqa: F401,E501
     ensure_lite_favorites_table()
     with store.connect() as conn:
         conn.execute(
@@ -460,7 +464,7 @@ async def remove_favorite(symbol: str, user: dict[str, Any] = Depends(get_curren
 
 @router.post("/api/favorites/sync-realtime")
 async def favorites_sync_realtime(user: dict[str, Any] = Depends(get_current_lite_user)):
-    from app.lite_main import (_realtime_quotes, _resolve_real_industry, _apply_realtime_quote, _safe_number, ensure_lite_favorites_table, _check_and_record_price_alert, resolve_stock, lite_quant_engine)  # noqa: F401,E501
+    from app.lite_main import _resolve_real_industry, _check_and_record_price_alert, resolve_stock, lite_quant_engine  # noqa: F401,E501
     ensure_lite_favorites_table()
     with store.connect() as conn:
         rows = conn.execute(

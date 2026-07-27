@@ -70,12 +70,13 @@ async def _safe(name: str, coro) -> None:
 async def _refresh_cycle() -> None:
     """算好一轮所有板块，灌进各自缓存。顺序执行、彼此隔离。"""
     from app import lite_main as m
+    from app.core import market_data as md
     from app.routers import quant as q
 
     # 1) 实时快照：所有板块的公共底料，强制刷新（ttl=0），保它 <一个周期 旧。
     snapshot: dict = {}
     try:
-        snapshot = await m._run_data_task(m._load_realtime_quotes_snapshot, 0, timeout=15.0) or {}
+        snapshot = await md._run_data_task(md._load_realtime_quotes_snapshot, 0, timeout=15.0) or {}
     except Exception as exc:  # noqa: BLE001
         logger.warning("board refresh [snapshot] failed: %s", exc)
 

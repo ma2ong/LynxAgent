@@ -2462,9 +2462,39 @@ async def _smart_pool_quant(symbol: str) -> dict[str, Any]:
     return await asyncio.to_thread(lambda target=symbol: asdict(lite_quant_engine.analyze(target)))
 
 
+def _env_position_gate(mkt: dict[str, Any] | None) -> dict[str, Any]:
+    """大盘环境 → 单票建议仓位闸门（②a）。环境是全市场同值，池级算一次、每票同用。
+
+    回放实证：弱市短线信号系统性失效、偏冷期超额贴零——所以偏冷自动把单票仓位砍到
+    「只观察」，不是靠用户自觉。系数用于前端把「满仓基准」折算成建议仓位。
+    """
+    state = (mkt or {}).get("state") or "中性"
+    temp = float((mkt or {}).get("temp") or 50.0)
+    if state == "偏冷":
+        return {"state": state, "temp": temp, "coefficient": 0.3, "label": "轻仓 · 只观察",
+                "note": "大盘偏冷，弱市短线信号系统性失效（回放偏冷期超额贴零）。建议单票仓位 ≤3 成，或仅观察等企稳。"}
+    if state == "偏暖":
+        return {"state": state, "temp": temp, "coefficient": 1.0, "label": "可正常参与",
+                "note": "大盘偏暖，赚钱效应尚可。仍按纪律控制单票仓位、分批介入。"}
+    return {"state": state, "temp": temp, "coefficient": 0.6, "label": "半仓以内",
+            "note": "大盘中性，方向不明。单票仓位建议 ≤5 成，优先强势主线、回踩企稳再介入。"}
+
+
 async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any]:
     data = dict(response.get("data") or {})
     items = [dict(item) for item in data.get("items") or []]
+    # ②a 环境仓位闸门：用当前全市场快照算环境，缓存命中的旧池也会拿到当下的仓位建议。
+    # 环境全市场同值，45s 缓存一次，避免每次 smart-pool 请求都重算 market_context 拖慢秒读。
+    gate: dict[str, Any] = _cache_get("env_position_gate", 45) or {}
+    if not gate:
+        try:
+            _snap = await _run_data_task(_load_realtime_quotes_snapshot, 30, timeout=8.0)
+            from quantcore.quant.engine import market_context as _market_context
+            _mkt = await _run_data_task(_market_context, _snap, timeout=10.0)
+            gate = _env_position_gate(_mkt)
+        except Exception:
+            gate = _env_position_gate(None)
+        _cache_set("env_position_gate", gate)
     quotes = await _realtime_quotes(
         [item.get("symbol") or item.get("code") for item in items],
         allow_snapshot_fallback=False,
@@ -2493,10 +2523,17 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
             ]
         if quote and quote.get("updated_at"):
             quote_updated_at = quote["updated_at"]
+        # ②a 把环境仓位闸门写进每票交易计划，理由卡直接可读。
+        if gate:
+            item["env_position"] = {"label": gate.get("label"), "coefficient": gate.get("coefficient")}
+            if isinstance(item.get("trade_plan"), dict):
+                item["trade_plan"]["env_position"] = gate.get("label")
+                item["trade_plan"]["env_note"] = gate.get("note")
     if quote_updated_at:
         data["updated_at"] = quote_updated_at
         data["quote_updated_at"] = quote_updated_at
         data["price_source"] = "实时行情"
+    data["position_gate"] = gate
     data["items"] = items
     enriched = dict(response)
     enriched["data"] = data

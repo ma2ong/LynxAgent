@@ -133,6 +133,13 @@ export interface QuantSmartPoolResult {
     pick_date?: string
     universe?: number
   }
+  position_gate?: {
+    state?: string
+    temp?: number
+    coefficient?: number
+    label?: string
+    note?: string
+  }
   items: QuantSmartPoolItem[]
   errors?: Record<string, string>
 }
@@ -358,6 +365,9 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     universe_size: raw?.universe_size || items.length,
     analyzed: raw?.analyzed || raw?.universe_size || items.length,
     ai_factor: raw?.ai_factor,
+    daily_as_of: raw?.daily_as_of,
+    realtime_as_of: raw?.realtime_as_of,
+    position_gate: raw?.position_gate,
     items,
     errors: raw?.errors || {}
   }

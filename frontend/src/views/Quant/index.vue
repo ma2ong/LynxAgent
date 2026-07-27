@@ -145,6 +145,14 @@
                 </el-button>
               </div>
             </div>
+            <div
+              v-if="smartPoolResult?.position_gate?.label"
+              class="env-gate"
+              :class="'env-' + (smartPoolResult.position_gate.state === '偏冷' ? 'cold' : smartPoolResult.position_gate.state === '偏暖' ? 'warm' : 'neutral')"
+            >
+              <span class="env-gate-head">环境仓位闸门 · <b>{{ smartPoolResult.position_gate.label }}</b></span>
+              <span class="env-gate-note">{{ smartPoolResult.position_gate.note }}</span>
+            </div>
             <el-alert
               v-if="smartPoolResult && smartPoolResult.items.length > 0 && smartPoolResult.items.length < 5"
               type="info" :closable="false" show-icon class="few-picks-tip"
@@ -1720,6 +1728,19 @@ const openChart = async (row: any) => {
 .few-picks-tip {
   margin-bottom: 8px;
 }
+.env-gate {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px;
+  margin-bottom: 10px; padding: 8px 12px; border-radius: 8px;
+  border-left: 4px solid var(--el-border-color); font-size: 13px;
+}
+.env-gate-head { font-weight: 700; }
+.env-gate-note { color: var(--el-text-color-secondary); }
+.env-gate.env-cold { background: rgba(239,35,42,.08); border-left-color: #ef232a; }
+.env-gate.env-cold .env-gate-head { color: #ef232a; }
+.env-gate.env-neutral { background: rgba(212,136,6,.10); border-left-color: #d48806; }
+.env-gate.env-neutral .env-gate-head { color: #d48806; }
+.env-gate.env-warm { background: rgba(14,159,90,.10); border-left-color: #0e9f5a; }
+.env-gate.env-warm .env-gate-head { color: #0e9f5a; }
 
 .table-actions {
   margin-left: auto;

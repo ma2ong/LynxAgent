@@ -71,6 +71,7 @@ async def _refresh_cycle() -> None:
     """算好一轮所有板块，灌进各自缓存。顺序执行、彼此隔离。"""
     from app import lite_main as m
     from app.core import market_data as md
+    from app.routers import insights as ins
     from app.routers import quant as q
 
     # 1) 实时快照：所有板块的公共底料，强制刷新（ttl=0），保它 <一个周期 旧。
@@ -84,7 +85,7 @@ async def _refresh_cycle() -> None:
     await _safe("risk-scan", asyncio.to_thread(q._risk_scan_cached, snapshot))
 
     # 3) 涨停热点（当日）→ 暖 lite_insights_cache（端点自身负责落缓存）
-    await _safe("limit-up", m.lite_limit_up_distribution())
+    await _safe("limit-up", ins.lite_limit_up_distribution())
 
     # 4) 一键智选（全市场结构因子）→ 走进程池，暖 smart-pool 缓存（内存+持久）
     #    仅交易时段跑：这是最重的一档（~100s），窗口外没必要反复算。

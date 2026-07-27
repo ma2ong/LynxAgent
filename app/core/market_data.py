@@ -619,3 +619,23 @@ def _apply_realtime_quote(item: dict[str, Any], quote: dict[str, Any] | None) ->
     if quote.get("name"):
         item["stock_name"] = quote["name"]
     return item
+
+
+async def _is_trading_day_now() -> bool:
+    """用实时快照的行情时间判断今天是否交易日：节假日快照时间停留在上一交易日，
+    此时 cron 不应把旧行情落成当日盘报。仅在明确看到 stale 时间戳时返回 False；
+    快照拿不到/无时间戳则 fail-open 视为交易日，宁多生成不漏。"""
+    try:
+        snapshot = await _run_data_task(_load_realtime_quotes_snapshot, 300, timeout=8.0)
+    except Exception:
+        return True
+    if not snapshot:
+        return True
+    quote_dates: set[str] = set()
+    for q in list(snapshot.values())[:200]:
+        m = re.match(r"(\d{4})/(\d{2})/(\d{2})", str(q.get("updated_at") or ""))
+        if m:
+            quote_dates.add(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
+    if not quote_dates:
+        return True
+    return datetime.now().strftime("%Y-%m-%d") in quote_dates

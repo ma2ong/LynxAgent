@@ -1,6 +1,6 @@
 """选股规则的 point-in-time 历史回放验证。
 
-用本地日线把 pattern / smart 两池规则回放到过去（默认 12 个月、每 5 个交易日一期），
+用本地日线把各池选股规则回放到过去（默认 12 个月、每 5 个交易日一期），
 每期取 top-N，统计 T+5 相对全市场中位的超额收益 → 回答「这套选股规则有没有效」。
 
 口径说明（结果解读时必须记住）：
@@ -8,6 +8,14 @@
   实时分量（realtime_score）用当日 bar 的涨跌幅/成交额，与收盘后扫描等价。
 - smart 池（v3，2026-07-14 起）：结构因子合成分，与线上 engine.smart_pool 共用同一
   评分函数（compute_factor_scores + composite_score，成交额 ≥3000 万门槛），无近似差。
+- strength 池：门槛（距 250 日低点 ≥70%、ADR ≥4.5%、站上 EMA8/21）与线上一致；排序用
+  momentum_raw 代替 rs_rating——后者是横截面百分位、worker 逐股跑拿不到，但两者单调等价，
+  按每期 top-N 取样结果相同。
+- auction 池：只用高开幅度（评分里权重最大也最干净的一项），量比/板块共振/板块趋势依赖
+  行业映射，而本地行业覆盖仅约七成且是「当前」映射，塞进回放会引入系统性偏差，故略去
+  ——这是保守近似，该池的真实排序能力只会比回放显示的更好、不会更差。
+  另注意：线上竞价是当日开盘买入，而回放统一按各池同一口径（收盘/次日开盘）计算，
+  等于比真实执行晚一个开盘价，这条线因此偏保守，与其他池横向比时要记得这个差异。
 - 排除规则用「当前」股票名称（ST/退市标记随时间变化，历史时点无法还原）。
 """
 from __future__ import annotations
@@ -31,7 +39,8 @@ HORIZON = 5
 # 否则同轴续跑会复用旧口径的候选（实测：加 smart_fac 池后旧缓存里没有它）。
 # v3：smart 评分切换为结构因子合成（原 smart_fac 实验转正），smart_fac 池移除。
 # v4：形态识别新增三不卖低位形态（三军会师/双管齐下/五阳上阵），pattern 候选集变化。
-SCAN_VERSION = 4
+# v5：新增 strength / auction 两池的 point-in-time 评分器，候选集合变化。
+SCAN_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS replay_runs (
@@ -182,6 +191,47 @@ def _factor_score(df: pd.DataFrame) -> Optional[float]:
         return None
 
 
+def _strength_score(df: pd.DataFrame) -> Optional[float]:
+    """强势股池的 point-in-time 评分（与线上 engine.strength_pool 同源）。
+
+    线上按横截面 rs_rating（动量百分位 1-99）排序并设三道门槛：距 250 日低点涨幅 ≥70%、
+    ADR ≥4.5%、站上 EMA8 与 EMA21。这里返回 momentum_raw 而不是 rs_rating——rs_rating 是
+    对当期全市场排名后的百分位，而 worker 是逐股跑的、拿不到横截面；但 rs_rating 是
+    momentum_raw 的单调变换，回放按每期 top-N 取样，排序结果完全一致。
+    """
+    from .relative_strength import compute_strength_metrics
+
+    m = compute_strength_metrics(df)
+    if not m:
+        return None
+    if m["dist_from_low"] < 70.0 or m["adr"] < 4.5:
+        return None
+    if not (m["above_ema8"] and m["above_ema21"]):
+        return None
+    return float(m["momentum_raw"])
+
+
+def _auction_score(df: pd.DataFrame) -> Optional[float]:
+    """竞价池的 point-in-time 评分：当日高开幅度（今开/昨收）。
+
+    线上评分还含量比、板块共振与板块趋势，但后两者依赖行业映射，而本地行业覆盖只有约
+    七成、且是「当前」映射而非历史映射，硬塞进回放会引入系统性偏差。高开幅度是评分里
+    权重最大也最干净的一项，用它代表该池的排序能力，属于保守近似。
+
+    健康高开区间与线上一致（下限 1.5%、上限按 10% 板×0.6）；一字板或低开都不入选。
+    """
+    if len(df) < 2:
+        return None
+    prev_close = float(df["close"].iloc[-2])
+    open_px = float(df["open"].iloc[-1])
+    if prev_close <= 0 or open_px <= 0:
+        return None
+    gap = (open_px / prev_close - 1.0) * 100.0
+    if not (1.5 <= gap <= 6.0):
+        return None
+    return round(gap, 3)
+
+
 def _parent_alive() -> bool:
     """父进程是否还在（查不了就当活着，不误杀）。"""
     try:
@@ -252,7 +302,7 @@ def _ensure_orphan_watchdog(interval: float = 5.0) -> None:
 
 
 def _replay_symbol(payload: Dict[str, object]) -> List[Dict[str, object]]:
-    """进程池 worker：单只股票在全部回放期的两池候选评分。顶层函数以便 pickle。"""
+    """进程池 worker：单只股票在全部回放期各池的候选评分。顶层函数以便 pickle。"""
     _ensure_orphan_watchdog()
     _ensure_low_priority()
     symbol = str(payload["symbol"])
@@ -290,6 +340,15 @@ def _replay_symbol(payload: Dict[str, object]) -> List[Dict[str, object]]:
             p_score = _pattern_score(symbol, df.tail(540))
             if p_score is not None:
                 out.append({"pool": "pattern", "as_of": as_of, "symbol": symbol, "name": name, "score": p_score})
+            # 强势股与竞价：合并进一键智选后这两套逻辑停了留痕，只靠实盘攒样本要好几周；
+            # 放进回放就能立刻拿到 12 个月的同轴对比。
+            if amount >= PATTERN_MIN_AMOUNT:
+                r_score = _strength_score(df.tail(260))
+                if r_score is not None:
+                    out.append({"pool": "strength", "as_of": as_of, "symbol": symbol, "name": name, "score": r_score})
+                a_score = _auction_score(df.tail(2))
+                if a_score is not None:
+                    out.append({"pool": "auction", "as_of": as_of, "symbol": symbol, "name": name, "score": a_score})
         return out
     except Exception:
         return []

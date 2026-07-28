@@ -45,21 +45,6 @@ HIGH_POS_FRESH_BARS = 12         # 距高点多少个交易日内算「刚见顶
 HIGH_POS_DEEP_DRAWDOWN = 35.0    # 回撤超过此值视为「已深跌」，动作从催卖改为别抄底
 
 
-def _effective_amount(symbol: str, volume: float, close: float, amount: float) -> float:
-    """当日成交额（元），修正科创板的单位错配。
-
-    daily_kline 的 amount 由 sync_service 统一按 `close × volume × 100` 推导，前提是
-    volume 的单位是「手」。但数据源给科创板（688）的 volume 是「股」，于是这些票的
-    成交额被放大了约 100 倍——全市场合计能算出 32 万亿，而 A 股实际约 1.5~2 万亿。
-
-    这里只在本名单的流动性门槛上就地纠偏，不改库里的值：真正的修法是改 sync 并迁移
-    历史数据，那会改变评分与回放历史，需要单独决定。用换手推算做上限约束即可判别。
-    """
-    if symbol.startswith("688") and volume > 0 and close > 0:
-        return volume * close      # 科创板 volume 是股，不再乘 100
-    return amount
-
-
 def market_risk_gauge(daily: List[Dict], temp: float,
                       limitdown_share: Optional[float] = None,
                       breakdown_share: Optional[float] = None,
@@ -463,8 +448,7 @@ def scan_high_position_risk(metrics: Dict[str, Dict[str, float]],
         ma10 = float(metric.get("ma10", 0))
         ma20 = float(metric.get("ma20", 0))
         ma60 = float(metric.get("ma60", 0))
-        amount = _effective_amount(
-            symbol, float(metric.get("volume", 0)), close, float(metric.get("amount", 0)))
+        amount = float(metric.get("amount", 0))
         runup = float(metric.get("runup_pct", 0))
         drawdown = float(metric.get("drawdown_from_peak", 0))
         days_since_peak = int(metric.get("days_since_peak", 0))

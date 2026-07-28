@@ -39,6 +39,22 @@ def _f(value) -> float:
         return 0.0
 
 
+def _volume_to_lots(symbol: str, volume: float) -> float:
+    """把数据源给的成交量统一折算成「手」。
+
+    腾讯对科创板（688）按**股**给量，其余板块按**手**。原来这里一律当成手、再用
+    `close × volume × 100` 算成交额，于是科创板的成交额被放大了 100 倍——全市场合计
+    能算出 32 万亿，而 A 股实际约 1.5~2 万亿。
+
+    独立验证（2026-07-28，用腾讯流通市值/现价反推流通股本再算换手率）：
+      主板/创业板 当成手 → 换手 1~15%（合理）；当成股 → 0.01~0.15%（荒谬）
+      科创板      当成手 → 换手 135~478%（不可能）；当成股 → 1.35~4.78%（合理）
+    库里只有 688 这一个前缀异常（中位成交额 501 亿 vs 其余 1.6~5.2 亿），北交所无数据。
+    历史数据的一次性纠偏见 scripts/fix_star_board_amount.py。
+    """
+    return volume / 100.0 if str(symbol).startswith("688") else volume
+
+
 class MarketSyncService:
     def __init__(self, store: Optional[LocalQuantStore] = None, max_workers: int = 4):
         self.store = store or get_local_store()
@@ -117,7 +133,7 @@ class MarketSyncService:
             close_price = _f(bar[2])
             high_price = _f(bar[3])
             low_price = _f(bar[4])
-            volume = _f(bar[5])
+            volume = _volume_to_lots(symbol, _f(bar[5]))
             rows.append(
                 {
                     "date": trade_date,
@@ -185,7 +201,7 @@ class MarketSyncService:
                 open_price = _f(fields[5]) or close
                 high_price = _f(fields[33]) or close
                 low_price = _f(fields[34]) or close
-                volume = _f(fields[36])  # 手，与逐股日线同口径
+                volume = _volume_to_lots(match.group(1), _f(fields[36]))  # 统一折算成手
                 amount = close * volume * 100  # 元，与 _fetch_kline_tencent 一致
                 out.append((match.group(1), trade_date, open_price, high_price, low_price, close, volume, amount))
             return out

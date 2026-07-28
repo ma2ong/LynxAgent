@@ -564,12 +564,14 @@ export interface MarketContext {
   /** 逐日加权温度分 0-100（50=中性），state 由它分档 */
   temp?: number
   /** 逐日中位/广度序列，最新一日在前 */
-  daily?: Array<{ date: string; median_pct: number; breadth_up: number; count: number }>
+  daily?: Array<{ date: string; median_pct: number; breadth_up: number; weighted_pct?: number | null; count: number }>
   median_5d_pct?: number
   breadth_up?: number
   latest_day?: {
     median_pct?: number
     breadth_up?: number
+    /** 成交额加权涨幅：钱实际赚没赚到，与等权中位背离时说明权重股在杀跌 */
+    weighted_pct?: number | null
     label?: string
     rebound?: boolean
   }

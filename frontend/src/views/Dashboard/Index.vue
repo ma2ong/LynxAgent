@@ -11,6 +11,15 @@
             <span class="mb-when" :class="{ live: marketCtx.intraday }">{{ asOfText }}</span>
             个股中位 <b>{{ pct(marketCtx.latest_day?.median_pct) }}</b>
             · 上涨家数占比 <b>{{ Math.round((marketCtx.latest_day?.breadth_up || 0) * 100) }}%</b>
+            <!-- 成交额加权：钱实际赚没赚到。与等权中位常有 4~5pp 的差，且两者背离时
+                 恰恰是权重股/龙头在杀跌——只看中位会在最该警惕的日子里读数祥和。 -->
+            <template v-if="marketCtx.latest_day?.weighted_pct != null">
+              · 成交额加权
+              <b :class="marketCtx.latest_day.weighted_pct >= 0 ? 'up' : 'down'">
+                {{ pct(marketCtx.latest_day.weighted_pct) }}
+              </b>
+              <span v-if="weightedGap" class="mb-gap">（{{ weightedGap }}）</span>
+            </template>
           </span>
           <span v-if="marketCtx?.latest_day?.label && marketCtx.latest_day.label !== '—'"
             class="mb-day" :class="{ rebound: marketCtx.latest_day.rebound }">
@@ -253,6 +262,15 @@ const risk = ref<RiskAlert | null>(null)
 const riskScan = ref<RiskScan | null>(null)
 const heroLoading = ref(false)
 
+// 等权中位与成交额加权背离超过 1.5pp 时点破：小票普涨掩盖了权重杀跌（或反之）
+const weightedGap = computed(() => {
+  const d: any = marketCtx.value?.latest_day
+  if (!d || d.weighted_pct == null || d.median_pct == null) return ''
+  const gap = d.median_pct - d.weighted_pct
+  if (gap >= 1.5) return '小票普涨，权重股在跌'
+  if (gap <= -1.5) return '权重股拉指数，多数个股没跟上'
+  return ''
+})
 const asOfText = computed(() => {
   const c = marketCtx.value
   if (!c?.as_of) return ''
@@ -568,4 +586,5 @@ onUnmounted(stopHeroPolling)
 .rk-danger { color: #ef232a; } .pill.rk-danger, .tile-bar i.rk-danger { background: rgba(239,35,42,.85); }
 .rk-extreme { color: #a8071a; } .pill.rk-extreme, .tile-bar i.rk-extreme { background: rgba(168,7,26,.9); }
 .pill.rk-safe, .pill.rk-warn, .pill.rk-danger, .pill.rk-extreme { color: #fff; }
+.mb-gap { color: var(--el-text-color-placeholder); font-size: 12px; }
 </style>

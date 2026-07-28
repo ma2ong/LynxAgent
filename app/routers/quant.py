@@ -555,8 +555,27 @@ async def quant_risk_alert():
         except Exception:
             breakdown_share = None
 
+        # 指数：广度口径看不见权重与龙头的杀跌，必须单独喂进去（见 market_risk_gauge 注释）
+        index_pcts = None
+        try:
+            from quantcore.quant.macro_bar import fetch_index_quotes
+            index_pcts = await _run_light(fetch_index_quotes)
+        except Exception:
+            index_pcts = None
+
+        # 龙头崩塌：复用高位风险名单里「刚见顶 + 下跌中继」的只数（只读缓存，不现算）
+        leader_breakdown = None
+        try:
+            scan = _risk_scan_cached(snapshot, compute_if_cold=False)
+            counts = ((scan.get("high_position") or {}).get("counts") or {})
+            if counts:
+                leader_breakdown = int(counts.get("fresh", 0)) + int(counts.get("falling", 0))
+        except Exception:
+            leader_breakdown = None
+
         gauge = market_risk_gauge(daily, temp, limitdown_share=limitdown_share,
-                                  breakdown_share=breakdown_share, cold_excess=_cold_excess())
+                                  breakdown_share=breakdown_share, cold_excess=_cold_excess(),
+                                  index_pcts=index_pcts, leader_breakdown=leader_breakdown)
         # 环境标签与横幅同源，一并回传方便前端对齐
         gauge["market_state"] = ctx.get("state")
         gauge["as_of"] = ctx.get("as_of")

@@ -182,9 +182,16 @@ def _snapshot_stamp(snapshot: Optional[Dict[str, Dict]]) -> Tuple[str, str]:
 
 
 def _snapshot_breadth(snapshot: Dict[str, Dict]) -> Optional[Dict[str, float]]:
-    """实时快照 → 当日盘中中位涨幅% / 上涨家数占比。样本不足返回 None。"""
+    """实时快照 → 当日盘中中位涨幅% / 上涨家数占比 / 成交额加权涨幅%。样本不足返回 None。
+
+    `weighted_pct` 是按成交额加权的平均涨幅，代表「钱实际赚没赚到」；`median_pct` 是
+    等权中位，代表「多少只票在涨」。两者经常差很多：2026-07-09 中位 −0.18% 而加权
+    +4.25%，07-10 中位 +1.24% 而加权 −1.60%。只看中位会在权重股和龙头崩塌的日子里
+    给出一片祥和的读数——而用户的持仓恰恰在那些票上。
+    """
     import statistics
     pcts: List[float] = []
+    wsum = wtot = 0.0
     for q in snapshot.values():
         v = (q or {}).get("change_percent")
         if v is None:
@@ -192,14 +199,23 @@ def _snapshot_breadth(snapshot: Dict[str, Dict]) -> Optional[Dict[str, float]]:
         if v is None:
             continue
         try:
-            pcts.append(float(v))
+            pct = float(v)
         except (TypeError, ValueError):
             continue
+        pcts.append(pct)
+        try:
+            amt = float((q or {}).get("amount") or 0)
+        except (TypeError, ValueError):
+            amt = 0.0
+        if amt > 0:
+            wsum += pct * amt
+            wtot += amt
     if len(pcts) < 500:
         return None
     return {
         "median_pct": round(statistics.median(pcts), 2),
         "breadth_up": round(sum(1 for v in pcts if v > 0) / len(pcts), 4),
+        "weighted_pct": round(wsum / wtot, 2) if wtot > 0 else None,
         "count": len(pcts),
     }
 

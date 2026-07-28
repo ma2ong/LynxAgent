@@ -55,7 +55,9 @@ HIGH_POS_DEEP_DRAWDOWN = 35.0    # 回撤超过此值视为「已深跌」，动
 def market_risk_gauge(daily: List[Dict], temp: float,
                       limitdown_share: Optional[float] = None,
                       breakdown_share: Optional[float] = None,
-                      cold_excess: Optional[float] = None) -> Dict[str, object]:
+                      cold_excess: Optional[float] = None,
+                      index_pcts: Optional[List[Dict]] = None,
+                      leader_breakdown: Optional[int] = None) -> Dict[str, object]:
     """市场级风险仪表。
 
     daily: engine.recent_daily_breadth 输出（逐日 median_pct/breadth_up，最新在前）。
@@ -63,6 +65,13 @@ def market_risk_gauge(daily: List[Dict], temp: float,
     limitdown_share: 当日跌超 ~9% 的股票占比（快照口径），可空。
     breakdown_share: 全市场跌破 MA10&MA20 的股票占比（结构性下跌强度），可空。
     cold_excess: 回放偏冷期 T+5 平均超额（pp），作为历史锚，可空。
+    index_pcts: 三大指数当日涨跌幅 [{name, change_percent}]，可空。
+    leader_breakdown: 高位风险名单里正在走坏（刚见顶+下跌中继）的只数，可空。
+
+    为什么必须有后两项（2026-07-28 的教训）：那天个股中位 +0.31%、上涨占比 55%，
+    广度口径一片祥和，仪表给出「安全 · 可以进攻」；而同一天创业板 −4.69%、深证 −2.98%，
+    兆易创新等一批前期龙头直接跌停。原因是**全部信号都是广度口径**——几千只小票的
+    中位数把权重股和龙头的崩塌完全淹没了。广度只回答「多少只在涨」，不回答「钱在哪里亏」。
     """
     signals: List[Dict[str, object]] = []
     score = 0.0
@@ -130,6 +139,54 @@ def market_risk_gauge(daily: List[Dict], temp: float,
                 "detail": f"当日上涨家数占比 {today_b*100:.0f}%，低于近5日均值 {avg_b*100:.0f}%——恶化在加速",
             })
             score += drop_risk
+
+    # 6) 指数跌幅：广度完全看不见的一维。小票普涨时指数照样可以暴跌，
+    # 而用户的钱多半在权重和龙头里——那才是真实亏损发生的地方。
+    worst_index_pct = 0.0
+    if index_pcts:
+        drops = [float(i.get("change_percent") or 0) for i in index_pcts]
+        if drops:
+            worst_index_pct = min(drops)
+            idx_risk = min(30.0, max(0.0, -worst_index_pct - 0.5) * 6.0)
+            if idx_risk > 0.5:
+                worst_name = next((str(i.get("name") or "指数") for i in index_pcts
+                                   if float(i.get("change_percent") or 0) == worst_index_pct), "指数")
+                signals.append({
+                    "key": "index_drop", "name": "指数跌幅", "value": round(worst_index_pct, 2),
+                    "risk": round(idx_risk, 1),
+                    "detail": f"{worst_name} 当日 {worst_index_pct:.2f}%——" +
+                              ("权重与龙头正在杀跌，广度指标看不见这层伤害"
+                               if worst_index_pct <= -2 else "指数走弱，注意仓位"),
+                })
+                score += idx_risk
+
+    # 7) 个股与指数背离：小票普涨、指数大跌。这是典型的行情末期特征——
+    # 资金从龙头撤出后在小票里做最后一轮扩散，此时「赚钱效应」读数最具欺骗性。
+    if index_pcts and daily:
+        today_median = float(daily[0].get("median_pct", 0))
+        if today_median > 0 and worst_index_pct <= -1.5:
+            div_risk = min(15.0, (today_median - worst_index_pct) * 2.0)
+            signals.append({
+                "key": "divergence", "name": "个股与指数背离", "value": round(today_median - worst_index_pct, 2),
+                "risk": round(div_risk, 1),
+                "detail": f"个股中位 {today_median:+.2f}% 却伴随指数 {worst_index_pct:.2f}%——"
+                          "小票普涨掩盖权重杀跌，赚钱效应读数在此刻并不代表可以进攻",
+            })
+            score += div_risk
+
+    # 8) 龙头崩塌：前期翻倍的高流动性个股正在成规模走坏。
+    # 广度和指数都可能滞后，但龙头见顶是最先出现、也最伤持仓的信号——
+    # 小票的普涨不足以抵消它，历史上这种背景下追涨大概率被埋。
+    if leader_breakdown is not None and leader_breakdown > 0:
+        lead_risk = min(20.0, leader_breakdown / 4.0)
+        if lead_risk > 0.5:
+            signals.append({
+                "key": "leader_breakdown", "name": "龙头崩塌", "value": int(leader_breakdown),
+                "risk": round(lead_risk, 1),
+                "detail": f"{leader_breakdown} 只前期翻倍的高流动性个股正在见顶或下跌中继——"
+                          "主线资金在撤退，此时的普涨多为扩散末期",
+            })
+            score += lead_risk
 
     score = round(min(100.0, score), 1)
     level, action = _level(score)

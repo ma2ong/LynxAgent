@@ -1496,6 +1496,48 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_
     return await _compute_lite_smart_pool(strategy, limit, universe_limit, cache_only=cache_only)
 
 
+_shadow_scan_lock = asyncio.Lock()
+
+
+def _pool_recorded_today(pool: str) -> bool:
+    try:
+        from quantcore.quant.local_store import get_local_store
+        today = datetime.now().strftime("%Y-%m-%d")
+        row = get_local_store()._conn().execute(
+            "SELECT 1 FROM picks_history WHERE pool=? AND pick_date=? LIMIT 1", (pool, today)
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+
+async def _run_shadow_pools(limit: int, universe_limit: int) -> None:
+    """影子留痕：主扫描之后补跑合并前的另外两套逻辑，各自独立落 picks_history。
+
+    合并成「一键智选」之后，pattern_pool 与 strength_pool 不再被调用，于是它们的留痕
+    断了——没有留痕就没法回答「合并后到底是变好还是变差」，只能靠感觉争论。这里让三套
+    逻辑每个交易日各留一份当日名单，攒够样本后用同一套 T+1/T+5 口径横向比，再决定
+    要不要调整或回退。
+
+    三条硬约束：
+    1. 必须走 run_scan 的子进程池——CPU 密集扫描跑在 Web 进程里会饿死事件循环，
+       看门狗会误判后端已死并强杀（见 app/core/scan_gate 的说明）。
+    2. 在用户的主任务完成之后才跑，且不 await 进主流程，用户不会多等一秒。
+    3. 每个池每天只跑一次（picks_history 本来就只保留当日首次快照，重复跑纯属浪费
+       算力，而闸门是串行的，浪费会直接挤占下一次真实扫描）。
+    """
+    if _shadow_scan_lock.locked():
+        return
+    async with _shadow_scan_lock:
+        for pool_name, method in (("pattern", "pattern_pool"), ("strength", "strength_pool")):
+            if _pool_recorded_today(pool_name):
+                continue
+            try:
+                await run_scan(method, limit=limit, universe_limit=universe_limit)
+            except Exception as exc:  # noqa: BLE001 — 影子留痕失败不能影响主流程
+                print(f"shadow scan {method} failed: {exc}")
+
+
 async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int,
                                     universe_limit: int, force_refresh: bool = True) -> None:
     try:
@@ -1514,6 +1556,8 @@ async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int,
                 "updated_at": datetime.now().astimezone().isoformat(),
             }
         )
+        # 主任务已经交付给用户，再在后台补跑影子池，不占用户等待时间
+        asyncio.create_task(_run_shadow_pools(limit, universe_limit))
     except Exception as exc:  # noqa: BLE001
         lite_smart_pool_tasks[task_id].update(
             {

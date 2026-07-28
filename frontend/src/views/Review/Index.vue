@@ -74,6 +74,8 @@
           <el-radio-button value="">全部</el-radio-button>
           <el-radio-button value="smart">一键智选推荐</el-radio-button>
           <el-radio-button value="auction">竞价优选</el-radio-button>
+          <el-radio-button value="pattern">形态智选（对照）</el-radio-button>
+          <el-radio-button value="strength">强势股（对照）</el-radio-button>
         </el-radio-group>
         <el-radio-group v-model="retMode" size="small">
           <el-radio-button value="abs">绝对</el-radio-button>
@@ -242,18 +244,20 @@ const horizons = [
 const POOL_LABELS: Record<string, string> = {
   smart: '一键智选推荐',
   auction: '竞价优选',
-  // 以下为已合并/退役的旧池，仅解析历史留痕用，复盘页不再展示
-  pattern: '形态智选',
-  strength: '强势股',
+  pattern: '形态智选（对照）',
+  strength: '强势股（对照）',
+  // 以下为已退役的旧池，仅解析历史留痕用，复盘页不再展示
   swing: '短线波段',
   smart_v2: '智能推荐 v2（已退役）',
   smart_fac: '因子实验（已转正为 v3）',
 }
 const poolLabel = (key: string) => POOL_LABELS[key] || key
 
-// 复盘页只保留最新在用的两个池：一键智选推荐 + 竞价优选。
-// 形态智选/强势股已并入一键智选，智能推荐 v2 已退役，历史留痕不再单列。
-const VISIBLE_POOLS = ['smart', 'auction']
+// 形态智选与强势股并入一键智选后停止留痕，于是「合并到底是变好还是变差」无从回答。
+// 现在每次一键智选跑完，后台会用同一天的数据补跑这两套旧逻辑各留一份名单（见
+// lite_main._run_shadow_pools），三者用同一套 T+1/T+5 口径横向比，样本够了再决定
+// 是否调整权重或回退。它们是对照组、不是给用户选股用的，所以标注「对照」。
+const VISIBLE_POOLS = ['smart', 'auction', 'pattern', 'strength']
 const keepVisible = <T extends { pool: string }>(list: T[]) =>
   list.filter((p) => VISIBLE_POOLS.includes(p.pool))
 

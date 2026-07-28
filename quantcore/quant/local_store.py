@@ -487,10 +487,19 @@ class LocalQuantStore:
                 out[str(symbol).zfill(6)] = {"pct": round((c - p) / p * 100, 2), "amount": _f(amount), "close": c}
         return out
 
-    def breakdown_metrics(self, ma_window: int = 60) -> Dict[str, Dict[str, float]]:
-        """批量生成持仓风险复核所需的趋势、量价和资金代理指标。"""
+    def breakdown_metrics(self, ma_window: int = 60, runup_window: int = 120) -> Dict[str, Dict[str, float]]:
+        """批量生成持仓风险复核所需的趋势、量价和资金代理指标。
+
+        `runup_window` 单独且更长（默认 120 个交易日 ≈ 半年），只服务「区间低点→高点
+        涨幅」。均线仍只用最近 ma_window 根。
+
+        为什么不能共用 60 根：这波光模块/存储的主升浪从年初就开始了，60 根窗口的起点
+        已经在半山腰，量出来的涨幅严重偏低——中际旭创 68% vs 实际 163%、长飞光纤 64%
+        vs 368%、东山精密 50% vs 281%。用 60 根会把最典型的「翻倍后腰斩」漏掉。
+        """
         from datetime import date as _date, timedelta as _td
-        cutoff = (_date.today() - _td(days=150)).strftime("%Y-%m-%d")
+        bars = max(60, ma_window, runup_window) + 1
+        cutoff = (_date.today() - _td(days=int(bars * 1.75) + 40)).strftime("%Y-%m-%d")
         sql = """
         WITH ranked AS (
             SELECT symbol, date, open, high, low, close, volume, amount,
@@ -501,7 +510,7 @@ class LocalQuantStore:
         SELECT symbol, rn, open, high, low, close, volume, amount FROM ranked WHERE rn <= ?
         """
         rows_by_symbol: Dict[str, Dict[int, tuple]] = {}
-        for row in self._conn().execute(sql, (cutoff, max(60, ma_window) + 1)).fetchall():
+        for row in self._conn().execute(sql, (cutoff, bars)).fetchall():
             symbol, rn, open_, high, low, close, volume, amount = row
             rows_by_symbol.setdefault(str(symbol).zfill(6), {})[int(rn)] = (
                 _f(open_), _f(high), _f(low), _f(close), _f(volume), _f(amount)
@@ -519,6 +528,7 @@ class LocalQuantStore:
             ma10 = sum(closes_desc[:10]) / 10
             ma20 = sum(closes_desc[:20]) / 20
             ma60 = sum(closes_desc[:60]) / 60 if len(closes_desc) >= 60 else 0.0
+            runup_closes = closes_desc[:runup_window]   # 区间高低点单独用更长窗口
             prev = closes_desc[1] if len(closes_desc) > 1 else 0.0
             prev_ma10 = sum(closes_desc[1:11]) / 10 if len(closes_desc) >= 11 else ma10
             prev_ma20 = sum(closes_desc[1:21]) / 20 if len(closes_desc) >= 21 else ma20
@@ -549,9 +559,9 @@ class LocalQuantStore:
             # 高位见顶识别用的区间形态。用「低点→高点的涨幅」而不是「当前累计涨幅」：
             # 一只翻倍后又跌回来的票，60 日累计涨幅可能只剩十几个点，但它确实涨过一倍，
             # 正是要预警的对象。所以先定位区间最高点，再往更早找它涨起来的起点。
-            peak_idx = min(range(len(closes_desc)), key=lambda i: -closes_desc[i])
-            peak = closes_desc[peak_idx]
-            trough_before_peak = min(closes_desc[peak_idx:]) if peak_idx < len(closes_desc) else close
+            peak_idx = min(range(len(runup_closes)), key=lambda i: -runup_closes[i])
+            peak = runup_closes[peak_idx]
+            trough_before_peak = min(runup_closes[peak_idx:]) if peak_idx < len(runup_closes) else close
             runup = (peak / trough_before_peak - 1) * 100 if trough_before_peak > 0 else 0.0
             drawdown_from_peak = (close / peak - 1) * 100 if peak > 0 else 0.0
             out[symbol] = {"close": round(close, 2), "ma10": round(ma10, 2),
@@ -572,7 +582,7 @@ class LocalQuantStore:
                            "runup_pct": round(runup, 2),
                            "drawdown_from_peak": round(drawdown_from_peak, 2),
                            "days_since_peak": peak_idx,
-                           "window_bars": len(closes_desc),
+                           "window_bars": len(runup_closes),
                            "close_position": round(close_position, 3),
                            "lower_shadow": round(lower_shadow, 3),
                            "consecutive_down": consecutive_down}

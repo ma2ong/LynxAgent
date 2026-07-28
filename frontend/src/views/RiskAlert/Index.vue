@@ -50,7 +50,7 @@
       </div>
       <div class="method-note hp-note">
         <b>只看基本面没问题、但涨幅已经兑现的票</b>——ST、退市、预亏这类本就不该碰的，
-        不在这份名单里（在下面「其他关注」）。
+        不在这份名单里（在下面「问题股与破位股」）。
         <span class="hp-crit">{{ hp.criteria }}</span>
       </div>
       <el-input v-model="hpKeyword" size="small" clearable placeholder="搜索股票/代码" class="stock-search hp-search" />
@@ -101,7 +101,7 @@
     <!-- 全市场持仓风险复核 -->
     <section class="scan-card">
       <div class="scan-head">
-        <h2>其他关注</h2>
+        <h2>问题股与破位股</h2>
         <div class="scan-sub" v-if="scan">
           建议退出 <b>{{ scan.recommendation_counts?.exit || 0 }}</b> 只
           · 减仓防守 <b>{{ scan.recommendation_counts?.reduce || 0 }}</b> 只
@@ -120,7 +120,7 @@
         </span>
       </div>
       <div class="scan-filters">
-        <span class="merged-hint">重点复核 · 反包观察 · 问题股 已合并为一份名单，按严重度排序</span>
+        <span class="merged-hint">ST / 退市风险 / 业绩预亏，以及全市场跌破均线的个股，合并为一份，按严重度排序</span>
         <el-input v-model="keyword" size="small" clearable placeholder="搜索股票/代码" class="stock-search" />
       </div>
       <el-table v-if="scan" :data="filteredScan" size="small" stripe max-height="520">

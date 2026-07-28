@@ -37,10 +37,17 @@ def _level(score: float) -> tuple:
 #
 # 所以准入是「且」的关系，宁可漏也不放宽：涨得够多、确实见了顶、趋势真的坏了、
 # 而且有真实成交量能撑得起卖出动作。任何一条不满足就不进这份名单。
-HIGH_POS_MIN_RUNUP = 80.0        # 区间低点→高点涨幅（%）：奔着「翻倍级」去，不收普通上涨
-HIGH_POS_MIN_DRAWDOWN = 12.0     # 距区间高点回撤（%）：低于此仍算正常波动，不算见顶
-HIGH_POS_MIN_AMOUNT = 2.0e8      # 当日成交额：小票破位噪音大也卖不掉，要能真正走得掉
-HIGH_POS_MIN_CONFIRM = 3         # 见顶确认信号条数：两条容易误报，三条才算趋势确实坏了
+# 阈值是扫出来的，不是拍的（2026-07-28，以「近一个月腰斩的前期大牛股」为覆盖标的）：
+# 决定名单长度的主要是流动性，不是确认条数——成交额门槛 2 亿→10 亿，入选从 492 降到
+# 180（8.9%→3.3%）而覆盖率纹丝不动；反过来把确认条数从 1 提到 3，只是把「跌了 44%
+# 但今天恰好没连跌」这类票误杀掉（覆盖 17/20 → 11/20）。
+# 原因：确认项里「连跌 3 日 / 放量下跌 / 资金转出」都是当日信号，逐日抖动大，不适合
+# 当硬闸门。真正的判据是硬门槛那四条（涨幅、回撤、失守 MA20、流动性），确认项负责
+# 定严重度。最终 165 只 / 5525（3.0%）。
+HIGH_POS_MIN_RUNUP = 100.0       # 区间低点→高点涨幅（%）：就盯「翻倍」这一档
+HIGH_POS_MIN_DRAWDOWN = 15.0     # 距区间高点回撤（%）：低于此仍算正常波动，不算见顶
+HIGH_POS_MIN_AMOUNT = 10.0e8     # 当日成交额：好票的前提是走得掉；这条最能压住名单长度
+HIGH_POS_MIN_CONFIRM = 1         # 走坏确认：硬门槛已承担判据，这里只要求至少有一条佐证
 HIGH_POS_FRESH_BARS = 12         # 距高点多少个交易日内算「刚见顶」——提示的黄金窗口
 HIGH_POS_DEEP_DRAWDOWN = 35.0    # 回撤超过此值视为「已深跌」，动作从催卖改为别抄底
 
@@ -420,7 +427,7 @@ def scan_high_position_risk(metrics: Dict[str, Dict[str, float]],
                             bad_forecast: Optional[set] = None,
                             realtime_quotes: Optional[Dict[str, dict]] = None,
                             fundamental_flags: Optional[Dict[str, dict]] = None,
-                            limit: int = 120) -> Dict[str, object]:
+                            limit: int = 500) -> Dict[str, object]:
     """高位风险名单：涨幅已经兑现、指标显示该走的**好票**。
 
     与 scan_sell_signals 分开跑，因为两者回答的问题不同。那边是「全市场谁在破位」，

@@ -132,6 +132,12 @@ def _safe_number(value: Any) -> float | None:
 
 def _market_quote_code(symbol: str) -> str:
     clean_symbol = str(symbol).strip().zfill(6)
+    # 920 段必须排在 "9"→沪市 之前：北交所 2023 年起启用 920xxx 代码段，而 "9" 开头
+    # 原本是给沪市 B 股（900xxx）写的规则。落到 sh920xxx 腾讯查无此码，全部 317 只
+    # 北交所个股会静默停更——日线卡在某一天不再增长，界面上只表现为「今日 5208/5525
+    # 永远补不满」，不报任何错。
+    if clean_symbol.startswith("920"):
+        return f"bj{clean_symbol}"
     if clean_symbol.startswith(("6", "9")):
         return f"sh{clean_symbol}"
     if clean_symbol.startswith(("8", "4")):

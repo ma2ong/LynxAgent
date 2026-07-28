@@ -8,28 +8,31 @@
       class="risk-lock-alert"
     >
       <template #title>
-        当前风险等级「{{ riskAlert.level }}」：智能推荐已切换为观察名单
+        <div class="risk-lock-body">
+          <b>风险「{{ riskAlert.level }}」·推荐已转为观察名单</b>
+          <span class="risk-action">{{ riskAlert.action }}</span>
+          <el-button size="small" type="danger" plain @click="router.push('/risk-alert')">风险明细</el-button>
+        </div>
       </template>
-      <div class="risk-lock-body">
-        <span>{{ riskAlert.action }}</span>
-        <el-button size="small" type="danger" plain @click="router.push('/risk-alert')">查看风险明细</el-button>
-      </div>
     </el-alert>
 
     <section class="page-head">
-      <div>
+      <div class="head-line">
         <h1>智能选股</h1>
         <p>自动横向比较全市场 A 股，优先输出短中期更值得跟踪的量化推荐池</p>
       </div>
       <el-tag effect="plain" type="info">研究跟踪，不构成交易建议</el-tag>
     </section>
 
-    <section v-if="dataHealth" class="data-health" :class="`health-${dataHealth.status}`">
-      <div>
+    <section v-if="dataHealth" class="data-health" :class="[`health-${dataHealth.status}`, { collapsed: !showHealthDetail }]">
+      <div class="health-title">
         <b>{{ healthTitle }}</b>
         <span>{{ dataHealth.message }}</span>
+        <a class="desc-toggle" @click="showHealthDetail = !showHealthDetail">
+          {{ showHealthDetail ? '收起' : '明细' }}
+        </a>
       </div>
-      <div class="health-meta">
+      <div v-show="showHealthDetail" class="health-meta">
         <span>股票池 {{ dataHealth.meta_count }}</span>
         <span>K线 {{ dataHealth.kline_symbols }}</span>
         <span>最新完整 {{ dataHealth.latest_complete_date || '-' }}</span>
@@ -63,8 +66,14 @@
         <div class="smart-home">
           <section class="smart-hero compact-smart-hero">
             <div>
-              <h2>一键智能推荐股票池</h2>
-              <p>结构因子评分为骨架（MACD、布林位置、趋势、动量、资金流等合成，与 12 个月回放同源、经 A/B 验证），再叠加盘中涨跌与成交活跃度重排；「形态智选」和「强势股」共振标的自动上浮并打标。每次手动生成都会跳过旧名单缓存，输出当下观察名单。</p>
+              <h2>
+                一键智能推荐股票池
+                <!-- 这段说明四行、只在第一次看时有用，之后天天占掉表格的空间，故默认收起 -->
+                <a class="desc-toggle" @click="showPoolDesc = !showPoolDesc">
+                  {{ showPoolDesc ? '收起说明' : '选股逻辑' }}
+                </a>
+              </h2>
+              <p v-if="showPoolDesc">结构因子评分为骨架（MACD、布林位置、趋势、动量、资金流等合成，与 12 个月回放同源、经 A/B 验证），再叠加盘中涨跌与成交活跃度重排；「形态智选」和「强势股」共振标的自动上浮并打标。每次手动生成都会跳过旧名单缓存，输出当下观察名单。</p>
             </div>
             <div class="smart-inline-settings">
               <label class="strategy-pick">
@@ -961,6 +970,8 @@ const ensureDataBeforeScan = async () => {
 }
 
 const riskAlert = ref<RiskAlert | null>(null)
+const showPoolDesc = ref(false)
+const showHealthDetail = ref(false)
 const riskLocked = computed(() => ['危险', '极危'].includes(riskAlert.value?.level || ''))
 // ③b 危险市况下不再整池锁死：后端标了 daytrade_ok 的逆势票仍给买入计划，但限定 T+1。
 // 依据是回测——弱市里这类票 T+1 超额 +1.06pp/胜率 62%，T+2 起衰减、T+5 转负，
@@ -1996,4 +2007,29 @@ const openChart = async (row: any) => {
 .panel-note { margin: 10px 0 0; font-size: 12px; color: var(--el-text-color-placeholder); }
 .trade-plan-cell.daytrade { border-left: 2px solid var(--el-color-warning); padding-left: 6px; }
 .score-pct { font-size: 11px; color: var(--el-text-color-placeholder); margin-top: 2px; }
+
+/* 头部密度：原来标题+数据健康+池说明+风险横幅要吃掉 583px（视口 889px 的 66%），
+   个股表格被挤到屏幕下半部。这里把纵向堆叠改成同行排布、长说明默认收起。 */
+.head-line { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.head-line h1 { font-size: 19px; }
+.head-line p { margin: 0 !important; font-size: 12px; }
+
+.desc-toggle {
+  margin-left: 8px; font-size: 12px; font-weight: 400;
+  color: var(--el-color-primary); cursor: pointer;
+}
+
+.data-health.collapsed { padding: 6px 12px; }
+.health-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.health-title span { font-size: 12px; color: var(--el-text-color-secondary); }
+
+.risk-lock-alert { margin: 0 !important; }
+.risk-lock-alert :deep(.el-alert__title) { width: 100%; }
+.risk-lock-body { font-size: 12px; }
+.risk-lock-body .risk-action {
+  flex: 1; min-width: 0; color: var(--el-text-color-regular);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.compact-smart-hero h2 { font-size: 16px; margin-bottom: 4px; }
+.compact-smart-hero p { margin: 4px 0 0; font-size: 12px; line-height: 1.6; }
 </style>

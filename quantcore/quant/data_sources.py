@@ -64,8 +64,13 @@ def _a_share_symbol(symbol: str) -> str:
 
 def _baostock_code(symbol: str) -> str:
     clean = _a_share_symbol(symbol)
+    # baostock 用 bj. 前缀表示北交所；920 段同样要排在 "9"→sh 之前，理由见 sync_service._tencent_code
+    if clean.startswith("920"):
+        return f"bj.{clean}"
     if clean.startswith(("6", "9")):
         return f"sh.{clean}"
+    if clean.startswith(("8", "4")):
+        return f"bj.{clean}"
     return f"sz.{clean}"
 
 

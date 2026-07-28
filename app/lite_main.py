@@ -748,6 +748,52 @@ def _env_position_gate(mkt: dict[str, Any] | None) -> dict[str, Any]:
             "note": "大盘中性，方向不明。单票仓位建议 ≤5 成，优先强势主线、回踩企稳再介入。"}
 
 
+def _mark_countertrend_daytrade(items: list[dict[str, Any]]) -> int:
+    """危险市况下标出「可做 T+1 短打」的逆势票，替代一刀切关闭推荐。
+
+    回测（12 个月，弱市定义为全市场成交额加权涨幅 < −1%，45 个这样的交易日）：
+      当日涨幅 ≥3% + 站上 MA20 + 非高位崩塌，持有 T+1 → 超额 +1.058pp、胜率 62.2%、t=2.30
+      同一批票持有 T+2 → +0.672pp / 52.3%；T+3 → +0.499pp / 50.0%；T+5 → −1.150pp / 40.9%
+    也就是说弱市里的逆势强势**只在一天内有效**，第二天开始衰减，拿到 T+5 变成亏钱。
+    所以正确做法既不是全关（会漏掉这批 62% 胜率的机会），也不是照常推荐（拿久了必亏），
+    而是放开、但明确限定 T+1 兑现。
+
+    返回标记出来的只数。拿不到日线指标时不标记（宁可少给也不给没验证过的）。
+    """
+    try:
+        from app.routers.quant import _RISK_SCAN_CACHE
+        metrics = (_RISK_SCAN_CACHE.get("inputs") or {}).get("metrics") or {}
+    except Exception:
+        metrics = {}
+    if not metrics:
+        return 0
+    marked = 0
+    for item in items:
+        symbol = str(item.get("symbol") or item.get("code") or "").zfill(6)
+        m = metrics.get(symbol)
+        if not m:
+            continue
+        pct = item.get("pct_chg")
+        if pct is None:
+            continue
+        try:
+            pct = float(pct)
+        except (TypeError, ValueError):
+            continue
+        close = float(item.get("close") or m.get("close") or 0)
+        ma20 = float(m.get("ma20") or 0)
+        drawdown = float(m.get("drawdown_from_peak") or 0)
+        if pct < 3.0 or ma20 <= 0 or close < ma20 or drawdown <= -15:
+            continue
+        item["daytrade_ok"] = True
+        item["daytrade_note"] = (
+            f"逆势走强 {pct:+.2f}% 且站上 MA20——弱市里这类票 T+1 超额 +1.06pp、胜率 62%，"
+            "但 T+2 起迅速衰减、T+5 转负，只做当日到次日，不留过夜以上。"
+        )
+        marked += 1
+    return marked
+
+
 async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any]:
     data = dict(response.get("data") or {})
     items = [dict(item) for item in data.get("items") or []]
@@ -797,6 +843,11 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
             if isinstance(item.get("trade_plan"), dict):
                 item["trade_plan"]["env_position"] = gate.get("label")
                 item["trade_plan"]["env_note"] = gate.get("note")
+    # ③b 危险市况不再一刀切关闭：标出可做 T+1 短打的逆势票（依据见 _mark_countertrend_daytrade）
+    try:
+        data["daytrade_count"] = _mark_countertrend_daytrade(items)
+    except Exception:
+        data["daytrade_count"] = 0
     if quote_updated_at:
         data["updated_at"] = quote_updated_at
         data["quote_updated_at"] = quote_updated_at

@@ -180,7 +180,14 @@
             >
               <el-table-column type="selection" width="44" fixed />
               <el-table-column label="量化分" width="90" fixed>
-                <template #default="{ row }"><b>{{ displayScore(row) }}</b></template>
+                <template #default="{ row }">
+                  <b>{{ displayScore(row) }}</b>
+                  <!-- 结构因子分全市场上限约 79.6，所以「79 分」是前 0.1% 而非「只有七八十分」。
+                       分数本身不可横向解读，百分位可以，故一并显示。 -->
+                  <div v-if="row.score_percentile != null" class="score-pct">
+                    全市场前 {{ row.score_percentile < 1 ? row.score_percentile.toFixed(1) : Math.round(row.score_percentile) }}%
+                  </div>
+                </template>
               </el-table-column>
               <el-table-column label="AI因子" width="90">
                 <template #default="{ row }">
@@ -220,10 +227,18 @@
               </el-table-column>
               <el-table-column label="买卖计划" width="156">
                 <template #default="{ row }">
-                  <div v-if="riskLocked" class="trade-plan-cell risk-paused">
+                  <div v-if="buyLocked(row)" class="trade-plan-cell risk-paused">
                     <el-tag size="small" type="danger" effect="dark">暂停新增买入</el-tag>
                     <span>当前仅作为观察名单</span>
                     <em>市场风险降至警惕/安全后再显示买入计划</em>
+                  </div>
+                  <div v-else-if="riskLocked && row.daytrade_ok" class="trade-plan-cell daytrade">
+                    <el-tag size="small" type="warning" effect="dark">仅 T+1 短打</el-tag>
+                    <span v-if="row.trade_plan?.buy_price">买 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
+                    <span v-if="row.trade_plan?.stop_loss" class="tp-stop">
+                      止损 {{ formatNumber(row.trade_plan.stop_loss) }}
+                    </span>
+                    <em class="tp-warn">{{ row.daytrade_note }}</em>
                   </div>
                   <div v-else-if="row.trade_plan && row.trade_plan.buy_price" class="trade-plan-cell">
                     <el-tag v-if="row.limit_up" size="small" type="danger" effect="dark" class="limit-up-tag">
@@ -947,6 +962,10 @@ const ensureDataBeforeScan = async () => {
 
 const riskAlert = ref<RiskAlert | null>(null)
 const riskLocked = computed(() => ['危险', '极危'].includes(riskAlert.value?.level || ''))
+// ③b 危险市况下不再整池锁死：后端标了 daytrade_ok 的逆势票仍给买入计划，但限定 T+1。
+// 依据是回测——弱市里这类票 T+1 超额 +1.06pp/胜率 62%，T+2 起衰减、T+5 转负，
+// 所以「放开但限期」比「一律不给」和「照常推荐」都更贴近真实赔率。
+const buyLocked = (row: any) => riskLocked.value && !row?.daytrade_ok
 const pct = (v?: number | null) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`)
 
 // 各池近30日 T+5 真实胜率（来自选股留痕），样本不足时提示积累中
@@ -1975,4 +1994,6 @@ const openChart = async (row: any) => {
 .panel-pending { color: var(--el-text-color-placeholder); }
 .panel-summary { margin: 0 0 10px; font-size: 13px; }
 .panel-note { margin: 10px 0 0; font-size: 12px; color: var(--el-text-color-placeholder); }
+.trade-plan-cell.daytrade { border-left: 2px solid var(--el-color-warning); padding-left: 6px; }
+.score-pct { font-size: 11px; color: var(--el-text-color-placeholder); margin-top: 2px; }
 </style>

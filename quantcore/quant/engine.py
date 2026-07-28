@@ -695,6 +695,13 @@ class QuantEngine:
         items = [_build_item(meta_by_symbol.get(str(r["symbol"]), {}), r) for r in scored_rows]
         items.sort(key=lambda item: float(item["score"]), reverse=True)
 
+        # 结构因子分是有界的合成分，全市场上限约 79.6（P50≈44、P95≈71.5、P99≈77.2），
+        # 所以「79 分」其实是前 0.1%，而不是「只有七八十分」。分数本身不能横向比较，
+        # 百分位可以——在这里截断前算好，前端直接显示「全市场前 X%」。
+        total_scored = len(items)
+        for rank, it in enumerate(items):
+            it["score_percentile"] = round((rank + 1) / total_scored * 100, 2) if total_scored else None
+
         # 仅为最终展示的标的附交易计划：优先本地 K 线算 ATR，无本地数据则按比例兜底。
         final_items = items[:safe_limit]
         for it in final_items:

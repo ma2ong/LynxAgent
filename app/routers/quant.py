@@ -459,7 +459,7 @@ def _risk_scan_cached(realtime_quotes: Optional[dict] = None,
     """
     import time as _time
     from quantcore.quant.local_store import get_local_store
-    from quantcore.quant.risk_alert import scan_sell_signals
+    from quantcore.quant.risk_alert import scan_high_position_risk, scan_sell_signals
 
     inputs = _RISK_SCAN_CACHE.get("inputs")
     is_fresh = bool(inputs) and (_time.time() - _RISK_SCAN_CACHE.get("at", 0) < 600)
@@ -500,6 +500,15 @@ def _risk_scan_cached(realtime_quotes: Optional[dict] = None,
         realtime_quotes=realtime_quotes,
         fundamental_flags=inputs["flags"],
         limit=500,
+    )
+    # 高位风险是独立的一份名单（涨过头的好票该不该走），与上面的全市场破位扫描
+    # 回答的不是同一个问题，所以单独跑一遍、单独返回，前端分两个名单展示。
+    result["high_position"] = scan_high_position_risk(
+        inputs["metrics"],
+        inputs["names"],
+        bad_forecast=inputs["bad"],
+        realtime_quotes=realtime_quotes,
+        fundamental_flags=inputs["flags"],
     )
     result["as_of"] = inputs["as_of"]
     result["universe"] = len(inputs["metrics"])

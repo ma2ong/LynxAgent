@@ -29,6 +29,37 @@ def _level(score: float) -> tuple:
     return LEVELS[-1][1], LEVELS[-1][2]
 
 
+# ---- 高位风险名单的准入门槛 ----
+# 这份名单要回答的是一个很具体的问题：**好票涨过头了，该不该走。**
+# 2026 年 6 月的 MLCC / 存储 / PCB / 芯片就是样板——基本面没问题、方向也对，
+# 但两个月翻了一倍，7 月起连跌一个月没反转。这种票值得单独拎出来提示，
+# 而 ST、退市、预亏这些本来就不该碰的垃圾股不在此列，混进来只会稀释名单。
+#
+# 所以准入是「且」的关系，宁可漏也不放宽：涨得够多、确实见了顶、趋势真的坏了、
+# 而且有真实成交量能撑得起卖出动作。任何一条不满足就不进这份名单。
+HIGH_POS_MIN_RUNUP = 80.0        # 区间低点→高点涨幅（%）：奔着「翻倍级」去，不收普通上涨
+HIGH_POS_MIN_DRAWDOWN = 12.0     # 距区间高点回撤（%）：低于此仍算正常波动，不算见顶
+HIGH_POS_MIN_AMOUNT = 2.0e8      # 当日成交额：小票破位噪音大也卖不掉，要能真正走得掉
+HIGH_POS_MIN_CONFIRM = 3         # 见顶确认信号条数：两条容易误报，三条才算趋势确实坏了
+HIGH_POS_FRESH_BARS = 12         # 距高点多少个交易日内算「刚见顶」——提示的黄金窗口
+HIGH_POS_DEEP_DRAWDOWN = 35.0    # 回撤超过此值视为「已深跌」，动作从催卖改为别抄底
+
+
+def _effective_amount(symbol: str, volume: float, close: float, amount: float) -> float:
+    """当日成交额（元），修正科创板的单位错配。
+
+    daily_kline 的 amount 由 sync_service 统一按 `close × volume × 100` 推导，前提是
+    volume 的单位是「手」。但数据源给科创板（688）的 volume 是「股」，于是这些票的
+    成交额被放大了约 100 倍——全市场合计能算出 32 万亿，而 A 股实际约 1.5~2 万亿。
+
+    这里只在本名单的流动性门槛上就地纠偏，不改库里的值：真正的修法是改 sync 并迁移
+    历史数据，那会改变评分与回放历史，需要单独决定。用换手推算做上限约束即可判别。
+    """
+    if symbol.startswith("688") and volume > 0 and close > 0:
+        return volume * close      # 科创板 volume 是股，不再乘 100
+    return amount
+
+
 def market_risk_gauge(daily: List[Dict], temp: float,
                       limitdown_share: Optional[float] = None,
                       breakdown_share: Optional[float] = None,
@@ -396,4 +427,142 @@ def scan_sell_signals(metrics: Dict[str, Dict[str, float]],
         },
         "method_note": "均线破位仅为弱证据；退出建议至少需要三个风险维度共振，盘中反包会动态降级。",
         "items": selected[:max_items],
+    }
+
+
+def scan_high_position_risk(metrics: Dict[str, Dict[str, float]],
+                            names: Dict[str, str],
+                            bad_forecast: Optional[set] = None,
+                            realtime_quotes: Optional[Dict[str, dict]] = None,
+                            fundamental_flags: Optional[Dict[str, dict]] = None,
+                            limit: int = 120) -> Dict[str, object]:
+    """高位风险名单：涨幅已经兑现、指标显示该走的**好票**。
+
+    与 scan_sell_signals 分开跑，因为两者回答的问题不同。那边是「全市场谁在破位」，
+    什么票都会进；这边只问「哪些原本不错的票涨过头了、现在该减该走」。
+
+    刻意排除 ST/退市/预亏：这些票任何时候都不该买，把它们混进来只会让名单变长、
+    让真正需要看的高位票被淹没。它们归到另一份「其他关注」名单里。
+
+    门槛是「且」的关系（见模块顶部常量），任何一条不满足就不进这份名单：
+    涨得够多 → 确实见了顶 → 趋势真的坏了 → 有成交量撑得住卖出。
+    盘中已收复双均线的（反包）也剔除——那说明还没走坏，不该催人卖。
+    """
+    bad_forecast = bad_forecast or set()
+    realtime_quotes = realtime_quotes or {}
+    fundamental_flags = fundamental_flags or {}
+    items: List[Dict[str, object]] = []
+
+    for symbol, metric in metrics.items():
+        name = str(names.get(symbol) or symbol)
+        flag = fundamental_flags.get(symbol) or {}
+        if "ST" in name.upper() or "退" in name or symbol in bad_forecast or flag.get("bad_forecast"):
+            continue  # 垃圾股不进这份名单，另一份名单负责
+
+        close = float(metric.get("close", 0))
+        ma10 = float(metric.get("ma10", 0))
+        ma20 = float(metric.get("ma20", 0))
+        ma60 = float(metric.get("ma60", 0))
+        amount = _effective_amount(
+            symbol, float(metric.get("volume", 0)), close, float(metric.get("amount", 0)))
+        runup = float(metric.get("runup_pct", 0))
+        drawdown = float(metric.get("drawdown_from_peak", 0))
+        days_since_peak = int(metric.get("days_since_peak", 0))
+        window_bars = int(metric.get("window_bars", 0))
+        if window_bars < 40 or close <= 0 or ma20 <= 0:
+            continue  # 历史不足，区间高低点不可信
+        if amount < HIGH_POS_MIN_AMOUNT:
+            continue
+        if runup < HIGH_POS_MIN_RUNUP:
+            continue
+        if drawdown > -HIGH_POS_MIN_DRAWDOWN:
+            continue
+        if close >= ma20:
+            continue  # 中期趋势还没坏，不催卖
+
+        pct = float(metric.get("pct", 0))
+        amount_ratio = float(metric.get("amount_ratio", 0))
+        capital_flow = float(metric.get("capital_flow_5d", 0))
+        return_20d = float(metric.get("return_20d", 0))
+        consecutive_down = int(metric.get("consecutive_down", 0))
+
+        # 盘中已收复双均线：趋势在修复，不该出现在「该卖」名单里
+        quote = realtime_quotes.get(symbol) or {}
+        current_price = float(
+            quote.get("price") or quote.get("current_price") or quote.get("close") or 0)
+        current_pct = float(
+            quote.get("change_percent") if quote.get("change_percent") is not None
+            else quote.get("pct_chg") or 0)
+        if current_price > 0 and current_price >= ma10 and current_price >= ma20:
+            continue
+
+        confirms: List[str] = []
+        if close < ma10:
+            confirms.append(f"跌破 MA10({ma10:.2f})/MA20({ma20:.2f})，短中期趋势同时走坏")
+        if ma60 > 0 and close < ma60:
+            confirms.append(f"跌破 MA60({ma60:.2f})，中期趋势失守")
+        if pct < 0 and amount_ratio >= 1.4:
+            confirms.append(f"放量下跌：成交额达 20 日均值 {amount_ratio:.1f} 倍")
+        if capital_flow <= -20:
+            confirms.append(f"资金转出：近 5 日下跌日成交占优（{capital_flow:.0f}）")
+        if consecutive_down >= 3:
+            confirms.append(f"已连续下跌 {consecutive_down} 个交易日")
+        if return_20d <= -10:
+            confirms.append(f"近 20 日累计下跌 {abs(return_20d):.1f}%")
+        if len(confirms) < HIGH_POS_MIN_CONFIRM:
+            continue
+
+        # 仓位动作按「离见顶多久」分档，而不是按跌了多深。
+        # 跌 60% 再喊清仓没有意义——那时候该说的是别去抄底。真正有价值的提示窗口是
+        # 刚见顶、跌幅还不深的那十几个交易日，那时候减仓还来得及。
+        if drawdown <= -HIGH_POS_DEEP_DRAWDOWN:
+            action, severity = "已深跌，勿抄底；反弹至均线附近减磅", 1
+            stage = "深跌未反转"
+        elif days_since_peak <= HIGH_POS_FRESH_BARS:
+            action, severity = "见顶初期，减仓至三成以下", 3
+            stage = "刚见顶"
+        else:
+            action, severity = "趋势已坏，逢反弹继续减仓", 2
+            stage = "下跌中继"
+
+        items.append({
+            "symbol": symbol,
+            "name": name,
+            "close": round(close, 2),
+            "pct": round(pct, 2),
+            "current_price": round(current_price, 2) if current_price > 0 else None,
+            "current_pct": round(current_pct, 2) if current_price > 0 else None,
+            "peak": metric.get("peak"),
+            "runup_pct": round(runup, 1),
+            "drawdown_from_peak": round(drawdown, 1),
+            "days_since_peak": days_since_peak,
+            "amount_yi": round(amount / 1e8, 2),
+            "amount_ratio": round(amount_ratio, 2),
+            "return_20d": round(return_20d, 2),
+            "action": action,
+            "stage": stage,
+            "severity": severity,
+            "confirms": confirms,
+            "reason": (
+                f"区间涨幅 {runup:.0f}% 后自高点回撤 {abs(drawdown):.0f}%，"
+                f"{len(confirms)} 项指标确认趋势走坏"
+            ),
+        })
+
+    # 排序：动作越果断越靠前，同档按回撤深度——先看跌得最狠的
+    # 刚见顶的排最前——那是唯一还来得及行动的一档；同档内涨得越猛的越优先看
+    items.sort(key=lambda it: (-it["severity"], -it["runup_pct"]))
+    return {
+        "total": len(items),
+        "counts": {
+            "fresh": sum(1 for it in items if it["stage"] == "刚见顶"),
+            "falling": sum(1 for it in items if it["stage"] == "下跌中继"),
+            "deep": sum(1 for it in items if it["stage"] == "深跌未反转"),
+        },
+        "criteria": (
+            f"区间涨幅 ≥{HIGH_POS_MIN_RUNUP:.0f}% · 距高点回撤 ≥{HIGH_POS_MIN_DRAWDOWN:.0f}% · "
+            f"收盘失守 MA20 · 成交额 ≥{HIGH_POS_MIN_AMOUNT / 1e8:.1f}亿 · "
+            f"≥{HIGH_POS_MIN_CONFIRM} 项走坏确认；已剔除 ST/退市/预亏与盘中反包"
+        ),
+        "items": items[:max(1, limit)],
     }

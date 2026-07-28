@@ -37,10 +37,71 @@
     </section>
     <el-skeleton v-else-if="loading" :rows="4" animated />
 
+    <!-- 高位风险：涨高见顶、该减仓的好票（已剔除 ST/退市/预亏） -->
+    <section v-if="hp" class="scan-card hp-card">
+      <div class="scan-head">
+        <h2>高位风险 · 涨高见顶</h2>
+        <div class="scan-sub">
+          刚见顶 <b class="down">{{ hp.counts?.fresh || 0 }}</b> 只
+          · 下跌中继 <b class="risk-mid">{{ hp.counts?.falling || 0 }}</b> 只
+          · 深跌未反转 <b>{{ hp.counts?.deep || 0 }}</b> 只
+          <span v-if="scan?.universe">/ 全市场 {{ scan.universe }} 只</span>
+        </div>
+      </div>
+      <div class="method-note hp-note">
+        <b>只看基本面没问题、但涨幅已经兑现的票</b>——ST、退市、预亏这类本就不该碰的，
+        不在这份名单里（在下面「其他关注」）。
+        <span class="hp-crit">{{ hp.criteria }}</span>
+      </div>
+      <el-input v-model="hpKeyword" size="small" clearable placeholder="搜索股票/代码" class="stock-search hp-search" />
+      <el-table v-if="hp.items?.length" :data="filteredHp" size="small" stripe max-height="460">
+        <el-table-column label="仓位动作" width="200" fixed="left">
+          <template #default="{ row }">
+            <el-tag size="small" :type="stageType(row.stage)" effect="dark">{{ row.stage }}</el-tag>
+            <div class="hp-action">{{ row.action }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="股票" width="150" fixed="left">
+          <template #default="{ row }">
+            <a class="stk" @click="openStock(row.symbol)">{{ row.name }} <small>{{ row.symbol }}</small></a>
+          </template>
+        </el-table-column>
+        <el-table-column label="区间涨幅" width="95" sortable :sort-by="'runup_pct'">
+          <template #default="{ row }"><b class="up">+{{ row.runup_pct.toFixed(0) }}%</b></template>
+        </el-table-column>
+        <el-table-column label="距高点" width="95" sortable :sort-by="'drawdown_from_peak'">
+          <template #default="{ row }"><b class="down">{{ row.drawdown_from_peak.toFixed(0) }}%</b></template>
+        </el-table-column>
+        <el-table-column label="见顶于" width="92">
+          <template #default="{ row }"><span class="dim">{{ row.days_since_peak }} 日前</span></template>
+        </el-table-column>
+        <el-table-column label="最高价" width="92">
+          <template #default="{ row }"><span class="dim">{{ row.peak }}</span></template>
+        </el-table-column>
+        <el-table-column label="现价" width="120">
+          <template #default="{ row }">
+            <span>{{ row.current_price ?? row.close }}</span>
+            <small v-if="row.current_pct !== null" :class="row.current_pct >= 0 ? 'up' : 'down'">
+              {{ pct(row.current_pct) }}
+            </small>
+          </template>
+        </el-table-column>
+        <el-table-column label="成交额" width="92">
+          <template #default="{ row }"><span class="dim">{{ row.amount_yi.toFixed(1) }} 亿</span></template>
+        </el-table-column>
+        <el-table-column label="走坏确认" min-width="420">
+          <template #default="{ row }">
+            <div v-for="(c, i) in row.confirms" :key="i" class="ev">· {{ c }}</div>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-else description="当前无个股同时满足全部高位风险条件" :image-size="70" />
+    </section>
+
     <!-- 全市场持仓风险复核 -->
     <section class="scan-card">
       <div class="scan-head">
-        <h2>全市场持仓风险复核</h2>
+        <h2>其他关注</h2>
         <div class="scan-sub" v-if="scan">
           建议退出 <b>{{ scan.recommendation_counts?.exit || 0 }}</b> 只
           · 减仓防守 <b>{{ scan.recommendation_counts?.reduce || 0 }}</b> 只
@@ -59,12 +120,7 @@
         </span>
       </div>
       <div class="scan-filters">
-        <el-radio-group v-model="layerFilter" size="small" class="sev-filter">
-          <el-radio-button value="actionable">重点复核 {{ scan?.actionable_count || 0 }}</el-radio-button>
-          <el-radio-button value="rebound">反包观察 {{ scan?.recommendation_counts?.rebound || 0 }}</el-radio-button>
-          <el-radio-button value="trouble">问题股 {{ scan?.layer_counts?.trouble || 0 }}</el-radio-button>
-          <el-radio-button value="all">全部</el-radio-button>
-        </el-radio-group>
+        <span class="merged-hint">重点复核 · 反包观察 · 问题股 已合并为一份名单，按严重度排序</span>
         <el-input v-model="keyword" size="small" clearable placeholder="搜索股票/代码" class="stock-search" />
       </div>
       <el-table v-if="scan" :data="filteredScan" size="small" stripe max-height="520">
@@ -144,8 +200,8 @@ const router = useRouter()
 const loading = ref(false)
 const alert = ref<RiskAlert | null>(null)
 const scan = ref<RiskScan | null>(null)
-const layerFilter = ref('actionable')
 const keyword = ref('')
+const hpKeyword = ref('')
 
 const levelKey = computed(() => {
   const l = alert.value?.level
@@ -156,19 +212,21 @@ const pct = (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(2)}%`
 const signalType = (signal: string) =>
   signal === '退出/止损' ? 'danger' : signal === '减仓防守' ? 'warning'
     : signal === '反包观察' ? 'success' : 'info'
+// 高位风险名单（后端已做严格准入，前端只做搜索过滤，不再二次筛）
+const hp = computed(() => (scan.value as any)?.high_position || null)
+const stageType = (stage: string) =>
+  stage === '刚见顶' ? 'danger' : stage === '下跌中继' ? 'warning' : 'info'
+const filteredHp = computed(() => {
+  const kw = hpKeyword.value.trim().toLowerCase()
+  return (hp.value?.items || []).filter((it: any) =>
+    !kw || it.name.toLowerCase().includes(kw) || it.symbol.includes(kw))
+})
+
+// 其他关注：原来的重点复核 / 反包观察 / 问题股 合并为一份，不再分 tab
 const filteredScan = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  return (scan.value?.items || []).filter((item) => {
-    // 分类精简：重点复核=退出+减仓（综合评估的可操作清单）/ 反包观察 / 问题股 / 全部
-    const passLayer =
-      layerFilter.value === 'all' ? true
-        : layerFilter.value === 'actionable' ? (item.signal === '退出/止损' || item.signal === '减仓防守')
-          : layerFilter.value === 'rebound' ? item.signal === '反包观察'
-            : layerFilter.value === 'trouble' ? item.layer === 'trouble'
-              : true
-    const passKw = !kw || item.name.toLowerCase().includes(kw) || item.symbol.includes(kw)
-    return passLayer && passKw
-  })
+  return (scan.value?.items || []).filter((item) =>
+    !kw || item.name.toLowerCase().includes(kw) || item.symbol.includes(kw))
 })
 const openStock = (symbol: string) => router.push({ name: 'stock-analysis', query: { symbol } })
 
@@ -240,4 +298,16 @@ onMounted(loadAll)
 .signal-bar i.risk-hi { background: #ef232a; }
 .signal-bar i.risk-mid { background: #d48806; }
 .signal-bar i.risk-lo { background: var(--el-border-color); }
+
+/* 高位风险名单 */
+.hp-card { border-color: var(--el-color-danger-light-5); }
+.hp-note { line-height: 1.7; }
+.hp-crit { display: block; margin-top: 4px; font-size: 12px; color: var(--el-text-color-placeholder); }
+.hp-search { max-width: 220px; margin: 10px 0; }
+.hp-action { margin-top: 3px; font-size: 12px; color: var(--el-text-color-regular); line-height: 1.4; }
+.dim { color: var(--el-text-color-secondary); }
+.ev { font-size: 12px; color: var(--el-text-color-regular); line-height: 1.6; }
+.merged-hint { font-size: 12px; color: var(--el-text-color-placeholder); }
+.scan-filters { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; margin: 10px 0; }
 </style>

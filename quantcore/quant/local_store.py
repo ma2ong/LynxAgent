@@ -545,6 +545,15 @@ class LocalQuantStore:
             lower_shadow = (min(open_, close) - low) / day_range if day_range > 0 else 0.0
             return_5d = (close / closes_desc[5] - 1) * 100 if len(closes_desc) >= 6 else 0.0
             return_20d = (close / closes_desc[20] - 1) * 100 if len(closes_desc) >= 21 else 0.0
+
+            # 高位见顶识别用的区间形态。用「低点→高点的涨幅」而不是「当前累计涨幅」：
+            # 一只翻倍后又跌回来的票，60 日累计涨幅可能只剩十几个点，但它确实涨过一倍，
+            # 正是要预警的对象。所以先定位区间最高点，再往更早找它涨起来的起点。
+            peak_idx = min(range(len(closes_desc)), key=lambda i: -closes_desc[i])
+            peak = closes_desc[peak_idx]
+            trough_before_peak = min(closes_desc[peak_idx:]) if peak_idx < len(closes_desc) else close
+            runup = (peak / trough_before_peak - 1) * 100 if trough_before_peak > 0 else 0.0
+            drawdown_from_peak = (close / peak - 1) * 100 if peak > 0 else 0.0
             out[symbol] = {"close": round(close, 2), "ma10": round(ma10, 2),
                            "ma20": round(ma20, 2), "ma60": round(ma60, 2),
                            "pct": round(pct, 2),
@@ -559,6 +568,11 @@ class LocalQuantStore:
                            if total_amount > 0 else 0.0,
                            "return_5d": round(return_5d, 2),
                            "return_20d": round(return_20d, 2),
+                           "peak": round(peak, 2),
+                           "runup_pct": round(runup, 2),
+                           "drawdown_from_peak": round(drawdown_from_peak, 2),
+                           "days_since_peak": peak_idx,
+                           "window_bars": len(closes_desc),
                            "close_position": round(close_position, 3),
                            "lower_shadow": round(lower_shadow, 3),
                            "consecutive_down": consecutive_down}

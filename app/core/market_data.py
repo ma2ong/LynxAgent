@@ -28,6 +28,7 @@ from typing import Any
 import requests
 
 from app.core.schema import ensure_lite_cache_table
+from quantcore.quant.data import volume_to_lots
 from app.lite_auth import store
 
 lite_insights_cache: dict[str, tuple[datetime, Any]] = {}
@@ -183,7 +184,9 @@ def _fetch_tencent_realtime_quotes(symbols: list[str]) -> dict[str, dict[str, An
                 "high": _safe_number(fields[33]),
                 "low": _safe_number(fields[34]),
                 "prev_close": prev_close,
-                "volume": volume_hands * 100 if volume_hands is not None else None,
+                # volume 对外统一给「股」；源对科创板按股给量，先折成手再×100，
+                # 否则 688 的成交量会翻 100 倍（同 daily_kline 的历史 bug，见 volume_to_lots）
+                "volume": volume_to_lots(symbol, volume_hands) * 100 if volume_hands is not None else None,
                 "amount": amount_10k * 10000 if amount_10k is not None else None,
                 "turnover_rate": _safe_number(fields[38]) if len(fields) > 38 else None,
                 "amplitude": _safe_number(fields[43]) if len(fields) > 43 else None,
@@ -307,7 +310,8 @@ def _fetch_eastmoney_realtime_snapshot() -> dict[str, dict[str, Any]]:
             "high": _safe_number(row.get("f15")),
             "low": _safe_number(row.get("f16")),
             "prev_close": prev_close,
-            "volume": volume_hands * 100 if volume_hands is not None else None,
+            # 同上：折成手再×100，避免科创板成交量翻 100 倍
+            "volume": volume_to_lots(symbol, volume_hands) * 100 if volume_hands is not None else None,
             "amount": amount,
             "turnover_rate": _safe_number(row.get("f8")),
             "volume_ratio": _safe_number(row.get("f10")),

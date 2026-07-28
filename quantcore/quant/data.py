@@ -63,6 +63,19 @@ def _is_a_share(symbol: str) -> bool:
     return bool(re.fullmatch(r"\d{6}", str(symbol or "").strip()))
 
 
+def volume_to_lots(symbol: str, volume: float) -> float:
+    """把数据源给的成交量统一折算成「手」——全站唯一口径。
+
+    腾讯对科创板（688）按**股**给量，其余板块按**手**。任何地方把它一律当成手，
+    科创板的成交量（以及由它推导的成交额）就会放大 100 倍。
+
+    独立验证（2026-07-28，用流通市值/现价反推流通股本再算换手率）：
+      主板/创业板 当成手 → 1~15%（合理）；当成股 → 0.01~0.15%（荒谬）
+      科创板      当成手 → 135~478%（不可能）；当成股 → 1.35~4.78%（合理）
+    """
+    return volume / 100.0 if str(symbol).startswith("688") else volume
+
+
 def _fetch_from_akshare(symbol: str, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
     from .data_sources import AKShareSource
 

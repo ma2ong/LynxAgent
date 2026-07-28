@@ -39,20 +39,9 @@ def _f(value) -> float:
         return 0.0
 
 
-def _volume_to_lots(symbol: str, volume: float) -> float:
-    """把数据源给的成交量统一折算成「手」。
-
-    腾讯对科创板（688）按**股**给量，其余板块按**手**。原来这里一律当成手、再用
-    `close × volume × 100` 算成交额，于是科创板的成交额被放大了 100 倍——全市场合计
-    能算出 32 万亿，而 A 股实际约 1.5~2 万亿。
-
-    独立验证（2026-07-28，用腾讯流通市值/现价反推流通股本再算换手率）：
-      主板/创业板 当成手 → 换手 1~15%（合理）；当成股 → 0.01~0.15%（荒谬）
-      科创板      当成手 → 换手 135~478%（不可能）；当成股 → 1.35~4.78%（合理）
-    库里只有 688 这一个前缀异常（中位成交额 501 亿 vs 其余 1.6~5.2 亿），北交所无数据。
-    历史数据的一次性纠偏见 scripts/fix_star_board_amount.py。
-    """
-    return volume / 100.0 if str(symbol).startswith("688") else volume
+# 单位换算的权威实现在 quantcore.quant.data，这里只做本地别名，避免两处各写一份而漂移。
+# 历史数据的一次性纠偏见 scripts/fix_star_board_amount.py。
+from .data import volume_to_lots as _volume_to_lots  # noqa: E402
 
 
 class MarketSyncService:

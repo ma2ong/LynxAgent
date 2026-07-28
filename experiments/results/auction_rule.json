@@ -1,0 +1,55 @@
+{
+  "months": 12,
+  "top_k": 10,
+  "variants": {
+    "A_current": {
+      "avg_pp": 0.438,
+      "median_pp": 0.321,
+      "win": 52.4,
+      "t": 2.57,
+      "n": 361,
+      "trades": 3610,
+      "desc": "现行：只追健康高开"
+    },
+    "B_no_topping": {
+      "avg_pp": 0.371,
+      "median_pp": 0.015,
+      "win": 50.1,
+      "t": 2.06,
+      "n": 361,
+      "trades": 3610,
+      "desc": "A + 排除高位崩塌股",
+      "vs_A_pp": -0.067,
+      "vs_A_t": -0.83
+    },
+    "C_trend_ok": {
+      "avg_pp": 0.426,
+      "median_pp": 0.233,
+      "win": 53.2,
+      "t": 2.29,
+      "n": 361,
+      "trades": 3610,
+      "desc": "A + 个股仍在 MA20 上方",
+      "vs_A_pp": -0.013,
+      "vs_A_t": -0.13
+    },
+    "D_market_gate": {
+      "avg_pp": 0.119,
+      "median_pp": 0.0,
+      "win": 35.1,
+      "t": 0.94,
+      "n": 368,
+      "trades": 2570,
+      "desc": "A + 昨日加权收跌则空仓"
+    },
+    "E_all": {
+      "avg_pp": 0.1,
+      "median_pp": 0.0,
+      "win": 34.0,
+      "t": 0.7,
+      "n": 368,
+      "trades": 2570,
+      "desc": "B + C + D 全叠加"
+    }
+  }
+}

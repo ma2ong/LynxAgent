@@ -256,8 +256,13 @@ def compute_call_auction(
         if not (open_min <= r["open_pct"] <= open_max):
             continue
         industry = r.get("industry") or ""
-        if gating and not _industry_ok(industry):
-            continue  # 不在近段趋势热门板块 —— 竞价开得再好也不入选
+        # 板块趋势只做加权，不再一票否决。
+        # 回测（12 个月 / 3610 笔 / 买开盘卖 T+1 收盘）：只追健康高开的基线是 +0.438pp、
+        # 胜率 52.4%、t=2.57；一旦加上「只在近段强势板块里选」的硬闸门，降到 +0.296pp、
+        # 胜率 48.3%、t=1.45，近两月更是掉到 41.5%——和线上留痕实测的 42% 吻合。
+        # 道理也直白：近段强势板块就是刚涨完的板块，硬闸门等于把资金定向送进最接近
+        # 见顶的方向。趋势分继续留在评分里（下面的 trend 项），让它影响排序而不是准入。
+        in_hot = (not gating) or _industry_ok(industry)
         vr = r["volume_ratio"]
         vr_eff = vr if vr > 0 else 1.0
         resonance = hot_open_by_industry.get(industry, 0)
@@ -267,7 +272,8 @@ def compute_call_auction(
             min(r["open_pct"], 7.0) * 6
             + min(vr_eff, 4.0) * 8
             + min(resonance, 12) * 1.8
-            + (min(max(trend, 0.0), 30.0) * 0.6 if trend is not None else 0.0),
+            + (min(max(trend, 0.0), 30.0) * 0.6 if trend is not None else 0.0)
+            + (6.0 if in_hot else 0.0),   # 属于热门板块给固定加分，替代原来的硬闸门
             1,
         )
         if r["open_pct"] >= 5:
@@ -341,11 +347,13 @@ def compute_call_auction(
         "gating_mode": "dynamic_trend" if use_dynamic else ("static_tech" if gating else "off"),
         "dynamic_hot_industries": dynamic_hot,
         "note": (
-            ("买入候选只在『近段趋势热门板块』中筛选——按各行业最近数日平均涨幅动态排名，跟随市场轮动、不写死赛道，"
-             "哪个方向(含白酒/银行)趋势起来都会自动纳入。"
+            ("『近段趋势热门板块』只做加分、不做准入——回测显示把它当硬闸门会把资金定向送进"
+             "刚涨完、最接近见顶的方向：全年胜率 52.4%→48.3%，近两月更掉到 41.5%。"
              if use_dynamic else
-             "买入候选在科技成长行业白名单中筛选（动态趋势数据暂不可用，用兜底白名单）。")
-            + f"再叠加竞价健康高开(下限{open_min:g}%、上限按板块涨停×{open_max_ratio:g}自适应)、板块共振与板块近段涨幅打分。"
+             "动态趋势数据暂不可用，板块加分退回科技成长白名单。")
+            + f"评分以竞价健康高开(下限{open_min:g}%、上限按板块涨停×{open_max_ratio:g}自适应)为主，叠加量比、板块共振与板块趋势。"
+            + "⚠ 口径提醒：回测中『买开盘、次日收盘』的平均超额全年约 +0.33pp、胜率约 52%，"
+            "但近两月降到 41.5% 且不显著——弱市里竞价追高本就容易失效，请结合大盘风险档位决定是否出手。"
             + ("" if gating else "（行业数据暂不可用，本次未做行业过滤）")
             + "竞价高开=今开/昨收；成交额口径：竞价时段(09:15-09:25)为真实撮合额，盘后为全日累计(仅参考)。研究用途，不构成投资建议。"
         ),

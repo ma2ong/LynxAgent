@@ -93,7 +93,7 @@
               </label>
             </div>
             <div class="smart-actions">
-              <el-button type="success" size="large" native-type="button" :loading="smartPoolLoading" @click="loadSmartPool">
+              <el-button type="success" native-type="button" :loading="smartPoolLoading" @click="loadSmartPool">
                 <el-icon><Search /></el-icon>
                 {{ riskLocked ? '生成强势观察名单' : '一键智能推荐' }}
               </el-button>
@@ -1511,9 +1511,13 @@ const openChart = async (row: any) => {
 }
 
 .smart-actions {
+  /* 原来按钮/计数/胜率 chip 三行纵向堆叠，占 102px——是压缩后头部里最大的一块。
+     改成横排后同样的信息只占一行。 */
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   flex-shrink: 0;
 

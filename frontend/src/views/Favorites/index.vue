@@ -118,10 +118,18 @@
         <p>添加常看的股票后，这里会同步实时行情、预警和组合体检。</p>
         <el-button type="primary" size="small" @click="addVisible = true">添加第一只</el-button>
       </div>
-      <div v-else class="t-wrap">
+      <div v-if="selected.size" class="bulk-bar">
+        <span>已选 <b>{{ selected.size }}</b> 只</span>
+        <el-button size="small" @click="clearSelection">取消选择</el-button>
+        <el-button size="small" type="danger" plain @click="removeSelected">批量删除</el-button>
+      </div>
+      <div v-if="items.length" class="t-wrap">
         <table class="t-table">
           <thead>
             <tr>
+              <th class="c sel-col">
+                <el-checkbox :model-value="allSelected" :indeterminate="someSelected" @change="toggleAll" />
+              </th>
               <th>个股</th>
               <th class="r">现价</th>
               <th class="r">涨跌幅</th>
@@ -132,7 +140,12 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in items" :key="row.symbol || row.stock_code">
+            <tr v-for="row in items" :key="row.symbol || row.stock_code"
+                :class="{ picked: selected.has(row.symbol || row.stock_code) }">
+              <td class="c sel-col">
+                <el-checkbox :model-value="selected.has(row.symbol || row.stock_code)"
+                             @change="toggleOne(row.symbol || row.stock_code)" />
+              </td>
               <td>
                 <div class="code-cell">
                   <span class="nm">{{ row.stock_name }}</span>
@@ -194,7 +207,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Plus } from '@element-plus/icons-vue'
@@ -209,6 +222,7 @@ const items = ref<FavoriteItem[]>([])
 const diagnostics = ref<PortfolioDiagnostics | null>(null)
 const diagnosticsLoading = ref(false)
 const tagsText = ref('')
+const selected = ref(new Set<string>())
 
 const addForm = reactive<AddFavoriteReq>({
   symbol: '',
@@ -241,6 +255,8 @@ const load = async () => {
   loading.value = true
   try {
     items.value = unwrap(await favoritesApi.list())
+    const alive = new Set(items.value.map(keyOf))
+    selected.value = new Set([...selected.value].filter((c) => alive.has(c)))
     await loadDiagnostics()
   } catch (error: any) {
     ElMessage.error(error?.message || '加载自选股失败')
@@ -290,20 +306,65 @@ const addFavorite = async () => {
   }
 }
 
-const remove = async (row: FavoriteItem) => {
-  const code = row.symbol || row.stock_code || ''
+const keyOf = (row: FavoriteItem) => row.symbol || row.stock_code || ''
+
+const allSelected = computed(() => items.value.length > 0 && selected.value.size === items.value.length)
+const someSelected = computed(() => selected.value.size > 0 && selected.value.size < items.value.length)
+const toggleOne = (code: string) => {
+  const next = new Set(selected.value)
+  next.has(code) ? next.delete(code) : next.add(code)
+  selected.value = next
+}
+const toggleAll = () => {
+  selected.value = allSelected.value ? new Set() : new Set(items.value.map(keyOf))
+}
+const clearSelection = () => { selected.value = new Set() }
+
+// 组合体检依赖自选列表，删完要重算；但它慢，绝不能挡住列表更新，所以后台跑。
+const refreshDiagnosticsSoon = () => { void loadDiagnostics() }
+
+/**
+ * 删除走乐观更新：先把行从本地列表摘掉，再后台发请求。
+ * 原来是「等服务端返回 → 重新拉整张表 → 全表 loading 遮罩」，而整表要为每只股票取
+ * 实时报价和行业，所以点一下要等好几秒、整个表变灰。本地状态删掉之后就已经是正确
+ * 结果了，没有理由再拉一次。失败才把行放回原位并提示。
+ */
+const removeCodes = async (codes: string[]) => {
+  if (!codes.length) return
+  const removed = items.value.filter((it) => codes.includes(keyOf(it)))
+  const positions = new Map(removed.map((it) => [keyOf(it), items.value.indexOf(it)]))
+  items.value = items.value.filter((it) => !codes.includes(keyOf(it)))
+  const next = new Set(selected.value)
+  codes.forEach((c) => next.delete(c))
+  selected.value = next
+
+  const results = await Promise.allSettled(codes.map((c) => favoritesApi.remove(c)))
+  const failed = removed.filter((_, i) => results[i].status === 'rejected')
+  if (failed.length) {
+    // 只把失败的放回去，成功的保持已删除；插回原位置，避免顺序跳动
+    const restored = [...items.value]
+    failed
+      .sort((a, b) => (positions.get(keyOf(a)) ?? 0) - (positions.get(keyOf(b)) ?? 0))
+      .forEach((it) => restored.splice(Math.min(positions.get(keyOf(it)) ?? restored.length, restored.length), 0, it))
+    items.value = restored
+    ElMessage.error(`${failed.length} 只删除失败，已恢复`)
+  }
+  refreshDiagnosticsSoon()
+}
+
+const remove = (row: FavoriteItem) => {
+  // 单只删除不再弹确认框——Allen 要的是点一下就没。误删可立即重新添加，代价很低。
+  void removeCodes([keyOf(row)])
+}
+
+const removeSelected = async () => {
+  const codes = [...selected.value]
   try {
-    await ElMessageBox.confirm(`确认删除自选股 ${code}？`, '删除确认', { type: 'warning' })
+    await ElMessageBox.confirm(`确认删除选中的 ${codes.length} 只自选股？`, '批量删除', { type: 'warning' })
   } catch {
     return
   }
-  try {
-    await favoritesApi.remove(code)
-    ElMessage.success('已删除')
-    await load()
-  } catch (error: any) {
-    ElMessage.error(error?.message || '删除失败')
-  }
+  void removeCodes(codes)
 }
 
 const goResearch = (code: string) => {
@@ -565,4 +626,13 @@ onMounted(load)
     grid-template-columns: 1fr;
   }
 }
+
+/* 多选与批量删除 */
+.sel-col { width: 40px; }
+.t-table td.c, .t-table th.c { text-align: center; }
+.t-table tr.picked { background: var(--el-color-primary-light-9); }
+.bulk-bar { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-bottom: 8px;
+  border: 1px solid var(--el-color-primary-light-7); border-radius: 8px;
+  background: var(--el-color-primary-light-9); font-size: 13px; }
+.bulk-bar b { color: var(--el-color-primary); }
 </style>

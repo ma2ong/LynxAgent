@@ -566,7 +566,14 @@ class QuantEngine:
     # 旧实时追涨评分 +0.55pp、中位为负、不显著。评分与回放共用同一函数，实盘完全可回放。
     SMART_MIN_AMOUNT = 3e7  # 与回放口径一致：成交额 <3000 万不入候选
 
-    def smart_pool(self, limit: int = 20, universe_limit: int = 300, exclude_fundamental: bool = True) -> Dict[str, object]:
+    def smart_pool(self, limit: int = 20, universe_limit: int = 300, exclude_fundamental: bool = True,
+                   spare: int = 0, record: bool = True) -> Dict[str, object]:
+        """spare：多取几只备胎。七不买风控闸门跑在路由层（要 540 日 K 线），会从名单里
+        剔票；只取 limit 只的话剔完就是个空洞，弱市里前 N 名恰好都是雷票时整池会被清空。
+        多带的备胎由路由层剔除后回填到 limit。默认 0 = 旧行为，不影响其它调用方。
+        record：留痕。路由层要做风控剔除+回填，留痕得等最终名单定下来再记，
+        否则「留痕的池」不等于「用户看到的池」，复盘胜率就跟着失真。
+        """
         safe_limit = max(1, min(limit, 50))
         # 全市场最多约 5000 只；结构评分来自本地日线，实时行情用于排除与展示
         safe_universe_limit = max(safe_limit, min(universe_limit, 5000))
@@ -709,7 +716,7 @@ class QuantEngine:
             it["score_percentile"] = round((rank + 1) / total_scored * 100, 2) if total_scored else None
 
         # 仅为最终展示的标的附交易计划：优先本地 K 线算 ATR，无本地数据则按比例兜底。
-        final_items = items[:safe_limit]
+        final_items = items[:min(len(items), safe_limit + max(0, spare))]
         for it in final_items:
             atr = 0.0
             try:
@@ -723,15 +730,17 @@ class QuantEngine:
         # 留痕当日推荐（首次快照），供复盘页统计真实 T+N 胜率。
         # 池名与评分公式绑定：改公式必须改池名（v2 追涨公式的留痕已迁到 smart_v2），
         # 否则新公式会继承旧公式的战绩，复盘胜率失去意义。
-        try:
-            get_local_store().record_picks("smart", final_items)
-        except Exception:
-            pass
+        if record:
+            try:
+                get_local_store().record_picks("smart", final_items[:safe_limit])
+            except Exception:
+                pass
 
         return _json_safe({
             "source": f"quant-engine-smart-pool-v3-structure:{pool_source}",
             "universe_size": len(pool),
             "analyzed": len(items),
+            "requested_limit": safe_limit,
             "items": final_items,
             "market_context": market_context(),
             "daily_as_of": get_local_store().latest_real_bar_date(),

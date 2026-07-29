@@ -990,6 +990,15 @@ class LocalQuantStore:
             }
         return out
 
+    def previous_pick_date(self, pool: str, before: str) -> Optional[str]:
+        """上一次留痕的日期。用来告诉用户「这份名单和上次那份重合多少」——
+        排序只吃最近完整日线，两个收盘之间名单是冻结的，不说清楚会被误认为没更新。"""
+        row = self._conn().execute(
+            "SELECT MAX(pick_date) FROM picks_history WHERE pool=? AND pick_date<?",
+            (pool, before),
+        ).fetchone()
+        return row[0] if row and row[0] else None
+
     def load_picks_symbols(self, date: str, pool: str, limit: int = 20) -> List[str]:
         rows = self._conn().execute(
             "SELECT symbol FROM picks_history WHERE pick_date=? AND pool=?"

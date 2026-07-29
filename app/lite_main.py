@@ -830,6 +830,19 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
                 item["trade_plan"] = _trade_plan(float(item["close"]), float(tp.get("atr") or 0.0))
             except Exception:
                 pass
+        # 排序只看昨日收盘的结构分，实时价不参与——所以一只今天正在暴跌的票照样会在池里，
+        # 而买点又「贴合现价」，等于把跌停价写成买入价。不剔除（回放显示剔了反而更差：
+        # 整池 +1.98pp → +1.74pp，跌超5%那一档后续均值 +2.99pp 是全池最好的几档之一），
+        # 但必须让用户看见自己在逆势接刀，并知道这需要拿满 5 日。
+        _pct = item.get("pct_chg")
+        if _pct is not None and float(_pct) <= -5.0:
+            item["entry_warning"] = {
+                "level": "counter_trend",
+                "pct": round(float(_pct), 2),
+                "text": f"今日大跌 {float(_pct):.2f}%，属逆势买入",
+                "note": "买点按现价推算，未经回放验证（回放口径为次日开盘买入）。"
+                        "历史上这一档 5 日后均值超额 +2.99pp、中位 +1.20pp，但期间可能继续下跌——拿不满 5 日不要碰。",
+            }
         if quote and quote.get("change_percent") is not None and item.get("reasons"):
             item["reasons"] = [
                 f"实时涨跌幅 {quote['change_percent']:+.2f}%" if str(reason).startswith("实时涨跌幅 ") else reason
@@ -943,6 +956,12 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
         # 宁可没得选也不给雷票。被剔的记数+样例，前端弱市空池时弹窗说明。
         kept = [it for it in items if int((it.get("risk_check") or {}).get("risk_count") or 0) < 2]
         excluded = [it for it in items if int((it.get("risk_check") or {}).get("risk_count") or 0) >= 2]
+        # 引擎多带了备胎（smart_pool 的 spare），剔完雷票从后面回填到用户要的只数，
+        # 而不是留个空洞。弱市里前 N 名恰好全是雷票时，以前整池会被清空显示「今日无达标
+        # 个股」——但那不是「全市场没货」，只是「前 N 名有雷」，后面还有排队的。
+        target = int(data.get("requested_limit") or 0)
+        if target > 0:
+            kept = kept[:target]
         data["items"] = kept
         data["excluded_severe_count"] = len(excluded)
         data["excluded_severe_samples"] = [
@@ -954,6 +973,38 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
         # ①c 双确认子集计数，供前端展示/筛选
         data["dual_confirm_count"] = sum(1 for it in items if it.get("dual_confirm"))
         data["triple_confirm_count"] = sum(1 for it in items if it.get("triple_confirm"))
+        # 名单基准：排序只吃最近完整日线，所以两个收盘之间名单是**冻结的**——同一天里
+        # 反复点「一键推荐」会重扫 3000+ 只再得出完全一样的结果。不说清楚，用户会以为
+        # 数据没更新，或者以为今天又独立选中了同一批票。
+        if target > 0 and items:
+            try:
+                from quantcore.quant.local_store import get_local_store as _gls
+                _store = _gls()
+                _today = datetime.now().strftime("%Y-%m-%d")
+                _prev_date = _store.previous_pick_date("smart", _today)
+                _basis: dict[str, Any] = {
+                    "as_of": data.get("daily_as_of") or "",
+                    "frozen": True,
+                    "prev_date": _prev_date,
+                }
+                if _prev_date:
+                    _prev = set(_store.load_picks_symbols(_prev_date, "smart", limit=200))
+                    _same = sum(1 for it in items
+                                if str(it.get("symbol") or it.get("code") or "") in _prev)
+                    _basis["same_count"] = _same
+                    _basis["total"] = len(items)
+                data["list_basis"] = _basis
+            except Exception as exc:  # noqa: BLE001 — 基准信息缺失不能阻断推荐主流程
+                print(f"list_basis failed: {exc}")
+        # 留痕放在这里而不是引擎里：引擎的名单还没过风控闸门、也还没回填，
+        # 记在那儿会让「留痕的池」不等于「用户看到的池」，复盘胜率跟着失真。
+        # 必须在算完 list_basis 之后——否则 previous_pick_date 会把今天自己算进去。
+        if target > 0 and items:
+            try:
+                from quantcore.quant.local_store import get_local_store as _gls2
+                _gls2().record_picks("smart", items)
+            except Exception as exc:  # noqa: BLE001 — 留痕失败不能阻断推荐主流程
+                print(f"record_picks failed: {exc}")
 
 
 def _smart_pool_task_update(task_id: str | None, **patch: Any) -> None:
@@ -1112,6 +1163,9 @@ async def _compute_lite_smart_pool(
             "smart_pool",
             limit=safe_limit,
             universe_limit=safe_universe,
+            # 多带 20 只备胎供风控剔除后回填；留痕交给 _apply_confluence 在最终名单上做
+            spare=20,
+            record=False,
         )
 
         items: list[dict[str, Any]] = []
@@ -1196,6 +1250,8 @@ async def _compute_lite_smart_pool(
                 "realtime_as_of": quant_pool.get("realtime_as_of") or "",
                 "ranking_basis": quant_pool.get("ranking_basis") or "",
                 "force_refreshed": force_refresh,
+                # 目标只数：_apply_confluence 剔除雷票后按它回填裁剪
+                "requested_limit": safe_limit,
                 "items": items,
                 "ai_factor": {
                     "status": ai_factor_pool.get("status"),

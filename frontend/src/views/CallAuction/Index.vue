@@ -107,6 +107,19 @@
         <!-- 竞价买入推荐 -->
         <section class="panel">
           <div class="panel-title">竞价买入候选 <em>近段强势板块 · 由强到弱排序，点击进深研</em></div>
+          <!-- 只留前 3 名：留痕实测尾部涨停率腰斩。同时把真实命中率写出来——
+               上榜不等于会涨停，最强档也只有六分之一。 -->
+          <div v-if="data.hit_stats" class="hit-note">
+            <b>只保留前 3 名。</b>
+            {{ data.hit_stats.sessions }} 个交易日 / {{ data.hit_stats.samples }} 条留痕实测：
+            前 3 名当日涨停率 <b class="hit-good">{{ data.hit_stats.top3_limit_up_rate }}%</b>，
+            第 4 名以后仅 {{ data.hit_stats.rest_limit_up_rate }}%（已不再展示<span
+              v-if="data.hidden_candidates">，今日隐藏 {{ data.hidden_candidates }} 只</span>）。
+            <span class="hit-warn">
+              上榜 ≠ 会涨停：最强档也是约 6 次中 1 次，开盘买入到收盘的中位收益仅
+              +{{ data.hit_stats.top3_intraday_median_pct }}%，收益全靠那 1/6。
+            </span>
+          </div>
           <div v-if="!data.buy_candidates.length" class="empty">当日近段强势板块无符合条件的高开候选（弱势竞价）</div>
           <button
             v-for="c in data.buy_candidates" :key="c.code"
@@ -246,6 +259,13 @@ onMounted(load)
 .panel { background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 10px; padding: 14px 16px; }
 .panel-title { font-size: 15px; font-weight: 700; margin-bottom: 10px; em { font-style: normal; font-size: 12px; font-weight: 400; color: var(--el-text-color-secondary); margin-left: 6px; } }
 .empty { color: var(--el-text-color-secondary); font-size: 13px; padding: 16px 0; }
+.hit-note {
+  margin-bottom: 10px; padding: 7px 11px; border-radius: 8px; font-size: 12px; line-height: 1.65;
+  background: var(--el-fill-color-light); border-left: 4px solid var(--el-color-warning);
+  color: var(--el-text-color-regular);
+  .hit-good { color: #ef232a; }
+  .hit-warn { display: block; color: var(--el-text-color-secondary); }
+}
 
 .sector-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--el-border-color-lighter); font-size: 13px; }
 .sector-row:last-child { border-bottom: none; }

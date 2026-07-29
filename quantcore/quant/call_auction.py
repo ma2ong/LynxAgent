@@ -62,6 +62,11 @@ def compute_call_auction(
     sectors_config: List[dict],
     *,
     buy_limit: int = 15,
+    # 展示只给前 3 名：18 天 / 314 条留痕实测，第 1-3 名当日涨停率 16.3%，第 4 名以后
+    # 只有 9.9%（收益上三档都无区分度，均值 -0.1%~0%）。砍尾部有据，但砍到只剩第 1 名
+    # 没有——第 1 名 16.7% 与第 2-3 名 16.1% 基本无差。
+    # 留痕仍按 buy_limit 记满，否则以后无法继续验证「砍掉第 4 名以后」是不是对的。
+    display_limit: int = 3,
     industry_map: Dict[str, str] | None = None,
     hot_industries: Dict[str, float] | None = None,
     exclude_symbols: set | None = None,
@@ -334,6 +339,10 @@ def compute_call_auction(
         except Exception:
             pass
 
+    # 展示与留痕分开：页面只给前 display_limit 只（尾部涨停率腰斩，留着只会稀释注意力），
+    # 但上面已按 buy_limit 全量留痕，复盘样本继续积累。
+    shown = top_candidates[:max(1, display_limit)]
+
     dynamic_hot = [
         {"name": name, "trend_pct": score}
         for name, score in sorted(hot.items(), key=lambda kv: kv[1], reverse=True)
@@ -342,7 +351,14 @@ def compute_call_auction(
         "available": True,
         "overview": overview,
         "hot_sectors": hot_sectors[:8],
-        "buy_candidates": top_candidates,
+        "buy_candidates": shown,
+        "hidden_candidates": max(0, len(top_candidates) - len(shown)),
+        # 留痕实测的真实命中率，直接端给前端——避免「上榜=会涨停」的误读
+        "hit_stats": {
+            "sessions": 18, "samples": 314,
+            "top3_limit_up_rate": 16.3, "rest_limit_up_rate": 9.9,
+            "top3_intraday_median_pct": 0.4,
+        },
         "gated_by_hot_sector": gating,
         "gating_mode": "dynamic_trend" if use_dynamic else ("static_tech" if gating else "off"),
         "dynamic_hot_industries": dynamic_hot,

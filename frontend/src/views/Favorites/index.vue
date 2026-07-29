@@ -134,6 +134,7 @@
               <th class="r">现价</th>
               <th class="r">涨跌幅</th>
               <th class="r">加入后</th>
+              <th>持仓指引</th>
               <th class="r">预警 低/高</th>
               <th>标签</th>
               <th class="r">操作</th>
@@ -164,6 +165,20 @@
                   {{ row.change_since_added_percent >= 0 ? '+' : '' }}{{ row.change_since_added_percent.toFixed(2) }}%
                 </span>
                 <span v-else class="muted">-</span>
+              </td>
+              <!-- 选股页只管「买什么」，买完之后没有任何地方告诉你「该拿还是该割」。
+                   这里复用风险预警的全市场破位扫描结论，按自选股代码对上号。 -->
+              <td>
+                <template v-if="adviceOf(row)">
+                  <span class="advice" :class="adviceClass(adviceOf(row)!.recommendation)">
+                    {{ adviceOf(row)!.recommendation }}
+                  </span>
+                  <span v-if="adviceOf(row)!.confirms?.length" class="advice-why">
+                    {{ adviceOf(row)!.confirms!.slice(0, 2).join('；') }}
+                  </span>
+                </template>
+                <span v-else-if="adviceLoading" class="muted">…</span>
+                <span v-else class="muted advice-ok">未触发破位</span>
               </td>
               <td class="r num muted">{{ row.alert_price_low ?? '-' }} / {{ row.alert_price_high ?? '-' }}</td>
               <td>
@@ -212,6 +227,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Plus } from '@element-plus/icons-vue'
 import { favoritesApi, type FavoriteItem, type AddFavoriteReq, type PortfolioDiagnostics } from '@/api/favorites'
+import { quantApi } from '@/api/quant'
 
 const router = useRouter()
 const loading = ref(false)
@@ -240,6 +256,34 @@ const unwrapDiagnostics = (res: any): PortfolioDiagnostics | null =>
 const pct = (value?: number | null) =>
   value == null || Number.isNaN(Number(value)) ? '-' : `${(Number(value) * 100).toFixed(1)}%`
 
+// 持仓指引：复用风险预警的全市场破位扫描（退出/减仓防守/反包观察/持有观察），
+// 按代码对上自选股。选股页只回答「买什么」，买完之后该拿该割一直没人管。
+const adviceMap = ref<Record<string, any>>({})
+const adviceLoading = ref(false)
+
+const adviceOf = (row: any) => adviceMap.value[String(row.symbol || row.stock_code || '').padStart(6, '0')]
+
+const adviceClass = (rec: string) =>
+  rec === '退出/止损' ? 'a-exit' : rec === '减仓防守' ? 'a-reduce'
+    : rec === '反包观察' ? 'a-rebound' : 'a-watch'
+
+const loadAdvice = async () => {
+  adviceLoading.value = true
+  try {
+    const scan: any = await quantApi.riskScan(500)
+    const map: Record<string, any> = {}
+    for (const it of scan?.items || []) {
+      const code = String(it.symbol || it.code || '').padStart(6, '0')
+      if (code) map[code] = it
+    }
+    adviceMap.value = map
+  } catch {
+    adviceMap.value = {}   // 扫描不可用时退回「未触发破位」，不阻断自选股主流程
+  } finally {
+    adviceLoading.value = false
+  }
+}
+
 const loadDiagnostics = async () => {
   diagnosticsLoading.value = true
   try {
@@ -257,6 +301,7 @@ const load = async () => {
     items.value = unwrap(await favoritesApi.list())
     const alive = new Set(items.value.map(keyOf))
     selected.value = new Set([...selected.value].filter((c) => alive.has(c)))
+    loadAdvice()
     await loadDiagnostics()
   } catch (error: any) {
     ElMessage.error(error?.message || '加载自选股失败')
@@ -560,6 +605,13 @@ onMounted(load)
 .t-table .r { text-align: right; }
 .t-table .num { font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: -.2px; }
 .t-table .muted { color: #9aa3b0; }
+.advice { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+.advice.a-exit { background: rgba(239,35,42,.14); color: #ef232a; }
+.advice.a-reduce { background: rgba(230,162,60,.16); color: #b88230; }
+.advice.a-rebound { background: rgba(64,158,255,.14); color: #409eff; }
+.advice.a-watch { background: rgba(144,147,153,.14); color: #6b7280; }
+.advice-why { display: block; margin-top: 2px; font-size: 11px; color: #9aa3b0; line-height: 1.4; }
+.advice-ok { font-size: 12px; }
 .code-cell { display: flex; flex-direction: column; line-height: 1.35; }
 .code-cell .nm { font-weight: 700; font-size: 13px; }
 .code-cell .cd { font-size: 11.5px; color: #9aa3b0; font-family: ui-monospace, Menlo, monospace; }

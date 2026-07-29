@@ -173,6 +173,68 @@
               <span class="env-gate-head">环境仓位闸门 · <b>{{ smartPoolResult.position_gate.label }}</b></span>
               <span class="env-gate-note">{{ smartPoolResult.position_gate.note }}</span>
             </div>
+            <!-- 名单基准：排序只吃最近完整日线，两个收盘之间名单是冻结的。不写清楚，
+                 用户会以为「今天又独立选中了同一批票」或者「数据没更新」。 -->
+            <div v-if="smartPoolResult?.list_basis?.as_of" class="basis-note">
+              <b>本名单基于 {{ smartPoolResult.list_basis.as_of }} 收盘计算</b>
+              <span v-if="smartPoolResult.list_basis.same_count != null">
+                · 与上一份（{{ smartPoolResult.list_basis.prev_date }}）重合
+                <b :class="{ 'basis-high': basisOverlapHigh }">
+                  {{ smartPoolResult.list_basis.same_count }}/{{ smartPoolResult.list_basis.total }}
+                </b>
+              </span>
+              <span class="basis-tip">
+                · 排序只用最近完整日线，<b>今日收盘前不会变化</b>——盘中重复生成得到的是同一份
+              </span>
+            </div>
+
+            <!-- 回放证据：收益 100% 来自每期最强的 1-2 只，而名单内名次没有区分度。
+                 所以「只买最靠前的一两只」是最容易亏的用法，必须在表格上方讲清楚。 -->
+            <div v-if="smartPoolResult?.items.length" class="basket-note">
+              <div class="basket-head">
+                <b>这是一篮子，不是排行榜</b>
+                <span>整体持有才有统计优势；只挑最靠前的一两只买，历史上等于抛硬币。</span>
+                <a class="desc-toggle" @click="showBasketEvidence = !showBasketEvidence">
+                  {{ showBasketEvidence ? '收起依据' : '看依据' }}
+                </a>
+              </div>
+              <!-- 回放验证的唯一用法是「收盘后取名单 → 次日开盘买入 → 持满5日」。
+                   盘中按现价买入从未被回测覆盖，必须写在最显眼处，否则页面等于默许。 -->
+              <div class="basket-usage">
+                <b>经过验证的用法只有一种：</b>收盘后取名单 → <b>次日开盘</b>买入 → <b>持满 5 个交易日</b>。
+                盘中按现价买入、浮亏就止损，都不在回放覆盖范围内——上面所有统计对这两种用法都不成立。
+              </div>
+              <div v-show="showBasketEvidence" class="basket-evidence">
+                <ul>
+                  <li>
+                    名单内的<b>名次没有区分度</b>：第 1-5 名中位超额 −0.44pp、胜率 47.8%，
+                    反而低于第 6-10 名的 +0.64pp / 52.8%。量化分决定谁进名单，不决定谁涨得多。
+                  </li>
+                  <li>
+                    收益集中在每期最强的 1-2 只：篮子平均超额 +1.75pp，
+                    剔除每期最强 1 只只剩 +0.42pp，剔除 2 只转为 −0.50pp。
+                  </li>
+                  <li>所以买几只<b>不改变期望，只改变拿到结果的概率</b>：</li>
+                </ul>
+                <table class="basket-table">
+                  <thead>
+                    <tr><th>买几只</th><th>期望超额</th><th>中位超额</th><th>跑赢大盘概率</th><th>抓到那只大涨的概率</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="r in BASKET_SIM" :key="r.k" :class="{ 'row-bad': r.k === 1, 'row-good': r.k === 20 }">
+                      <td>{{ r.k }} 只</td><td>{{ r.mean }}</td><td>{{ r.median }}</td>
+                      <td><b>{{ r.beat }}</b></td><td>{{ r.tail }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p class="basket-src">
+                  口径：12 个月 / 36 期 / 每期 top20 / 次日开盘买入 → T+5 收盘 /
+                  超额对当期全市场中位（回放 anchor 2026-07-25，
+                  <code>experiments/median_ab.py</code>）。历史统计不代表未来收益。
+                </p>
+              </div>
+            </div>
+
             <el-alert
               v-if="smartPoolResult && smartPoolResult.items.length > 0 && smartPoolResult.items.length < 5"
               type="info" :closable="false" show-icon class="few-picks-tip"
@@ -253,6 +315,14 @@
                     <el-tag v-if="row.limit_up" size="small" type="danger" effect="dark" class="limit-up-tag">
                       已涨停 · 买不到此价
                     </el-tag>
+                    <!-- 排序只看昨收结构分，今天正在暴跌的票照样在池里，而买点又贴合现价。
+                         不剔除（回放显示剔了更差），但要让用户看见自己在逆势接刀。 -->
+                    <el-tooltip v-if="row.entry_warning" effect="dark" placement="left"
+                                :content="row.entry_warning.note">
+                      <el-tag size="small" type="danger" effect="dark" class="limit-up-tag">
+                        {{ row.entry_warning.text }} · 需持满5日
+                      </el-tag>
+                    </el-tooltip>
                     <span>买 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
                     <span class="tp-stop">止损 {{ formatNumber(row.trade_plan.stop_loss) }}（{{ row.trade_plan.stop_loss_pct }}%）</span>
                     <span class="tp-target">止盈 {{ formatNumber(row.trade_plan.take_profit) }}（+{{ row.trade_plan.take_profit_pct }}%）</span>
@@ -972,6 +1042,23 @@ const ensureDataBeforeScan = async () => {
 const riskAlert = ref<RiskAlert | null>(null)
 const showPoolDesc = ref(false)
 const showHealthDetail = ref(false)
+const showBasketEvidence = ref(false)
+// 重合度高说明这就是上一份名单，标红提示——避免被当成「今天又选中了同一批」
+const basisOverlapHigh = computed(() => {
+  const b = smartPoolResult.value?.list_basis
+  if (!b || b.same_count == null || !b.total) return false
+  return b.same_count / b.total >= 0.7
+})
+
+// 子集模拟结果（experiments/median_ab.py --profile，anchor 2026-07-25）。
+// 写死是有意的：这是某一轮回放的研究结论，不随行情变化，做成接口反而暗示它会更新。
+const BASKET_SIM = [
+  { k: 1, mean: '+1.79pp', median: '-0.01pp', beat: '49.7%', tail: '15.4%' },
+  { k: 3, mean: '+1.75pp', median: '+1.14pp', beat: '59.0%', tail: '38.8%' },
+  { k: 5, mean: '+1.76pp', median: '+1.46pp', beat: '63.8%', tail: '55.8%' },
+  { k: 10, mean: '+1.75pp', median: '+1.62pp', beat: '69.3%', tail: '78.7%' },
+  { k: 20, mean: '+1.75pp', median: '+1.60pp', beat: '77.8%', tail: '91.7%' },
+]
 const riskLocked = computed(() => ['危险', '极危'].includes(riskAlert.value?.level || ''))
 // ③b 危险市况下不再整池锁死：后端标了 daytrade_ok 的逆势票仍给买入计划，但限定 T+1。
 // 依据是回测——弱市里这类票 T+1 超额 +1.06pp/胜率 62%，T+2 起衰减、T+5 转负，
@@ -1813,6 +1900,40 @@ const openChart = async (row: any) => {
 .env-gate.env-neutral .env-gate-head { color: #d48806; }
 .env-gate.env-warm { background: rgba(14,159,90,.10); border-left-color: #0e9f5a; }
 .env-gate.env-warm .env-gate-head { color: #0e9f5a; }
+.basket-note {
+  margin-bottom: 10px; padding: 8px 12px; border-radius: 8px; font-size: 13px;
+  background: rgba(64,158,255,.08); border-left: 4px solid var(--el-color-primary);
+}
+.basket-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px;
+  b { color: var(--el-color-primary); }
+  span { color: var(--el-text-color-secondary); } }
+.basis-note {
+  margin-bottom: 10px; padding: 7px 12px; border-radius: 8px; font-size: 13px;
+  background: var(--el-fill-color-light); border-left: 4px solid var(--el-color-info);
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+  .basis-tip { color: var(--el-text-color-secondary); }
+  .basis-high { color: #e6a23c; }
+}
+.basket-usage {
+  margin-top: 6px; padding: 6px 10px; border-radius: 6px; line-height: 1.6;
+  background: rgba(230,162,60,.12); color: var(--el-text-color-regular);
+  b { color: #b88230; }
+}
+.basket-evidence {
+  margin-top: 8px;
+  ul { margin: 0 0 8px; padding-left: 18px; }
+  li { margin-bottom: 4px; color: var(--el-text-color-regular); line-height: 1.6; }
+}
+.basket-table {
+  border-collapse: collapse; font-size: 12px; margin-bottom: 6px;
+  th, td { border: 1px solid var(--el-border-color-lighter); padding: 3px 10px; text-align: right; }
+  th { background: var(--el-fill-color-light); font-weight: 600; }
+  td:first-child, th:first-child { text-align: left; }
+  .row-bad td { color: #ef232a; }
+  .row-good td { background: rgba(14,159,90,.10); }
+}
+.basket-src { margin: 0; font-size: 11px; color: var(--el-text-color-secondary); line-height: 1.5;
+  code { font-size: 11px; } }
 .dc-tag { margin-left: 6px; }
 .dc-filter { cursor: pointer; user-select: none; }
 

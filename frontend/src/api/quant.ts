@@ -144,6 +144,14 @@ export interface QuantSmartPoolResult {
     label?: string
     note?: string
   }
+  // 名单基准：排序只吃最近完整日线，两个收盘之间名单是冻结的
+  list_basis?: {
+    as_of?: string
+    frozen?: boolean
+    prev_date?: string | null
+    same_count?: number
+    total?: number
+  }
   dual_confirm_count?: number
   triple_confirm_count?: number
   excluded_severe_count?: number
@@ -376,6 +384,7 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     daily_as_of: raw?.daily_as_of,
     realtime_as_of: raw?.realtime_as_of,
     position_gate: raw?.position_gate,
+    list_basis: raw?.list_basis,
     dual_confirm_count: raw?.dual_confirm_count,
     triple_confirm_count: raw?.triple_confirm_count,
     excluded_severe_count: raw?.excluded_severe_count,

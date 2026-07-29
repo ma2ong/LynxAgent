@@ -92,25 +92,42 @@ def sample_symbols(payload: dict) -> list:
         if len(raw) < MIN_BARS + HORIZON:
             continue
         try:
-            ff = factor_frame(normalize_ohlcv(raw)).reset_index(drop=True)
+            nd = normalize_ohlcv(raw)
+            ff = factor_frame(nd).reset_index(drop=True)
         except Exception:
             continue
         dates = ff["date"].tolist()
         pos = {d: i for i, d in enumerate(dates)}
         closes = ff["close"].to_numpy(dtype=float)
+        # 开盘价从归一化后的帧取，保证与 ff 逐行对齐（normalize_ohlcv 会丢弃脏行）
+        opens = pd.to_numeric(nd["open"], errors="coerce").to_numpy(dtype=float)
         amounts = pd.to_numeric(ff["amount"], errors="coerce").fillna(0).to_numpy(dtype=float)
         cols = {f: ff[f].to_numpy(dtype=float) for f in FACTORS}
         cols["composite"] = ff["composite"].to_numpy(dtype=float)
         for s in sessions:
             i = pos.get(s)
-            if i is None or i < MIN_BARS - 1 or i + HORIZON >= len(dates):
+            # 多留一根：要算「T+1 收盘买入 → 再持有 HORIZON 根」这条产品实际口径
+            if i is None or i < MIN_BARS - 1 or i + HORIZON + 1 >= len(dates):
                 continue
             if amounts[i] < MIN_AMOUNT:
                 continue
             c0, c1 = closes[i], closes[i + HORIZON]
             if not (c0 > 0 and c1 > 0):
                 continue
-            rows_out.append((s, sym, {k: float(v[i]) for k, v in cols.items()}, c1 / c0 - 1.0))
+            vals = {k: float(v[i]) for k, v in cols.items()}
+            # 追高过滤要用的当日/近期涨幅。i >= MIN_BARS-1，往前取 5 根一定在界内。
+            prev1, prev5 = closes[i - 1], closes[i - 5]
+            vals["ret_1d"] = float(c0 / prev1 - 1.0) if prev1 > 0 else 0.0
+            vals["ret_5d"] = float(c0 / prev5 - 1.0) if prev5 > 0 else 0.0
+            # 可成交口径：次日开盘买入 → T+5 收盘。收盘口径吃不到的隔夜跳空在这里现形。
+            o1 = opens[i + 1]
+            vals["ret_open"] = float(c1 / o1 - 1.0) if o1 > 0 else float(c1 / c0 - 1.0)
+            # 产品实际口径：用户在 T+1 盘中看到名单、按当时价买入。用 T+1 收盘近似入场价，
+            # 再持有 HORIZON 根。`next_day_move` 就是用户在页面上看到的那个「今日涨跌幅」。
+            c_entry, c_exit = closes[i + 1], closes[i + 1 + HORIZON]
+            vals["next_day_move"] = float(c_entry / c0 - 1.0) if c0 > 0 else 0.0
+            vals["ret_entry_next_close"] = float(c_exit / c_entry - 1.0) if c_entry > 0 else 0.0
+            rows_out.append((s, sym, vals, c1 / c0 - 1.0))
     conn.close()
     return rows_out
 

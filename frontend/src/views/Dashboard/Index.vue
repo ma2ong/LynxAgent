@@ -65,6 +65,14 @@
       <div class="market-foot">每 60 秒自动刷新 · 规则化提示，不构成投资建议</div>
     </section>
 
+    <!-- 各模块由后台保温器（交易时段每 60s）预先算好，这里只读缓存：首页永不因重算卡住。
+         「全部刷新」也只是重读一遍缓存，不会在页面上触发全市场重扫。 -->
+    <div class="grid-bar">
+      <span>下面各块为各模块最新缓存，无需逐个打开菜单</span>
+      <span v-if="cardsStamp" class="grid-stamp">更新于 {{ cardsStamp }}</span>
+      <el-button link type="primary" size="small" :loading="cardsLoading" @click="loadAll()">全部刷新</el-button>
+    </div>
+
     <!-- 模块预览 -->
     <section class="grid">
       <!-- 智能选股 -->
@@ -83,7 +91,10 @@
                 <span v-if="s.score" class="rk-score">{{ s.score }}分</span>
               </div>
             </div>
-            <small class="c-note">最近一批一键智选留痕（{{ smartDate }}）</small>
+            <small class="c-note">
+              <template v-if="smartLive">当下推荐池 · 基于 {{ smartBasis }} 收盘计算</template>
+              <template v-else>最近一批一键智选留痕（{{ smartDate }}）</template>
+            </small>
           </template>
           <div v-else class="c-empty">
             <p>横向比较全市场 A 股，输出量化推荐池</p>
@@ -323,6 +334,8 @@ const loadColdEvidence = async () => {
 }
 
 // —— 卡片数据 ——
+const smartLive = ref(false)      // true = 来自当下缓存名单，false = 退回留痕
+const smartBasis = ref('')
 const smartPicks = ref<{ symbol: string; name: string; score: number }[]>([])
 const smartWin = ref<number | null>(null)
 const smartDate = ref('')
@@ -368,8 +381,12 @@ const loadHero = async (retries = 2) => {
   if (!ok && retries > 0) setTimeout(() => loadHero(retries - 1), 1800)
 }
 
+const cardsLoading = ref(false)
+const cardsStamp = ref('')
+
 const loadCards = async (retries = 1) => {
   let failed = false
+  cardsLoading.value = true
   await Promise.all([
     quantApi.riskScan(30).then((s) => {
     riskScan.value = s || null
@@ -392,6 +409,17 @@ const loadCards = async (retries = 1) => {
         .sort((a, b) => a.rank - b.rank).slice(0, 5)
         .map((i) => ({ symbol: i.symbol, name: i.name, score: Math.round(i.score) }))
     }).catch(() => { failed = true }),
+    // 智能选股读后台保温器暖好的缓存（cache_only，绝不在首页触发同步重算）。
+    // 留痕只是「最近记过的一批」，可能是昨天的；这里拿到的是当下名单，且带基准时点。
+    quantApi.smartPool(20, 5000, true).then((res: any) => {
+      const items = res?.items || []
+      if (!items.length) return                       // warming：保留留痕兜底，不清空
+      smartLive.value = true
+      smartBasis.value = res?.list_basis?.as_of || res?.daily_as_of || ''
+      smartPicks.value = items.slice(0, 5).map((i: any) => ({
+        symbol: i.symbol || i.code, name: i.name, score: Math.round(Number(i.score) || 0),
+      }))
+    }).catch(() => { /* 冷缓存/超时都退回留痕，不影响其它卡片 */ }),
     heatmapApi.fetch('industry').then((d) => {
       const items = (d?.items || [])
       const hot = [...items].sort((a, b) => b.pct - a.pct).slice(0, 3)
@@ -421,6 +449,8 @@ const loadCards = async (retries = 1) => {
     }).catch(() => { failed = true }),
   ])
   cardsLoadedAt = Date.now()
+  cardsLoading.value = false
+  cardsStamp.value = new Date().toTimeString().slice(0, 5)
   if (failed && retries > 0) setTimeout(() => loadCards(retries - 1), 1800)
 }
 
@@ -519,6 +549,11 @@ onUnmounted(stopHeroPolling)
 }
 
 /* ---------- Grid ---------- */
+.grid-bar {
+  display: flex; align-items: center; gap: 10px; margin: 14px 0 8px;
+  font-size: 12px; color: var(--el-text-color-secondary);
+  .grid-stamp { margin-left: auto; }
+}
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
 .card { border: 1px solid var(--el-border-color-light); border-radius: 14px; padding: 16px 18px;
   background: var(--el-bg-color); display: flex; flex-direction: column; min-height: 200px;

@@ -87,7 +87,12 @@ async def _refresh_cycle() -> None:
     # 3) 涨停热点（当日）→ 暖 lite_insights_cache（端点自身负责落缓存）
     await _safe("limit-up", ins.lite_limit_up_distribution())
 
-    # 4) 一键智选（全市场结构因子）→ 走进程池，暖 smart-pool 缓存（内存+持久）
+    # 4) 集合竞价 + 行业热力 → 首页这两块原本是冷读（竞价端点前端给到 30s 超时），
+    #    一起预热，首页才真的「进入即见全貌」而不是进去等。
+    await _safe("call-auction", ins.lite_call_auction())
+    await _safe("heatmap", ins.lite_heatmap("industry"))
+
+    # 5) 一键智选（全市场结构因子）→ 走进程池，暖 smart-pool 缓存（内存+持久）
     #    仅交易时段跑：这是最重的一档（~100s），窗口外没必要反复算。
     if _in_active_window():
         await _safe(

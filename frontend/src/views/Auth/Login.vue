@@ -84,7 +84,7 @@ const onSubmit = async () => {
     if (!token) throw new Error(res?.message || '登录失败')
     localStorage.setItem('auth-token', token)
     ElMessage.success('登录成功')
-    router.push((route.query.redirect as string) || '/quant')
+    router.push((route.query.redirect as string) || '/dashboard')
   } catch (e: any) {
     ElMessage.error(e?.message || '登录失败')
   } finally {

@@ -11,6 +11,7 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: '', redirect: '/dashboard' },
       { path: 'dashboard', name: 'dashboard', component: () => import('@/views/Dashboard/Index.vue') },
+      { path: 'intraday-signals', name: 'intraday-signals', component: () => import('@/views/IntradaySignals/Index.vue') },
       { path: 'limit-up', name: 'limit-up', component: () => import('@/views/LimitUp/Index.vue') },
       { path: 'heatmap', name: 'heatmap', component: () => import('@/views/Heatmap/Index.vue') },
       { path: 'call-auction', name: 'call-auction', component: () => import('@/views/CallAuction/Index.vue') },
@@ -25,7 +26,8 @@ const routes: RouteRecordRaw[] = [
       { path: 'admin/users', name: 'admin-users', component: () => import('@/views/Admin/Users.vue'), meta: { requiresAdmin: true } },
     ],
   },
-  { path: '/:pathMatch(.*)*', redirect: '/quant' },
+  // 兜底回盘面总览：它是唯一一屏看全的入口，未知路径丢到选股页会让人以为「首页就是选股」
+  { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
 ]
 
 const router = createRouter({

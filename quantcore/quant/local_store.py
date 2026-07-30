@@ -118,6 +118,21 @@ CREATE TABLE IF NOT EXISTS signal_stats_cache (
     payload_json TEXT,
     created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS intraday_signal_events (
+    event_id TEXT PRIMARY KEY,
+    trade_date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    name TEXT,
+    status TEXT NOT NULL,
+    triggered_at TEXT NOT NULL,
+    signal_price REAL,
+    score REAL,
+    payload_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_intraday_signal_date_time
+ON intraday_signal_events(trade_date, triggered_at DESC);
+CREATE INDEX IF NOT EXISTS idx_intraday_signal_symbol_time
+ON intraday_signal_events(symbol, triggered_at DESC);
 """
 
 _COLS = ["date", "open", "high", "low", "close", "volume", "amount"]
@@ -589,6 +604,72 @@ class LocalQuantStore:
         return out
 
     # ---- 选股留痕与胜率复盘 ----
+    # ---- 盘中信号留痕 ----
+    def record_intraday_signal_events(self, events: List[Dict[str, object]]) -> int:
+        """Append state transitions with their point-in-time quote payload."""
+        if not events:
+            return 0
+        import json as _json
+
+        rows = []
+        for event in events:
+            rows.append((
+                str(event.get("event_id") or ""),
+                str(event.get("trade_date") or ""),
+                str(event.get("symbol") or "").zfill(6),
+                str(event.get("name") or ""),
+                str(event.get("status") or ""),
+                str(event.get("triggered_at") or ""),
+                _f(event.get("signal_price")),
+                _f(event.get("score")),
+                _json.dumps(event, ensure_ascii=False, separators=(",", ":")),
+            ))
+        conn = self._conn()
+        conn.executemany(
+            "INSERT OR IGNORE INTO intraday_signal_events("
+            "event_id,trade_date,symbol,name,status,triggered_at,signal_price,score,payload_json"
+            ") VALUES(?,?,?,?,?,?,?,?,?)",
+            rows,
+        )
+        conn.commit()
+        return len(rows)
+
+    def load_intraday_signal_events(
+        self,
+        trade_date: Optional[str] = None,
+        limit: int = 200,
+    ) -> List[Dict[str, object]]:
+        """Load newest transitions for UI history and restart recovery."""
+        import json as _json
+        from datetime import date as _date
+
+        target_date = trade_date or _date.today().strftime("%Y-%m-%d")
+        safe_limit = max(1, min(int(limit), 1000))
+        rows = self._conn().execute(
+            "SELECT event_id,trade_date,symbol,name,status,triggered_at,signal_price,score,payload_json "
+            "FROM intraday_signal_events WHERE trade_date=? "
+            "ORDER BY triggered_at DESC LIMIT ?",
+            (target_date, safe_limit),
+        ).fetchall()
+        output: List[Dict[str, object]] = []
+        for event_id, day, symbol, name, status, triggered_at, signal_price, score, payload in rows:
+            try:
+                item = _json.loads(payload or "{}")
+            except (TypeError, ValueError):
+                item = {}
+            item.update({
+                "event_id": event_id,
+                "trade_date": day,
+                "symbol": str(symbol).zfill(6),
+                "name": name or str(symbol).zfill(6),
+                "status": status,
+                "triggered_at": triggered_at,
+                "signal_price": _f(signal_price),
+                "score": _f(score),
+            })
+            output.append(item)
+        return output
+
     def record_picks(self, pool: str, items: List[Dict[str, object]]) -> int:
         """历史表保留当日首次快照；latest_picks 原子替换为本次完整名单。"""
         if not items:

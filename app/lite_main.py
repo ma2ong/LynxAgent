@@ -108,6 +108,7 @@ from app.routers.favorites import router as favorites_router  # noqa: E402
 from app.routers.reports import router as reports_router  # noqa: E402
 from app.routers.analysis import router as analysis_router  # noqa: E402
 from app.routers.insights import router as insights_router  # noqa: E402
+from app.routers.intraday import router as intraday_router  # noqa: E402
 app.include_router(notifications_router)
 app.include_router(config_router)
 app.include_router(paper_router)
@@ -115,6 +116,7 @@ app.include_router(favorites_router)
 app.include_router(reports_router)
 app.include_router(analysis_router)
 app.include_router(insights_router)
+app.include_router(intraday_router)
 
 # ---- 每日全市场 AI 因子模型刷新（收盘 + 数据同步后入缓存）----
 _ml_factor_scheduler: "AsyncIOScheduler | None" = None
@@ -233,6 +235,13 @@ async def _start_board_refresher() -> None:
     """交易时段后台保温各重板块缓存，让首页秒开全貌、各页秒读不超时。"""
     from app.core import board_refresh
     board_refresh.start()
+
+
+@app.on_event("startup")
+async def _start_intraday_signal_monitor() -> None:
+    """启动交易时段持续快扫；公开雷达展示前10，完整信号集供一键智选复用。"""
+    from app.core import intraday_monitor
+    intraday_monitor.start()
 
 
 lite_trader_bridge = EasyTraderBridge()
@@ -794,6 +803,171 @@ def _mark_countertrend_daytrade(items: list[dict[str, Any]]) -> int:
     return marked
 
 
+def _stock_limit_percent(symbol: str) -> float:
+    if symbol.startswith(("300", "301", "688", "689")):
+        return 20.0
+    if symbol.startswith(("4", "8", "92")):
+        return 30.0
+    return 10.0
+
+
+def _merge_intraday_quality(
+    data: dict[str, Any],
+    overlay: dict[str, Any],
+) -> None:
+    """Add a transparent timing layer without overwriting the proven structure score."""
+    items = data.get("items") or []
+    signals = overlay.get("signals") if isinstance(overlay.get("signals"), dict) else {}
+    is_current = bool(overlay.get("is_current"))
+    review_mode = str(overlay.get("review_mode") or "")
+
+    for item in items:
+        symbol = str(item.get("symbol") or item.get("code") or "").strip().zfill(6)
+        signal = signals.get(symbol) if is_current else None
+        signal = signal if isinstance(signal, dict) else {}
+        signal_status = str(signal.get("status") or "")
+        pct = float(item.get("pct_chg") or 0)
+        distance_to_limit = _stock_limit_percent(symbol) - pct
+        blocked = bool(item.get("limit_up")) or distance_to_limit <= 1.5 or signal_status == "unbuyable"
+
+        timing_status = "pending"
+        timing_label = "雷达数据待更新"
+        adjustment = 0.0
+        actionable = False
+        if blocked:
+            timing_status = "blocked"
+            timing_label = "不可追入"
+            adjustment = -100.0
+        elif signal_status == "entry":
+            timing_status = "confirmed"
+            actionable = bool(signal.get("actionable"))
+            if review_mode == "close_review":
+                timing_label = "收盘量价候选"
+                adjustment = 6.0
+            elif actionable:
+                timing_label = "盘中入场确认"
+                adjustment = 8.0
+            else:
+                timing_label = "盘中曾触发"
+                adjustment = 6.0
+        elif signal_status == "watch":
+            timing_status = "watch"
+            timing_label = "提前预警"
+            adjustment = 4.0
+        elif is_current:
+            timing_status = "unconfirmed"
+            timing_label = "等待量价确认"
+
+        structure_score = float(item.get("smart_score") or item.get("score") or 0)
+        confluence_bonus = float(item.get("confluence_bonus") or 0)
+        item["quality_score"] = round(structure_score + confluence_bonus + adjustment, 1)
+        item["timing_status"] = timing_status
+        item["timing_label"] = timing_label
+        item["timing_score"] = round(float(signal.get("score") or 0), 1) if signal else None
+        item["timing_adjustment"] = adjustment
+        item["timing_actionable"] = actionable and not blocked
+        item["timing_signal_mode"] = signal.get("signal_mode") if signal else None
+        item["timing_reasons"] = [str(reason) for reason in (signal.get("reasons") or []) if reason][:3]
+        item["distance_to_limit"] = round(max(0.0, distance_to_limit), 2)
+        if signal:
+            item["radar_signal"] = {
+                "status": signal_status,
+                "score": item["timing_score"],
+                "entry_low": signal.get("entry_low"),
+                "entry_high": signal.get("entry_high"),
+                "chase_limit": signal.get("chase_limit"),
+                "invalidation_price": signal.get("invalidation_price"),
+                "valid_until": signal.get("valid_until"),
+                "actionable": item["timing_actionable"],
+            }
+        reasons = [str(reason) for reason in (item.get("reasons") or []) if reason]
+        timing_reason = f"时机层：{timing_label}"
+        if item["timing_score"] is not None:
+            timing_reason += f" {item['timing_score']:.0f}分"
+        item["reasons"] = [timing_reason] + [reason for reason in reasons if not reason.startswith("时机层：")]
+
+    items.sort(
+        key=lambda item: (
+            item.get("timing_status") == "blocked",
+            -float(item.get("quality_score") or 0),
+        )
+    )
+    data["timing_gate"] = {
+        "status": overlay.get("status") or "waiting",
+        "is_current": is_current,
+        "as_of": overlay.get("as_of"),
+        "trade_date": overlay.get("trade_date"),
+        "phase": overlay.get("phase"),
+        "phase_label": overlay.get("phase_label"),
+        "review_mode": overlay.get("review_mode"),
+        "candidate_count": int(overlay.get("candidate_count") or 0),
+    }
+    data["ranking_basis"] = (
+        "日K结构因子负责入池，盘中量价/板块共振负责最终排序；"
+        "涨停或距离涨停过近的标的直接拦截。"
+    )
+    basis = data.get("list_basis")
+    if isinstance(basis, dict):
+        basis["frozen"] = False
+        basis["structure_frozen"] = True
+
+
+async def _apply_intraday_quality(data: dict[str, Any]) -> None:
+    items = data.get("items") or []
+    if not items:
+        return
+    symbols = [str(item.get("symbol") or item.get("code") or "") for item in items]
+    try:
+        from app.core import intraday_monitor
+        overlay = await intraday_monitor.timing_overlay(symbols)
+    except Exception as exc:  # noqa: BLE001 — 时机层不可用时保留原结构池
+        overlay = {
+            "status": "degraded",
+            "is_current": False,
+            "signals": {},
+            "error": str(exc),
+        }
+    _merge_intraday_quality(data, overlay)
+
+
+def _finalize_intraday_quality(data: dict[str, Any], target: int) -> None:
+    items = list(data.get("items") or [])
+    blocked = [item for item in items if item.get("timing_status") == "blocked"]
+    kept = [item for item in items if item.get("timing_status") != "blocked"]
+    previous_excluded = int(data.get("timing_excluded_count") or 0)
+    previous_samples = list(data.get("timing_excluded_samples") or [])
+    safe_target = max(1, min(int(target or 10), 10))
+    kept = kept[:safe_target]
+    for rank, item in enumerate(kept, start=1):
+        item["rank"] = rank
+    data["items"] = kept
+    data["requested_limit"] = safe_target
+    data["timing_confirmed_count"] = sum(1 for item in kept if item.get("timing_status") == "confirmed")
+    data["timing_watch_count"] = sum(1 for item in kept if item.get("timing_status") == "watch")
+    data["timing_wait_count"] = sum(
+        1 for item in kept if item.get("timing_status") in {"unconfirmed", "pending"}
+    )
+    data["timing_actionable_count"] = sum(1 for item in kept if item.get("timing_actionable"))
+    data["timing_excluded_count"] = previous_excluded + len(blocked)
+    new_samples = [
+        {
+            "symbol": item.get("symbol") or item.get("code"),
+            "name": item.get("name"),
+            "reason": item.get("timing_label") or "不可追入",
+        }
+        for item in blocked[:5]
+    ]
+    seen: set[str] = set()
+    data["timing_excluded_samples"] = [
+        sample
+        for sample in previous_samples + new_samples
+        if not (
+            (symbol := str(sample.get("symbol") or "")) in seen
+            or seen.add(symbol)
+        )
+    ][:5]
+
+
 async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any]:
     data = dict(response.get("data") or {})
     items = [dict(item) for item in data.get("items") or []]
@@ -830,10 +1004,8 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
                 item["trade_plan"] = _trade_plan(float(item["close"]), float(tp.get("atr") or 0.0))
             except Exception:
                 pass
-        # 排序只看昨日收盘的结构分，实时价不参与——所以一只今天正在暴跌的票照样会在池里，
-        # 而买点又「贴合现价」，等于把跌停价写成买入价。不剔除（回放显示剔了反而更差：
-        # 整池 +1.98pp → +1.74pp，跌超5%那一档后续均值 +2.99pp 是全池最好的几档之一），
-        # 但必须让用户看见自己在逆势接刀，并知道这需要拿满 5 日。
+        # 结构层仍保留逆势大跌票（历史上粗暴剔除会损失反弹样本），但后续时机层未确认时
+        # 不再展示买入价格；这里保留警告，防止量价重新确认后用户忽略逆势波动风险。
         _pct = item.get("pct_chg")
         if _pct is not None and float(_pct) <= -5.0:
             item["entry_warning"] = {
@@ -856,6 +1028,13 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
             if isinstance(item.get("trade_plan"), dict):
                 item["trade_plan"]["env_position"] = gate.get("label")
                 item["trade_plan"]["env_note"] = gate.get("note")
+    data["items"] = items
+    await _apply_intraday_quality(data)
+    _finalize_intraday_quality(
+        data,
+        int(data.get("requested_limit") or len(items) or 10),
+    )
+    items = data.get("items") or []
     # ③b 危险市况不再一刀切关闭：标出可做 T+1 短打的逆势票（依据见 _mark_countertrend_daytrade）
     try:
         data["daytrade_count"] = _mark_countertrend_daytrade(items)
@@ -960,8 +1139,10 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
         # 而不是留个空洞。弱市里前 N 名恰好全是雷票时，以前整池会被清空显示「今日无达标
         # 个股」——但那不是「全市场没货」，只是「前 N 名有雷」，后面还有排队的。
         target = int(data.get("requested_limit") or 0)
-        if target > 0:
-            kept = kept[:target]
+        structure_shadow = [
+            dict(item)
+            for item in kept[: max(1, min(target or 10, 10))]
+        ]
         data["items"] = kept
         data["excluded_severe_count"] = len(excluded)
         data["excluded_severe_samples"] = [
@@ -969,7 +1150,9 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
              "reason": (it.get("risk_check") or {}).get("advice") or "命中七不买重度风险"}
             for it in excluded[:5]
         ]
-        items = kept
+        await _apply_intraday_quality(data)
+        _finalize_intraday_quality(data, target or 10)
+        items = data.get("items") or []
         # ①c 双确认子集计数，供前端展示/筛选
         data["dual_confirm_count"] = sum(1 for it in items if it.get("dual_confirm"))
         data["triple_confirm_count"] = sum(1 for it in items if it.get("triple_confirm"))
@@ -984,7 +1167,8 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
                 _prev_date = _store.previous_pick_date("smart", _today)
                 _basis: dict[str, Any] = {
                     "as_of": data.get("daily_as_of") or "",
-                    "frozen": True,
+                    "frozen": False,
+                    "structure_frozen": True,
                     "prev_date": _prev_date,
                 }
                 if _prev_date:
@@ -996,13 +1180,22 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
                 data["list_basis"] = _basis
             except Exception as exc:  # noqa: BLE001 — 基准信息缺失不能阻断推荐主流程
                 print(f"list_basis failed: {exc}")
-        # 留痕放在这里而不是引擎里：引擎的名单还没过风控闸门、也还没回填，
-        # 记在那儿会让「留痕的池」不等于「用户看到的池」，复盘胜率跟着失真。
+        # 同时留结构基线与时机融合池：否则无法用同一天、同一 T+1/T+5 口径回答
+        # 「盘中时机层是否真的提升质量」。smart 仍等于用户最终看到的名单。
         # 必须在算完 list_basis 之后——否则 previous_pick_date 会把今天自己算进去。
         if target > 0 and items:
             try:
                 from quantcore.quant.local_store import get_local_store as _gls2
-                _gls2().record_picks("smart", items)
+                _pick_store = _gls2()
+                _pick_store.record_picks("smart_structure", structure_shadow)
+                _pick_store.record_picks(
+                    "smart_timing",
+                    [
+                        {**item, "score": item.get("quality_score") or item.get("score")}
+                        for item in items
+                    ],
+                )
+                _pick_store.record_picks("smart", items)
             except Exception as exc:  # noqa: BLE001 — 留痕失败不能阻断推荐主流程
                 print(f"record_picks failed: {exc}")
 
@@ -1099,7 +1292,7 @@ async def _compute_lite_swing_pool(
 
 async def _compute_lite_smart_pool(
     strategy: str = "balanced",
-    limit: int = 30,
+    limit: int = 10,
     universe_limit: int = 500,
     task_id: str | None = None,
     force_refresh: bool = False,
@@ -1108,14 +1301,14 @@ async def _compute_lite_smart_pool(
     from quantcore.quant.local_store import get_local_store
 
     preset = SMART_POOL_RECOMMENDER
-    safe_limit = max(5, min(limit, 50))
+    safe_limit = max(5, min(limit, 10))
     # 全市场评分（与回放口径一致：回放在全市场上取每期 top-N）。v3 结构因子分走进程池，
     # 3700 只约 32 秒，5000 只的上限扛得住；旧的 1200 截断会让线上池和回放验证的池不是一回事。
     safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     cache_key = (
-        f"smart-pool:factor-v5-structure:{daily_as_of}:"
+        f"smart-pool:factor-v6-timing:{daily_as_of}:"
         f"{strategy}:{safe_limit}:{safe_universe}"
     )
     _smart_pool_task_update(
@@ -1229,7 +1422,7 @@ async def _compute_lite_smart_pool(
             items.append(item)
 
         items.sort(key=lambda item: float(item.get("smart_score") or 0), reverse=True)
-        items = await _enrich_smart_pool_industries(items[:safe_limit])
+        items = await _enrich_smart_pool_industries(items[: safe_limit + 20])
         # 用可靠的 cninfo 行业模块再兜底一遍：把仍为「A股/行业待识别」等占位值的补成真实行业。
         try:
             from quantcore.quant import industry as _industry
@@ -1241,7 +1434,7 @@ async def _compute_lite_smart_pool(
                 "strategy": "quant_center_smart_pool",
                 "preset": {
                     "name": "全市场综合优选",
-                    "description": "复用量化中心一键智能推荐模型，横向比较量化分、趋势、动量、流动性、实时强度和风险控制后生成候选股票池。",
+                    "description": "日K结构因子先筛候选，再由盘中量价、板块共振与追高风控完成最终排序，只输出最优前10只。",
                 },
                 "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
                 "universe_size": quant_pool.get("universe_size") or len(items),
@@ -1258,7 +1451,7 @@ async def _compute_lite_smart_pool(
                     "pick_date": ai_factor_pool.get("pick_date"),
                     "universe": ai_factor_pool.get("universe"),
                 },
-                "source_note": "同源于量化中心智能推荐，并把 AI 因子模型 Top-K 排名作为评分因子；已并入形态识别与相对强度共振标签；研究与模拟使用，不构成投资建议。",
+                "source_note": "同源于量化中心结构候选，并叠加 AI 因子、形态强度与盘中量价时机层；时机层正在独立留痕验证，仅供研究与模拟使用。",
             }
             wrapped_response = {"success": True, "data": response, "message": "ok"}
             await _apply_confluence(wrapped_response)
@@ -1527,7 +1720,7 @@ async def _compute_lite_smart_pool(
         "realtime_as_of": datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S")
         if realtime_snapshot
         else "",
-        "ranking_basis": "按日K结构因子分排序（回放验证口径）；盘中强度仅作参考展示，不参与排序",
+        "ranking_basis": "日K结构因子负责入池，盘中量价与板块共振负责最终排序",
         "force_refreshed": force_refresh,
         "universe_size": len(candidates),
         "ai_factor": {
@@ -1536,7 +1729,7 @@ async def _compute_lite_smart_pool(
             "universe": ai_factor_pool.get("universe"),
         },
         "items": items,
-        "source_note": "智能股票池由真实新闻/公告/研报事件、A股基础股票池、量化因子、AI因子模型和入场触发器综合生成；已并入形态识别与相对强度共振标签；仅供研究，不承诺收益。",
+        "source_note": "结构候选叠加 AI 因子、形态强度和盘中量价时机确认，只输出最优前10只；时机层正在独立留痕验证，仅供研究。",
     }
     response = {"success": True, "data": data, "message": "ok"}
     await _apply_confluence(response)
@@ -1547,7 +1740,7 @@ async def _compute_lite_smart_pool(
 
 
 @app.get("/api/lite/smart-pool")
-async def lite_smart_pool(strategy: str = "balanced", limit: int = 30, universe_limit: int = 500,
+async def lite_smart_pool(strategy: str = "balanced", limit: int = 10, universe_limit: int = 500,
                           cache_only: bool = False):
     return await _compute_lite_smart_pool(strategy, limit, universe_limit, cache_only=cache_only)
 
@@ -1629,9 +1822,9 @@ async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int,
 
 
 @app.post("/api/lite/smart-pool/tasks")
-async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 30,
+async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 10,
                                      universe_limit: int = 500, force_refresh: bool = True):
-    safe_limit = max(5, min(limit, 50))
+    safe_limit = max(5, min(limit, 10))
     # 与 _compute_lite_smart_pool 同口径：全市场评分，才和回放验证的池是同一个池
     safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
     # 去重：同参数任务已在排队/运行则直接复用，避免连点堆叠多个全市场扫描把线程池占满。

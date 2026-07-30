@@ -71,6 +71,26 @@ export interface QuantSmartPoolItem {
   board?: string
   score: number
   quant_score: number
+  /** 原日K结构分保留不变；quality_score 只用于最终推荐排序 */
+  quality_score?: number
+  timing_score?: number | null
+  timing_status?: 'confirmed' | 'watch' | 'unconfirmed' | 'blocked' | 'pending'
+  timing_label?: string
+  timing_adjustment?: number
+  timing_actionable?: boolean
+  timing_signal_mode?: 'live' | 'intraday_archive' | 'close_review' | null
+  timing_reasons?: string[]
+  distance_to_limit?: number
+  radar_signal?: {
+    status?: string
+    score?: number | null
+    entry_low?: number
+    entry_high?: number
+    chase_limit?: number
+    invalidation_price?: number
+    valid_until?: string
+    actionable?: boolean
+  }
   ai_factor_score?: number
   ai_factor_rank?: number | null
   ai_factor_source?: string
@@ -132,6 +152,7 @@ export interface QuantSmartPoolResult {
   realtime_as_of?: string
   ranking_basis?: string
   force_refreshed?: boolean
+  requested_limit?: number
   ai_factor?: {
     status?: string
     pick_date?: string
@@ -148,6 +169,7 @@ export interface QuantSmartPoolResult {
   list_basis?: {
     as_of?: string
     frozen?: boolean
+    structure_frozen?: boolean
     prev_date?: string | null
     same_count?: number
     total?: number
@@ -156,6 +178,22 @@ export interface QuantSmartPoolResult {
   triple_confirm_count?: number
   excluded_severe_count?: number
   excluded_severe_samples?: Array<{ name?: string; symbol?: string; reason?: string }>
+  timing_confirmed_count?: number
+  timing_watch_count?: number
+  timing_wait_count?: number
+  timing_actionable_count?: number
+  timing_excluded_count?: number
+  timing_excluded_samples?: Array<{ name?: string; symbol?: string; reason?: string }>
+  timing_gate?: {
+    status?: string
+    is_current?: boolean
+    as_of?: string
+    trade_date?: string
+    phase?: string
+    phase_label?: string
+    review_mode?: 'intraday_archive' | 'close_review'
+    candidate_count?: number
+  }
   items: QuantSmartPoolItem[]
   errors?: Record<string, string>
 }
@@ -383,12 +421,22 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     ai_factor: raw?.ai_factor,
     daily_as_of: raw?.daily_as_of,
     realtime_as_of: raw?.realtime_as_of,
+    ranking_basis: raw?.ranking_basis,
+    force_refreshed: raw?.force_refreshed,
+    requested_limit: raw?.requested_limit,
     position_gate: raw?.position_gate,
     list_basis: raw?.list_basis,
     dual_confirm_count: raw?.dual_confirm_count,
     triple_confirm_count: raw?.triple_confirm_count,
     excluded_severe_count: raw?.excluded_severe_count,
     excluded_severe_samples: raw?.excluded_severe_samples,
+    timing_confirmed_count: raw?.timing_confirmed_count,
+    timing_watch_count: raw?.timing_watch_count,
+    timing_wait_count: raw?.timing_wait_count,
+    timing_actionable_count: raw?.timing_actionable_count,
+    timing_excluded_count: raw?.timing_excluded_count,
+    timing_excluded_samples: raw?.timing_excluded_samples,
+    timing_gate: raw?.timing_gate,
     items,
     errors: raw?.errors || {}
   }
@@ -426,12 +474,12 @@ export const quantApi = {
   capabilities: async () =>
     unwrap<QuantCapabilitiesResult>(await ApiClient.get('/api/quant/capabilities', undefined, { timeout: 60000 })),
 
-  smartPool: async (limit = 20, universeLimit = 300, cacheOnly = false) => {
+  smartPool: async (limit = 10, universeLimit = 300, cacheOnly = false) => {
     const raw = unwrap<any>(await ApiClient.get('/api/lite/smart-pool', { limit, universe_limit: universeLimit, cache_only: cacheOnly, _ts: nonce() }, { timeout: cacheOnly ? 20000 : 300000 }))
     return normalizeSmartPoolResult(raw)
   },
 
-  startSmartPoolTask: async (limit = 20, universeLimit = 300, strategy = 'balanced') =>
+  startSmartPoolTask: async (limit = 10, universeLimit = 300, strategy = 'balanced') =>
     unwrap<QuantSmartPoolTask>(await ApiClient.post('/api/lite/smart-pool/tasks', undefined, {
       params: { limit, universe_limit: universeLimit, strategy, force_refresh: true, _ts: nonce() },
       timeout: 15000
@@ -1054,4 +1102,3 @@ export interface FundHoldRow {
   change: string
   change_pct: number
 }
-

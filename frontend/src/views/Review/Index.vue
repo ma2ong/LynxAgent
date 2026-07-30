@@ -73,6 +73,8 @@
         <el-radio-group v-model="poolFilter" size="small">
           <el-radio-button value="">全部</el-radio-button>
           <el-radio-button value="smart">一键智选推荐</el-radio-button>
+          <el-radio-button value="smart_timing">时机融合 v1</el-radio-button>
+          <el-radio-button value="smart_structure">结构基线（对照）</el-radio-button>
           <el-radio-button value="auction">竞价优选</el-radio-button>
           <el-radio-button value="pattern">形态智选（对照）</el-radio-button>
           <el-radio-button value="strength">强势股（对照）</el-radio-button>
@@ -243,6 +245,8 @@ const horizons = [
 
 const POOL_LABELS: Record<string, string> = {
   smart: '一键智选推荐',
+  smart_timing: '时机融合 v1',
+  smart_structure: '结构基线（对照）',
   auction: '竞价优选',
   pattern: '形态智选（对照）',
   strength: '强势股（对照）',
@@ -253,11 +257,11 @@ const POOL_LABELS: Record<string, string> = {
 }
 const poolLabel = (key: string) => POOL_LABELS[key] || key
 
-// 形态智选与强势股并入一键智选后停止留痕，于是「合并到底是变好还是变差」无从回答。
-// 现在每次一键智选跑完，后台会用同一天的数据补跑这两套旧逻辑各留一份名单（见
-// lite_main._run_shadow_pools），三者用同一套 T+1/T+5 口径横向比，样本够了再决定
-// 是否调整权重或回退。它们是对照组、不是给用户选股用的，所以标注「对照」。
-const VISIBLE_POOLS = ['smart', 'auction', 'pattern', 'strength']
+// 新时机层与原结构候选同时留痕，才能用同一天、同一 T+1/T+5 口径验证改造是否有效；
+// 形态与强势股继续作为更长期的影子对照组。
+const VISIBLE_POOLS = [
+  'smart', 'smart_timing', 'smart_structure', 'auction', 'pattern', 'strength',
+]
 const keepVisible = <T extends { pool: string }>(list: T[]) =>
   list.filter((p) => VISIBLE_POOLS.includes(p.pool))
 

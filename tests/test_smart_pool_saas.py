@@ -113,5 +113,78 @@ def test_manual_generation_bypasses_old_pool_cache():
     assert not _smart_pool_reads(disk_cache), "手动刷新不应读磁盘里的旧名单"
 
 
+def test_intraday_entry_confirmation_promotes_lower_structure_candidate():
+    data = {
+        "items": [
+            {"symbol": "600001", "name": "结构更高", "smart_score": 80.0, "score": 80.0, "pct_chg": 1.0},
+            {"symbol": "600002", "name": "量价确认", "smart_score": 76.0, "score": 76.0, "pct_chg": 3.0},
+        ]
+    }
+    overlay = {
+        "status": "live",
+        "is_current": True,
+        "phase": "morning",
+        "signals": {
+            "600002": {
+                "status": "entry",
+                "score": 91.0,
+                "actionable": True,
+                "signal_mode": "live",
+                "reasons": ["放量突破20日压力位"],
+            }
+        },
+    }
+
+    lite_main._merge_intraday_quality(data, overlay)
+    lite_main._finalize_intraday_quality(data, 10)
+
+    assert [item["symbol"] for item in data["items"]] == ["600002", "600001"]
+    assert data["items"][0]["timing_actionable"] is True
+    assert data["items"][0]["quality_score"] == 84.0
+    assert data["timing_actionable_count"] == 1
+
+
+def test_intraday_timing_gate_blocks_near_limit_without_misclassifying_star_market():
+    data = {
+        "items": [
+            {"symbol": "600001", "name": "主板近涨停", "smart_score": 82.0, "score": 82.0, "pct_chg": 9.0},
+            {"symbol": "688001", "name": "科创正常上涨", "smart_score": 80.0, "score": 80.0, "pct_chg": 9.0},
+        ]
+    }
+    overlay = {"status": "live", "is_current": True, "signals": {}}
+
+    lite_main._merge_intraday_quality(data, overlay)
+    lite_main._finalize_intraday_quality(data, 10)
+
+    assert [item["symbol"] for item in data["items"]] == ["688001"]
+    assert data["timing_excluded_count"] == 1
+    assert data["timing_excluded_samples"][0]["symbol"] == "600001"
+
+
+def test_one_click_recommendations_are_hard_capped_at_ten():
+    data = {
+        "items": [
+            {
+                "symbol": f"600{i:03d}",
+                "name": f"候选{i}",
+                "smart_score": 90.0 - i,
+                "score": 90.0 - i,
+                "pct_chg": 1.0,
+            }
+            for i in range(12)
+        ]
+    }
+
+    lite_main._merge_intraday_quality(
+        data,
+        {"status": "waiting", "is_current": False, "signals": {}},
+    )
+    lite_main._finalize_intraday_quality(data, 20)
+
+    assert len(data["items"]) == 10
+    assert data["requested_limit"] == 10
+    assert [item["rank"] for item in data["items"]] == list(range(1, 11))
+
+
 def _smart_pool_reads(mock) -> list:
     return [c for c in mock.call_args_list if str(c.args[0] if c.args else "").startswith("smart-pool:")]

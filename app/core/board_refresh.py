@@ -92,10 +92,10 @@ async def _refresh_cycle() -> None:
     await _safe("call-auction", ins.lite_call_auction())
     await _safe("heatmap", ins.lite_heatmap("industry"))
 
-    # 5) 一键智选（全市场结构因子）→ 走进程池，暖 smart-pool 缓存（内存+持久）
+    # 5) 一键智选（结构候选 + 盘中时机层）→ 走进程池，暖 smart-pool 缓存（内存+持久）
     #    仅交易时段跑：这是最重的一档（~100s），窗口外没必要反复算。
     if _in_active_window():
         await _safe(
             "smart-pool",
-            m._compute_lite_smart_pool("balanced", 20, 5000, force_refresh=True),
+            m._compute_lite_smart_pool("balanced", 10, 5000, force_refresh=True),
         )

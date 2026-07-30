@@ -73,7 +73,7 @@
                   {{ showPoolDesc ? '收起说明' : '选股逻辑' }}
                 </a>
               </h2>
-              <p v-if="showPoolDesc">结构因子评分为骨架（MACD、布林位置、趋势、动量、资金流等合成，与 12 个月回放同源、经 A/B 验证），再叠加盘中涨跌与成交活跃度重排；「形态智选」和「强势股」共振标的自动上浮并打标。每次手动生成都会跳过旧名单缓存，输出当下观察名单。</p>
+              <p v-if="showPoolDesc">结构因子评分先从全市场找候选（MACD、布林位置、趋势、动量、资金流，与历史回放同源），再由盘中雷达按量能、突破、板块共振完成二次确认；涨停或距离涨停过近直接剔除，最终只输出前10只。结构分保留不变，综合分仅用于本次时机排序。</p>
             </div>
             <div class="smart-inline-settings">
               <label class="strategy-pick">
@@ -88,8 +88,8 @@
                 <el-input-number v-model="smartPoolForm.universe_limit" :min="50" :max="5000" :step="50" controls-position="right" />
               </label>
               <label>
-                <span>推荐</span>
-                <el-input-number v-model="smartPoolForm.limit" :min="5" :max="50" controls-position="right" />
+                <span>推荐上限</span>
+                <el-input-number v-model="smartPoolForm.limit" :min="5" :max="10" controls-position="right" />
               </label>
             </div>
             <div class="smart-actions">
@@ -137,12 +137,44 @@
                 size="small" type="danger" effect="plain"
                 title="命中七不买重度风险（回避级）已被风控剔除，不进推荐池"
               >风控剔除 {{ smartPoolResult.excluded_severe_count }} 只雷票</el-tag>
+              <el-tag
+                v-if="smartPoolResult.timing_actionable_count"
+                size="small" type="success" effect="dark"
+                title="结构入选且盘中量价完成二次确认，目前仍在有效价格区间"
+              >可入场 {{ smartPoolResult.timing_actionable_count }} 只</el-tag>
+              <el-tag
+                v-if="smartPoolResult.timing_confirmed_count"
+                size="small" type="success" effect="plain"
+              >量价确认 {{ smartPoolResult.timing_confirmed_count }} 只</el-tag>
+              <el-tag
+                v-if="smartPoolResult.timing_watch_count"
+                size="small" type="warning" effect="plain"
+              >提前预警 {{ smartPoolResult.timing_watch_count }} 只</el-tag>
+              <el-tag
+                v-if="smartPoolResult.timing_wait_count"
+                size="small" type="info" effect="plain"
+              >等待确认 {{ smartPoolResult.timing_wait_count }} 只</el-tag>
+              <el-tag
+                v-if="smartPoolResult.timing_excluded_count"
+                size="small" type="danger" effect="plain"
+                title="已涨停或距离涨停过近，已从最终推荐中剔除"
+              >追高拦截 {{ smartPoolResult.timing_excluded_count }} 只</el-tag>
               <span v-if="smartPoolResult.analyzed">已分析 {{ smartPoolResult.analyzed }} 只</span>
               <el-tag v-if="smartPoolResult.daily_as_of" size="small" type="info" effect="plain">
                 日K {{ smartPoolResult.daily_as_of }}
               </el-tag>
               <el-tag v-if="smartPoolResult.realtime_as_of" size="small" type="success" effect="plain">
                 实时价 {{ smartPoolResult.realtime_as_of }}
+              </el-tag>
+              <el-tag
+                v-if="smartPoolResult.timing_gate"
+                size="small"
+                :type="smartPoolResult.timing_gate.is_current ? 'success' : 'warning'"
+                effect="plain"
+              >
+                时机层 {{ smartPoolResult.timing_gate.is_current
+                  ? (smartPoolResult.timing_gate.phase_label || '已更新')
+                  : '等待最新扫描' }}
               </el-tag>
               <el-tag
                 v-if="smartPoolResult.ai_factor"
@@ -173,10 +205,9 @@
               <span class="env-gate-head">环境仓位闸门 · <b>{{ smartPoolResult.position_gate.label }}</b></span>
               <span class="env-gate-note">{{ smartPoolResult.position_gate.note }}</span>
             </div>
-            <!-- 名单基准：排序只吃最近完整日线，两个收盘之间名单是冻结的。不写清楚，
-                 用户会以为「今天又独立选中了同一批票」或者「数据没更新」。 -->
+            <!-- 结构候选按最近完整日线冻结；盘中时机层只负责确认、拦截和重排。 -->
             <div v-if="smartPoolResult?.list_basis?.as_of" class="basis-note">
-              <b>本名单基于 {{ smartPoolResult.list_basis.as_of }} 收盘计算</b>
+              <b>结构候选基于 {{ smartPoolResult.list_basis.as_of }} 收盘计算</b>
               <span v-if="smartPoolResult.list_basis.same_count != null">
                 · 与上一份（{{ smartPoolResult.list_basis.prev_date }}）重合
                 <b :class="{ 'basis-high': basisOverlapHigh }">
@@ -184,30 +215,31 @@
                 </b>
               </span>
               <span class="basis-tip">
-                · 排序只用最近完整日线，<b>今日收盘前不会变化</b>——盘中重复生成得到的是同一份
+                · 结构池盘中保持稳定，<b>最终前10名会随量价确认、板块共振和追高状态动态变化</b>
               </span>
             </div>
 
-            <!-- 回放证据：收益 100% 来自每期最强的 1-2 只，而名单内名次没有区分度。
-                 所以「只买最靠前的一两只」是最容易亏的用法，必须在表格上方讲清楚。 -->
+            <!-- 结构层有历史回放，新增时机层仍需独立留痕；两者证据边界必须清楚。 -->
             <div v-if="smartPoolResult?.items.length" class="basket-note">
               <div class="basket-head">
-                <b>这是一篮子，不是排行榜</b>
-                <span>整体持有才有统计优势；只挑最靠前的一两只买，历史上等于抛硬币。</span>
+                <b>双层推荐：结构选股 + 时机确认</b>
+                <span>前10名按量价时机重排，但当前名次不等于上涨概率。</span>
                 <a class="desc-toggle" @click="showBasketEvidence = !showBasketEvidence">
-                  {{ showBasketEvidence ? '收起依据' : '看依据' }}
+                  {{ showBasketEvidence ? '收起依据' : '看结构层回放' }}
                 </a>
               </div>
-              <!-- 回放验证的唯一用法是「收盘后取名单 → 次日开盘买入 → 持满5日」。
-                   盘中按现价买入从未被回测覆盖，必须写在最显眼处，否则页面等于默许。 -->
               <div class="basket-usage">
-                <b>经过验证的用法只有一种：</b>收盘后取名单 → <b>次日开盘</b>买入 → <b>持满 5 个交易日</b>。
-                盘中按现价买入、浮亏就止损，都不在回放覆盖范围内——上面所有统计对这两种用法都不成立。
+                <b>盘中只看绿色“可入场”：</b>它表示结构入选后又通过实时量价确认；
+                “提前预警”和“等待确认”都不应直接买入。收盘复盘候选必须等下一交易日再次确认。
               </div>
               <div v-show="showBasketEvidence" class="basket-evidence">
                 <ul>
                   <li>
-                    名单内的<b>名次没有区分度</b>：第 1-5 名中位超额 −0.44pp、胜率 47.8%，
+                    以下统计只证明<b>底层结构候选</b>，不等于新增时机层已经证明能提升收益；
+                    时机层从本次上线后单独留痕，样本足够后再比较。
+                  </li>
+                  <li>
+                    旧结构池名次没有区分度：第 1-5 名中位超额 −0.44pp、胜率 47.8%，
                     反而低于第 6-10 名的 +0.64pp / 52.8%。量化分决定谁进名单，不决定谁涨得多。
                   </li>
                   <li>
@@ -228,7 +260,7 @@
                   </tbody>
                 </table>
                 <p class="basket-src">
-                  口径：12 个月 / 36 期 / 每期 top20 / 次日开盘买入 → T+5 收盘 /
+                  底层结构模型旧口径：12 个月 / 36 期 / 每期 top20 / 次日开盘买入 → T+5 收盘 /
                   超额对当期全市场中位（回放 anchor 2026-07-25，
                   <code>experiments/median_ab.py</code>）。历史统计不代表未来收益。
                 </p>
@@ -250,13 +282,33 @@
               @selection-change="handleSmartSelectionChange"
             >
               <el-table-column type="selection" width="44" fixed />
-              <el-table-column label="量化分" width="90" fixed>
+              <el-table-column label="综合排序" width="92" fixed>
+                <template #default="{ row }">
+                  <b>{{ Number(row.quality_score ?? row.score).toFixed(1) }}</b>
+                  <div class="score-pct">仅用于本次排序</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="结构分" width="90">
                 <template #default="{ row }">
                   <b>{{ displayScore(row) }}</b>
                   <!-- 结构因子分全市场上限约 79.6，所以「79 分」是前 0.1% 而非「只有七八十分」。
                        分数本身不可横向解读，百分位可以，故一并显示。 -->
                   <div v-if="row.score_percentile != null" class="score-pct">
                     全市场前 {{ row.score_percentile < 1 ? row.score_percentile.toFixed(1) : Math.round(row.score_percentile) }}%
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="时机确认" width="132">
+                <template #default="{ row }">
+                  <el-tag
+                    size="small"
+                    :type="timingTagType(row)"
+                    :effect="row.timing_actionable ? 'dark' : 'plain'"
+                  >
+                    {{ row.timing_actionable ? '可入场' : (row.timing_label || '等待扫描') }}
+                  </el-tag>
+                  <div v-if="row.timing_score != null" class="score-pct">
+                    时机 {{ Number(row.timing_score).toFixed(0) }}分
                   </div>
                 </template>
               </el-table-column>
@@ -298,7 +350,27 @@
               </el-table-column>
               <el-table-column label="买卖计划" width="156">
                 <template #default="{ row }">
-                  <div v-if="buyLocked(row)" class="trade-plan-cell risk-paused">
+                  <div v-if="row.timing_status === 'blocked'" class="trade-plan-cell risk-paused">
+                    <el-tag size="small" type="danger" effect="dark">不可追入</el-tag>
+                    <span>已涨停或距离涨停过近</span>
+                    <em>等待回落并重新出现量价确认</em>
+                  </div>
+                  <div
+                    v-else-if="['pending', 'unconfirmed', 'watch'].includes(row.timing_status || 'pending')"
+                    class="trade-plan-cell risk-paused"
+                  >
+                    <el-tag size="small" :type="row.timing_status === 'watch' ? 'warning' : 'info'" effect="plain">
+                      {{ row.timing_label || '等待量价确认' }}
+                    </el-tag>
+                    <span>暂不显示买入价格</span>
+                    <em>结构入选不等于当前可买，等待时机层确认</em>
+                  </div>
+                  <div v-else-if="row.timing_status === 'confirmed' && !row.timing_actionable" class="trade-plan-cell risk-paused">
+                    <el-tag size="small" type="warning" effect="plain">{{ row.timing_label }}</el-tag>
+                    <span>下一交易日重新确认</span>
+                    <em>收盘复盘或历史触发信号不能按原价格追入</em>
+                  </div>
+                  <div v-else-if="buyLocked(row)" class="trade-plan-cell risk-paused">
                     <el-tag size="small" type="danger" effect="dark">暂停新增买入</el-tag>
                     <span>当前仅作为观察名单</span>
                     <em>市场风险降至警惕/安全后再显示买入计划</em>
@@ -312,22 +384,30 @@
                     <em class="tp-warn">{{ row.daytrade_note }}</em>
                   </div>
                   <div v-else-if="row.trade_plan && row.trade_plan.buy_price" class="trade-plan-cell">
-                    <el-tag v-if="row.limit_up" size="small" type="danger" effect="dark" class="limit-up-tag">
-                      已涨停 · 买不到此价
+                    <el-tag v-if="row.timing_actionable" size="small" type="success" effect="dark" class="limit-up-tag">
+                      盘中量价已确认
                     </el-tag>
-                    <!-- 排序只看昨收结构分，今天正在暴跌的票照样在池里，而买点又贴合现价。
-                         不剔除（回放显示剔了更差），但要让用户看见自己在逆势接刀。 -->
+                    <!-- 逆势大跌即使结构分较高，也必须先通过时机层；通过后仍保留风险提示。 -->
                     <el-tooltip v-if="row.entry_warning" effect="dark" placement="left"
                                 :content="row.entry_warning.note">
                       <el-tag size="small" type="danger" effect="dark" class="limit-up-tag">
                         {{ row.entry_warning.text }} · 需持满5日
                       </el-tag>
                     </el-tooltip>
-                    <span>买 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
-                    <span class="tp-stop">止损 {{ formatNumber(row.trade_plan.stop_loss) }}（{{ row.trade_plan.stop_loss_pct }}%）</span>
-                    <span class="tp-target">止盈 {{ formatNumber(row.trade_plan.take_profit) }}（+{{ row.trade_plan.take_profit_pct }}%）</span>
-                    <em v-if="row.limit_up" class="tp-warn">封板价买不进，只能次日开盘入场（历史超额会缩水）</em>
-                    <em v-else>盈亏比 {{ row.trade_plan.risk_reward_ratio ?? '-' }}:1 · {{ row.trade_plan.basis === 'atr' ? 'ATR' : '比例' }}</em>
+                    <template v-if="row.timing_actionable && row.radar_signal?.entry_low">
+                      <span>
+                        入场 <b>{{ formatNumber(row.radar_signal.entry_low) }}–{{ formatNumber(row.radar_signal.entry_high) }}</b>
+                      </span>
+                      <span class="tp-stop">失效 {{ formatNumber(row.radar_signal.invalidation_price) }}</span>
+                      <span class="tp-target">不追高于 {{ formatNumber(row.radar_signal.chase_limit) }}</span>
+                      <em>有效至 {{ row.radar_signal.valid_until?.slice(11, 16) || '本次扫描区间' }}</em>
+                    </template>
+                    <template v-else>
+                      <span>买 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
+                      <span class="tp-stop">止损 {{ formatNumber(row.trade_plan.stop_loss) }}（{{ row.trade_plan.stop_loss_pct }}%）</span>
+                      <span class="tp-target">止盈 {{ formatNumber(row.trade_plan.take_profit) }}（+{{ row.trade_plan.take_profit_pct }}%）</span>
+                      <em>盈亏比 {{ row.trade_plan.risk_reward_ratio ?? '-' }}:1 · {{ row.trade_plan.basis === 'atr' ? 'ATR' : '比例' }}</em>
+                    </template>
                   </div>
                   <span v-else>-</span>
                 </template>
@@ -801,7 +881,7 @@ const screenSymbolsText = ref('600519\n000001\n300750')
 const screenForm = ref({ limit: 30 })
 const screenLoading = ref(false)
 const screenResult = ref<QuantScreenResult | null>(null)
-const smartPoolForm = ref({ limit: 20, universe_limit: 5000, strategy: 'balanced' })
+const smartPoolForm = ref({ limit: 10, universe_limit: 5000, strategy: 'balanced' })
 const smartPoolLoading = ref(false)
 const smartPoolResult = ref<QuantSmartPoolResult | null>(null)
 const smartPoolTask = ref<QuantSmartPoolTask | null>(null)
@@ -1060,6 +1140,12 @@ const BASKET_SIM = [
   { k: 20, mean: '+1.75pp', median: '+1.60pp', beat: '77.8%', tail: '91.7%' },
 ]
 const riskLocked = computed(() => ['危险', '极危'].includes(riskAlert.value?.level || ''))
+const timingTagType = (row: QuantSmartPoolItem) => {
+  if (row.timing_status === 'blocked') return 'danger'
+  if (row.timing_actionable || row.timing_status === 'confirmed') return 'success'
+  if (row.timing_status === 'watch') return 'warning'
+  return 'info'
+}
 // ③b 危险市况下不再整池锁死：后端标了 daytrade_ok 的逆势票仍给买入计划，但限定 T+1。
 // 依据是回测——弱市里这类票 T+1 超额 +1.06pp/胜率 62%，T+2 起衰减、T+5 转负，
 // 所以「放开但限期」比「一律不给」和「照常推荐」都更贴近真实赔率。
@@ -1873,11 +1959,13 @@ const openChart = async (row: any) => {
 
 .mini-summary {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
+  gap: 8px 10px;
   margin-bottom: 8px;
   color: var(--el-text-color-secondary);
 
+  > span, > b, > .el-tag { flex: 0 0 auto; white-space: nowrap; }
   b {
     color: var(--el-text-color-primary);
     font-size: 20px;
@@ -1938,10 +2026,11 @@ const openChart = async (row: any) => {
 .dc-filter { cursor: pointer; user-select: none; }
 
 .table-actions {
-  margin-left: auto;
+  flex: 1 0 100%;
   display: flex;
   gap: 8px;
   align-items: center;
+  justify-content: flex-end;
   flex-wrap: wrap;
 }
 

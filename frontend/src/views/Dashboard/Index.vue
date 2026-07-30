@@ -27,10 +27,6 @@
           </span>
         </div>
         <div class="market-actions">
-          <span v-if="risk" class="risk-pill" :class="riskToneClass"
-            title="风险分档（分越高越危险）：0–34 安全 · 35–54 警惕 · 55–74 危险 · 75–100 极危">
-            风险 {{ risk.level }} {{ risk.score }}
-          </span>
           <el-button link type="primary" size="small" :loading="heroLoading" @click="loadHero()">刷新</el-button>
         </div>
       </div>
@@ -54,14 +50,59 @@
         </span>
       </div>
       <div v-if="coldEvidence" class="mb-evidence">{{ coldEvidence }}</div>
-      <div v-if="risk" class="risk-verdict" :class="`risk-verdict-${riskKey}`">
-        <div class="risk-verdict-title">
-          <b>{{ verdict.word }}</b>
-          <span>{{ verdict.sub }}</span>
+      <div
+        v-if="risk"
+        class="risk-console"
+        :class="`risk-console-${riskKey}`"
+        role="button"
+        tabindex="0"
+        :aria-label="`市场风险 ${risk.level}，${riskScore} 分。${verdict.word}`"
+        @click="go('/risk-alert')"
+        @keydown.enter="go('/risk-alert')"
+      >
+        <div class="risk-gauge">
+          <svg viewBox="0 0 220 126" role="img" :aria-label="`风险仪表，当前 ${riskScore} 分`">
+            <path class="gauge-track" pathLength="100" d="M 18 108 A 92 92 0 0 1 202 108" />
+            <path class="gauge-band gauge-safe" pathLength="100" d="M 18 108 A 92 92 0 0 1 202 108" />
+            <path class="gauge-band gauge-warn" pathLength="100" d="M 18 108 A 92 92 0 0 1 202 108" />
+            <path class="gauge-band gauge-danger" pathLength="100" d="M 18 108 A 92 92 0 0 1 202 108" />
+            <path class="gauge-band gauge-extreme" pathLength="100" d="M 18 108 A 92 92 0 0 1 202 108" />
+            <g class="risk-needle" :style="{ transform: `rotate(${riskNeedleAngle}deg)` }">
+              <path d="M 110 108 L 187 108" />
+              <circle cx="110" cy="108" r="7" />
+              <circle cx="110" cy="108" r="2.5" />
+            </g>
+            <text class="gauge-score" x="110" y="78" text-anchor="middle">{{ riskScore }}</text>
+            <text class="gauge-unit" x="110" y="96" text-anchor="middle">风险 / 100</text>
+          </svg>
+          <div class="gauge-labels" aria-hidden="true">
+            <span>安全</span><span>警惕</span><span>危险</span><span>极危</span>
+          </div>
         </div>
-        <div class="risk-verdict-action">{{ risk.action }}</div>
+        <div class="risk-brief">
+          <div class="risk-meta">
+            <span>全市场风险仪表</span>
+            <time>{{ risk.as_of || marketCtx?.as_of || '实时' }}</time>
+          </div>
+          <div class="risk-level">
+            <i aria-hidden="true"></i>
+            <strong>{{ risk.level }}</strong>
+            <span>{{ riskZoneNote }}</span>
+          </div>
+          <div class="risk-decision">
+            <b>{{ verdict.word }}</b>
+            <span>{{ verdict.sub }}</span>
+          </div>
+          <p>{{ risk.action }}</p>
+          <div class="risk-scale">
+            <span><i class="safe"></i>0–34 安全</span>
+            <span><i class="warn"></i>35–54 警惕</span>
+            <span><i class="danger"></i>55–74 危险</span>
+            <span><i class="extreme"></i>75–100 极危</span>
+          </div>
+          <small>点击查看风险来源与全市场预警</small>
+        </div>
       </div>
-      <div v-if="risk" class="risk-verdict-scale">风险分档（分越高越危险）：0–34 安全 · 35–54 警惕 · 55–74 危险 · 75–100 极危</div>
       <div class="market-foot">每 60 秒自动刷新 · 规则化提示，不构成投资建议</div>
     </section>
 
@@ -92,7 +133,7 @@
               </div>
             </div>
             <small class="c-note">
-              <template v-if="smartLive">当下推荐池 · 基于 {{ smartBasis }} 收盘计算</template>
+              <template v-if="smartLive">当下前10推荐 · 结构基于 {{ smartBasis }} 收盘，量价动态重排</template>
               <template v-else>最近一批一键智选留痕（{{ smartDate }}）</template>
             </small>
           </template>
@@ -298,7 +339,17 @@ const riskKey = computed(() => {
 })
 const riskToneClass = computed(() => `rk-${riskKey.value}`)
 const riskCardClass = computed(() => (['危险', '极危'].includes(risk.value?.level || '') ? 'card-alert' : ''))
-const verdictKey = riskKey
+const riskScore = computed(() => {
+  const score = Number(risk.value?.score || 0)
+  return Number(Math.max(0, Math.min(100, score)).toFixed(1))
+})
+const riskNeedleAngle = computed(() => -180 + riskScore.value * 1.8)
+const riskZoneNote = computed(() => {
+  if (riskScore.value >= 75) return `已进入极危区 ${riskScore.value}/100`
+  if (riskScore.value >= 55) return `已进入危险区 ${riskScore.value}/100`
+  if (riskScore.value >= 35) return `处于警惕区 ${riskScore.value}/100`
+  return `处于安全区 ${riskScore.value}/100`
+})
 const verdict = computed(() => {
   const l = risk.value?.level
   if (l === '极危') return { word: '清仓观望', sub: '流动性踩踏风险，停止买入' }
@@ -411,13 +462,15 @@ const loadCards = async (retries = 1) => {
     }).catch(() => { failed = true }),
     // 智能选股读后台保温器暖好的缓存（cache_only，绝不在首页触发同步重算）。
     // 留痕只是「最近记过的一批」，可能是昨天的；这里拿到的是当下名单，且带基准时点。
-    quantApi.smartPool(20, 5000, true).then((res: any) => {
+    quantApi.smartPool(10, 5000, true).then((res: any) => {
       const items = res?.items || []
       if (!items.length) return                       // warming：保留留痕兜底，不清空
       smartLive.value = true
       smartBasis.value = res?.list_basis?.as_of || res?.daily_as_of || ''
       smartPicks.value = items.slice(0, 5).map((i: any) => ({
-        symbol: i.symbol || i.code, name: i.name, score: Math.round(Number(i.score) || 0),
+        symbol: i.symbol || i.code,
+        name: i.name,
+        score: Math.round(Number(i.quality_score ?? i.score) || 0),
       }))
     }).catch(() => { /* 冷缓存/超时都退回留痕，不影响其它卡片 */ }),
     heatmapApi.fetch('industry').then((d) => {
@@ -493,17 +546,84 @@ onUnmounted(stopHeroPolling)
 .market-overview { padding: 16px 20px; border: 1px solid var(--el-border-color-light);
   border-left: 6px solid var(--el-border-color); border-radius: 14px;
   background: var(--el-fill-color-extra-light); }
-.risk-verdict { display: flex; align-items: center; gap: 18px; margin-top: 12px; padding: 10px 14px;
-  border-left: 4px solid var(--el-border-color); border-radius: 9px; background: rgba(255, 255, 255, .72); }
-.risk-verdict-title { display: flex; align-items: baseline; gap: 10px; min-width: 280px;
-  b { font-size: 28px; font-weight: 800; line-height: 1.1; white-space: nowrap; }
-  span { color: var(--el-text-color-secondary); font-size: 13px; white-space: nowrap; } }
-.risk-verdict-action { flex: 1; font-size: 13px; font-weight: 600; line-height: 1.6; }
-.risk-verdict-scale { margin-top: 6px; font-size: 12px; color: var(--el-text-color-placeholder); }
-.risk-verdict-safe { border-left-color: #0e9f5a; .risk-verdict-title b { color: #0e9f5a; } }
-.risk-verdict-warn { border-left-color: #d48806; .risk-verdict-title b { color: #d48806; } }
-.risk-verdict-danger { border-left-color: #ef232a; .risk-verdict-title b { color: #ef232a; } }
-.risk-verdict-extreme { border-left-color: #a8071a; .risk-verdict-title b { color: #a8071a; } }
+.risk-console {
+  --risk-accent: #139c6b;
+  --risk-soft: #effbf6;
+  display: grid;
+  grid-template-columns: minmax(250px, 300px) minmax(0, 1fr);
+  align-items: center;
+  gap: 24px;
+  margin-top: 13px;
+  padding: 12px 22px 14px;
+  border: 1px solid color-mix(in srgb, var(--risk-accent) 30%, #d9e0e8);
+  border-radius: 13px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .98), var(--risk-soft));
+  box-shadow: 0 10px 28px rgba(34, 50, 75, .06);
+  cursor: pointer;
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.risk-console:hover { border-color: var(--risk-accent); box-shadow: 0 13px 34px rgba(34, 50, 75, .1); }
+.risk-console:focus-visible { outline: 3px solid color-mix(in srgb, var(--risk-accent) 28%, transparent); outline-offset: 2px; }
+.risk-console-safe { --risk-accent: #139c6b; --risk-soft: #effbf6; }
+.risk-console-warn { --risk-accent: #d69012; --risk-soft: #fff8e7; }
+.risk-console-danger { --risk-accent: #ed6a2c; --risk-soft: #fff2eb; }
+.risk-console-extreme { --risk-accent: #d92f42; --risk-soft: #fff0f2; }
+.risk-gauge { min-width: 0; }
+.risk-gauge svg { display: block; width: 100%; max-width: 300px; margin: 0 auto; overflow: visible; }
+.gauge-track, .gauge-band { fill: none; stroke-width: 18; }
+.gauge-track { stroke: #e7ebf0; stroke-linecap: round; }
+.gauge-band { stroke-linecap: butt; }
+.gauge-safe { stroke: #21b777; stroke-dasharray: 34 66; }
+.gauge-warn { stroke: #e4b422; stroke-dasharray: 20 80; stroke-dashoffset: -34; }
+.gauge-danger { stroke: #f07a2b; stroke-dasharray: 20 80; stroke-dashoffset: -54; }
+.gauge-extreme { stroke: #e43d49; stroke-dasharray: 26 74; stroke-dashoffset: -74; }
+.risk-needle {
+  transform-origin: 110px 108px;
+  transition: transform .65s cubic-bezier(.2, .8, .2, 1);
+  path { fill: none; stroke: var(--risk-accent); stroke-width: 3; stroke-linecap: round; }
+  circle:first-of-type { fill: var(--risk-accent); }
+  circle:last-of-type { fill: #fff; }
+}
+.gauge-score {
+  fill: var(--risk-accent);
+  font-family: "Bahnschrift", "Arial Narrow", sans-serif;
+  font-size: 33px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.8px;
+}
+.gauge-unit { fill: var(--el-text-color-secondary); font-size: 10px; letter-spacing: .8px; }
+.gauge-labels {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin: -1px auto 0;
+  max-width: 280px;
+  color: var(--el-text-color-placeholder);
+  font-size: 10px;
+  text-align: center;
+}
+.risk-brief { min-width: 0; border-left: 1px solid rgba(101, 116, 139, .16); padding-left: 26px; }
+.risk-meta { display: flex; align-items: center; gap: 9px; color: var(--el-text-color-placeholder);
+  font-size: 11px; letter-spacing: .4px;
+  time { font-variant-numeric: tabular-nums; }
+  span::after { content: ""; display: inline-block; width: 18px; height: 1px; margin-left: 9px;
+    vertical-align: middle; background: currentColor; opacity: .45; } }
+.risk-level { display: flex; align-items: center; gap: 10px; margin-top: 4px;
+  i { width: 15px; height: 15px; flex: 0 0 auto; border-radius: 50%; background: var(--risk-accent);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--risk-accent) 14%, transparent); }
+  strong { color: var(--risk-accent); font-size: 30px; font-weight: 850; line-height: 1.15; letter-spacing: -.5px; }
+  span { color: var(--el-text-color-secondary); font-size: 12px; } }
+.risk-decision { display: flex; align-items: baseline; gap: 12px; margin-top: 7px;
+  b { color: var(--el-text-color-primary); font-size: 18px; font-weight: 800; }
+  span { color: var(--el-text-color-secondary); font-size: 13px; } }
+.risk-brief > p { margin: 6px 0 9px; color: var(--el-text-color-primary); font-size: 13px;
+  font-weight: 600; line-height: 1.55; }
+.risk-scale { display: flex; flex-wrap: wrap; gap: 7px 14px; color: var(--el-text-color-placeholder); font-size: 10px;
+  span { display: inline-flex; align-items: center; gap: 4px; }
+  i { width: 14px; height: 4px; border-radius: 3px; }
+  .safe { background: #21b777; } .warn { background: #e4b422; }
+  .danger { background: #f07a2b; } .extreme { background: #e43d49; } }
+.risk-brief > small { display: block; margin-top: 7px; color: var(--risk-accent); font-size: 10px; font-weight: 600; }
 .market-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .market-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .mb-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
@@ -526,7 +646,6 @@ onUnmounted(stopHeroPolling)
 .mb-daily { margin-top: 5px; font-size: 12px; color: var(--el-text-color-secondary);
   span { margin-right: 10px; } }
 .mb-evidence { margin-top: 5px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; }
-.risk-pill { color: #fff; font-size: 15px; font-weight: 800; padding: 4px 11px; border-radius: 12px; }
 .market-foot { margin-top: 7px; font-size: 11px; color: var(--el-text-color-placeholder); text-align: right; }
 .ctx-warm { border-color: #ffb3a7; border-left-color: #ef232a; background: #fff1f0;
   .mb-tag { background: #ef232a; } .mb-state, .mb-metrics b { color: #ef232a; } }
@@ -536,16 +655,19 @@ onUnmounted(stopHeroPolling)
 .ctx-loading { border-left-color: var(--el-border-color); }
 .mb-idx.up b, .mb-daily .up { color: #ef232a; }
 .mb-idx.down b, .mb-daily .down { color: #0e9f5a; }
-.risk-pill.rk-safe { color: #fff; background: rgba(14,159,90,.85); }
-.risk-pill.rk-warn { color: #fff; background: rgba(212,136,6,.85); }
-.risk-pill.rk-danger { color: #fff; background: rgba(239,35,42,.85); }
-.risk-pill.rk-extreme { color: #fff; background: rgba(168,7,26,.9); }
 
 @media (max-width: 760px) {
-  .risk-verdict { align-items: flex-start; flex-direction: column; gap: 6px; }
-  .risk-verdict-title { min-width: 0; flex-wrap: wrap; }
+  .risk-console { grid-template-columns: 1fr; gap: 8px; padding: 10px 14px 14px; }
+  .risk-gauge svg { max-width: 270px; }
+  .risk-brief { border-top: 1px solid rgba(101, 116, 139, .16); border-left: 0; padding: 13px 0 0; }
+  .risk-level { flex-wrap: wrap; }
+  .risk-decision { align-items: flex-start; flex-direction: column; gap: 2px; }
   .market-head { flex-direction: column; }
   .market-actions { width: 100%; justify-content: space-between; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .risk-console, .risk-needle { transition: none; }
 }
 
 /* ---------- Grid ---------- */

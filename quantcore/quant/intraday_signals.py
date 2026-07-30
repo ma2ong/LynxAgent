@@ -1,0 +1,620 @@
+"""盘中机会雷达：用日线结构底座和实时快照生成状态化入场信号。
+
+职责边界：
+- 只做研究型推荐，不自动下单；
+- 盘中仅使用当时可见的行情快照，信号价就是触发时价格；
+- “主力行为”只作为量价代理证据，不声称识别真实账户；
+- 未经样本外校准前只输出信号强度，不伪装成上涨概率。
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+import math
+import statistics
+from typing import Any, Dict, Iterable, Optional
+from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+from .local_store import LocalQuantStore, get_local_store
+
+
+_TZ = ZoneInfo("Asia/Shanghai")
+ACTIVE_STATUSES = {"watch", "entry", "unbuyable"}
+STATUS_LABELS = {
+    "watch": "提前预警",
+    "entry": "入场触发",
+    "unbuyable": "不可追入",
+    "invalid": "信号失效",
+}
+
+
+def _f(value: object, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+        return default if not math.isfinite(number) else number
+    except (TypeError, ValueError):
+        return default
+
+
+def _clip(value: float, low: float = 0.0, high: float = 100.0) -> float:
+    return max(low, min(high, value))
+
+
+def trading_phase(now: Optional[datetime] = None) -> str:
+    """Return the A-share session phase for an Asia/Shanghai timestamp."""
+    current = now or datetime.now(_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=_TZ)
+    else:
+        current = current.astimezone(_TZ)
+    if current.weekday() >= 5:
+        return "closed"
+    minute = current.hour * 60 + current.minute
+    if 9 * 60 + 15 <= minute <= 9 * 60 + 25:
+        return "auction"
+    if 9 * 60 + 25 < minute < 9 * 60 + 30:
+        return "opening_wait"
+    if 9 * 60 + 30 <= minute <= 11 * 60 + 30:
+        return "morning"
+    if 13 * 60 <= minute < 14 * 60 + 57:
+        return "afternoon"
+    if 14 * 60 + 57 <= minute <= 15 * 60:
+        return "closing_auction"
+    return "closed"
+
+
+def is_scan_window(now: Optional[datetime] = None) -> bool:
+    return trading_phase(now) in {"auction", "opening_wait", "morning", "afternoon", "closing_auction"}
+
+
+def session_progress(now: datetime) -> float:
+    """Trading-minute progress, used only as a fallback intraday volume normalizer."""
+    current = now if now.tzinfo else now.replace(tzinfo=_TZ)
+    current = current.astimezone(_TZ)
+    minute = current.hour * 60 + current.minute
+    if minute < 9 * 60 + 30:
+        return 0.04
+    if minute <= 11 * 60 + 30:
+        return max(0.04, min(0.5, (minute - (9 * 60 + 30)) / 240))
+    if minute < 13 * 60:
+        return 0.5
+    return max(0.5, min(1.0, (120 + minute - 13 * 60) / 240))
+
+
+def _limit_percent(symbol: str) -> float:
+    if symbol.startswith(("300", "301", "688", "689")):
+        return 20.0
+    if symbol.startswith(("4", "8", "92")):
+        return 30.0
+    return 10.0
+
+
+def _phase_label(phase: str) -> str:
+    return {
+        "auction": "集合竞价",
+        "opening_wait": "等待开盘",
+        "morning": "早盘连续竞价",
+        "afternoon": "午后连续竞价",
+        "closing_auction": "收盘集合竞价",
+        "closed": "非交易时段",
+    }.get(phase, phase)
+
+
+def load_intraday_baselines(
+    store: Optional[LocalQuantStore] = None,
+    as_of: Optional[datetime] = None,
+    industry_map: Optional[Dict[str, str]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Bulk-load yesterday-and-earlier structure metrics for the full market."""
+    target = store or get_local_store()
+    current = as_of or datetime.now(_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=_TZ)
+    trade_date = current.astimezone(_TZ).strftime("%Y-%m-%d")
+    cutoff = (current.date() - timedelta(days=170)).strftime("%Y-%m-%d")
+    rows = target._conn().execute(
+        """
+        SELECT k.symbol,k.date,k.open,k.high,k.low,k.close,k.volume,k.amount,
+               COALESCE(m.name,''),COALESCE(m.industry,''),COALESCE(m.list_date,'')
+        FROM daily_kline k
+        LEFT JOIN stock_meta m ON m.symbol=k.symbol
+        WHERE k.amount>0 AND k.date>=? AND k.date<?
+        ORDER BY k.symbol,k.date DESC
+        """,
+        (cutoff, trade_date),
+    ).fetchall()
+
+    grouped: Dict[str, list[tuple]] = {}
+    meta: Dict[str, tuple[str, str, str]] = {}
+    for symbol, date, open_, high, low, close, volume, amount, name, industry, list_date in rows:
+        code = str(symbol).zfill(6)
+        bucket = grouped.setdefault(code, [])
+        if len(bucket) < 65:
+            bucket.append((str(date), _f(open_), _f(high), _f(low), _f(close), _f(volume), _f(amount)))
+        meta[code] = (str(name or ""), str(industry or ""), str(list_date or ""))
+
+    output: Dict[str, Dict[str, Any]] = {}
+    for symbol, bars in grouped.items():
+        if len(bars) < 20:
+            continue
+        closes = [row[4] for row in bars]
+        highs = [row[2] for row in bars]
+        amounts = [row[6] for row in bars if row[6] > 0]
+        if closes[0] <= 0 or len(amounts) < 20:
+            continue
+        name, stored_industry, list_date = meta.get(symbol, ("", "", ""))
+        industry = str((industry_map or {}).get(symbol) or stored_industry or "")
+        ma5 = statistics.fmean(closes[:5])
+        ma20 = statistics.fmean(closes[:20])
+        ma60 = statistics.fmean(closes[:60]) if len(closes) >= 60 else ma20
+        output[symbol] = {
+            "symbol": symbol,
+            "name": name or symbol,
+            "industry": industry or "其他",
+            "list_date": list_date,
+            "last_bar_date": bars[0][0],
+            "prev_close": closes[0],
+            "ma5": ma5,
+            "ma20": ma20,
+            "ma60": ma60,
+            "high20": max(highs[:20]),
+            "high60": max(highs[:60]) if len(highs) >= 60 else max(highs),
+            "amount_ma20": statistics.fmean(amounts[:20]),
+            "return5": (closes[0] / closes[5] - 1) * 100 if len(closes) > 5 and closes[5] > 0 else 0.0,
+            "return20": (closes[0] / closes[20] - 1) * 100 if len(closes) > 20 and closes[20] > 0 else 0.0,
+        }
+    return output
+
+
+class IntradaySignalEngine:
+    """Stateful full-market scanner. One instance should process snapshots serially."""
+
+    def __init__(
+        self,
+        baselines: Optional[Dict[str, Dict[str, Any]]] = None,
+        store: Optional[LocalQuantStore] = None,
+        min_daily_amount: float = 30_000_000,
+        industry_map: Optional[Dict[str, str]] = None,
+    ) -> None:
+        self.store = store
+        self.baselines = baselines or {}
+        self.industry_map = industry_map or {}
+        self.min_daily_amount = min_daily_amount
+        self.baseline_date = ""
+        self.trade_date = ""
+        self.previous_quotes: Dict[str, Dict[str, float]] = {}
+        self.states: Dict[str, Dict[str, Any]] = {}
+        self.recent_events: list[Dict[str, Any]] = []
+
+    def ensure_baselines(self, now: datetime, force: bool = False) -> None:
+        if self.baselines and self.store is None and not force:
+            return
+        today = now.astimezone(_TZ).strftime("%Y-%m-%d")
+        if force or not self.baselines or self.baseline_date != today:
+            self.baselines = load_intraday_baselines(self.store, now, self.industry_map)
+            self.baseline_date = today
+
+    def restore(self, events: Iterable[Dict[str, Any]]) -> None:
+        """Restore today's last known active states after a backend restart."""
+        for event in events:
+            item = event.get("item") or {}
+            symbol = str(event.get("symbol") or item.get("symbol") or "").zfill(6)
+            status = str(event.get("status") or item.get("status") or "")
+            if not symbol or symbol in self.states:
+                continue
+            if status in ACTIVE_STATUSES:
+                restored = dict(item)
+                restored["status"] = status
+                restored["candidate_streak"] = 2 if status == "entry" else 1
+                self.states[symbol] = restored
+        self.recent_events = list(events)[:80]
+
+    def _new_event(self, item: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+        return {
+            "event_id": uuid4().hex,
+            "trade_date": now.astimezone(_TZ).strftime("%Y-%m-%d"),
+            "symbol": item["symbol"],
+            "name": item["name"],
+            "status": item["status"],
+            "triggered_at": item["triggered_at"],
+            "signal_price": item["signal_price"],
+            "score": item["score"],
+            "item": dict(item),
+        }
+
+    def scan(
+        self,
+        snapshot: Dict[str, Dict[str, Any]],
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        current = now or datetime.now(_TZ)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=_TZ)
+        current = current.astimezone(_TZ)
+        today = current.strftime("%Y-%m-%d")
+        if self.trade_date != today:
+            self.trade_date = today
+            self.previous_quotes.clear()
+            self.states.clear()
+            self.recent_events.clear()
+        self.ensure_baselines(current)
+
+        phase = trading_phase(current)
+        continuous = phase in {"morning", "afternoon"}
+        progress = session_progress(current)
+        as_of = current.isoformat(timespec="seconds")
+
+        valid: Dict[str, Dict[str, Any]] = {}
+        market_returns: list[float] = []
+        sector_returns: Dict[str, list[float]] = {}
+        for raw_symbol, quote in snapshot.items():
+            symbol = str(raw_symbol).zfill(6)
+            base = self.baselines.get(symbol)
+            if not base:
+                continue
+            name = str(quote.get("name") or base.get("name") or symbol)
+            if "ST" in name.upper() or "退" in name:
+                continue
+            price = _f(quote.get("price") or quote.get("close"))
+            prev_close = _f(quote.get("prev_close"), _f(base.get("prev_close")))
+            if price <= 0 or prev_close <= 0:
+                continue
+            pct = _f(quote.get("change_percent") if quote.get("change_percent") is not None else quote.get("pct_chg"))
+            if not pct:
+                pct = (price / prev_close - 1) * 100
+            enriched = dict(quote)
+            enriched.update({"symbol": symbol, "name": name, "price": price, "prev_close": prev_close, "pct": pct})
+            valid[symbol] = enriched
+            market_returns.append(pct)
+            sector_returns.setdefault(str(base.get("industry") or "其他"), []).append(pct)
+
+        market_median = statistics.median(market_returns) if market_returns else 0.0
+        breadth_up = sum(1 for value in market_returns if value > 0) / len(market_returns) if market_returns else 0.0
+        sector_stats = {
+            industry: {
+                "mean": statistics.fmean(values),
+                "breadth": sum(1 for value in values if value > 0) / len(values),
+                "count": len(values),
+            }
+            for industry, values in sector_returns.items()
+        }
+
+        events: list[Dict[str, Any]] = []
+        for symbol, quote in valid.items():
+            base = self.baselines[symbol]
+            name = quote["name"]
+            price = quote["price"]
+            prev_close = quote["prev_close"]
+            pct = quote["pct"]
+            open_price = _f(quote.get("open"), prev_close)
+            high = _f(quote.get("high"), price)
+            low = _f(quote.get("low"), min(open_price, price))
+            amount = _f(quote.get("amount"))
+            amount_ma20 = _f(base.get("amount_ma20"))
+            if price < 2 or amount_ma20 < self.min_daily_amount:
+                continue
+
+            feed_volume_ratio = _f(quote.get("volume_ratio"))
+            projected_ratio = amount / max(progress, 0.04) / amount_ma20 if amount_ma20 > 0 and amount > 0 else 0.0
+            activity_ratio = (
+                feed_volume_ratio * 0.7 + projected_ratio * 0.3
+                if feed_volume_ratio > 0 and projected_ratio > 0
+                else max(feed_volume_ratio, projected_ratio)
+            )
+            activity_ratio = min(8.0, max(0.0, activity_ratio))
+
+            day_range = max(0.0, high - low)
+            range_position = (price - low) / day_range if day_range > 0 else 0.5
+            high20 = _f(base.get("high20"), prev_close)
+            high60 = _f(base.get("high60"), high20)
+            breakout20 = price >= high20 * 1.002
+            breakout60 = price >= high60 * 1.002
+
+            previous = self.previous_quotes.get(symbol)
+            speed_1m = 0.0
+            if previous and previous.get("price", 0) > 0:
+                seconds = max(1.0, current.timestamp() - previous.get("timestamp", current.timestamp()))
+                if seconds <= 180:
+                    speed_1m = (price / previous["price"] - 1) * 100 * 60 / seconds
+
+            trend_score = 48.0
+            if prev_close >= _f(base.get("ma20")):
+                trend_score += 12
+            if _f(base.get("ma5")) >= _f(base.get("ma20")):
+                trend_score += 10
+            if _f(base.get("ma20")) >= _f(base.get("ma60")):
+                trend_score += 8
+            if _f(base.get("return20")) > 35:
+                trend_score -= 10
+            trend_score = _clip(trend_score)
+
+            if activity_ratio >= 3:
+                volume_score = 92.0
+            elif activity_ratio >= 2:
+                volume_score = 82.0
+            elif activity_ratio >= 1.5:
+                volume_score = 72.0
+            elif activity_ratio >= 1.15:
+                volume_score = 60.0
+            else:
+                volume_score = 38.0 + activity_ratio * 10
+
+            price_score = 48 + min(max(pct, -4), 8) * 4
+            price_score += max(0.0, range_position - 0.5) * 28
+            if price >= open_price:
+                price_score += 5
+            if breakout20:
+                price_score += 10
+            if breakout60:
+                price_score += 5
+            if speed_1m >= 0.25:
+                price_score += min(8, speed_1m * 6)
+            price_score = _clip(price_score)
+
+            industry = str(base.get("industry") or "其他")
+            sector = sector_stats.get(industry, {"mean": 0.0, "breadth": 0.5, "count": 0})
+            context_score = 48 + _clip(_f(sector["mean"]) * 6, -18, 18)
+            context_score += (_f(sector["breadth"], 0.5) - 0.5) * 20
+            context_score += (breadth_up - 0.5) * 16
+            context_score = _clip(context_score)
+
+            score = (
+                price_score * 0.32
+                + volume_score * 0.27
+                + trend_score * 0.21
+                + context_score * 0.20
+                + (4 if breakout20 else 0)
+            )
+            score = round(_clip(score), 1)
+
+            limit_pct = _limit_percent(symbol)
+            distance_to_limit = limit_pct - pct
+            at_limit = distance_to_limit <= 0.4 or (
+                high > 0 and abs(price - high) / price < 0.0005 and distance_to_limit <= 0.8
+            )
+            near_limit = distance_to_limit <= 1.5
+            projected_liquid = amount_ma20 >= self.min_daily_amount
+            basic_setup = (
+                pct >= 1.0
+                and range_position >= 0.68
+                and activity_ratio >= 1.50
+                and projected_liquid
+                and price >= open_price * 0.995
+            )
+            momentum_trigger = breakout20 or speed_1m >= 0.25 or (
+                pct >= 2.0 and _f(sector["mean"]) >= 0.3
+            )
+            prealert = basic_setup and score >= 80 and momentum_trigger
+            formal = continuous and prealert and score >= 84 and activity_ratio >= 1.75
+
+            prior_state = self.states.get(symbol, {})
+            prior_status = str(prior_state.get("status") or "")
+            streak = int(prior_state.get("candidate_streak") or 0) + 1 if formal else 0
+            status = ""
+            if prealert and (at_limit or near_limit):
+                status = "unbuyable"
+            elif formal and ((breakout20 and score >= 88) or streak >= 2):
+                status = "entry"
+            elif prealert:
+                status = "watch"
+
+            prior_invalidation = _f(prior_state.get("invalidation_price"))
+            if prior_status in ACTIVE_STATUSES and not status:
+                expired = False
+                try:
+                    valid_until_dt = datetime.fromisoformat(str(prior_state.get("valid_until") or ""))
+                    if valid_until_dt.tzinfo is None:
+                        valid_until_dt = valid_until_dt.replace(tzinfo=_TZ)
+                    expired = current > valid_until_dt
+                except ValueError:
+                    pass
+                if expired or price <= prior_invalidation or score < 55:
+                    status = "invalid"
+                else:
+                    status = prior_status
+
+            if not status:
+                self.previous_quotes[symbol] = {
+                    "price": price,
+                    "amount": amount,
+                    "timestamp": current.timestamp(),
+                }
+                continue
+
+            trigger_level = high20 if breakout20 else max(open_price, prev_close)
+            invalidation = prior_invalidation or max(trigger_level * 0.992, price * 0.975)
+            previous_signal_price = _f(prior_state.get("signal_price"))
+            signal_price = previous_signal_price if prior_status == status and previous_signal_price > 0 else price
+            first_seen = str(prior_state.get("first_seen") or as_of)
+            triggered_at = str(prior_state.get("triggered_at") or as_of) if prior_status == status else as_of
+            valid_minutes = 20 if status == "entry" else 10
+            valid_until = (
+                str(prior_state.get("valid_until"))
+                if prior_status == status and prior_state.get("valid_until")
+                else (current + timedelta(minutes=valid_minutes)).isoformat(timespec="seconds")
+            )
+
+            reasons = []
+            if breakout60:
+                reasons.append("放量突破60日压力位")
+            elif breakout20:
+                reasons.append("价格突破20日压力位")
+            if activity_ratio >= 2:
+                reasons.append(f"同时间量能约 {activity_ratio:.1f} 倍")
+            elif activity_ratio >= 1.45:
+                reasons.append(f"盘中量能放大至 {activity_ratio:.1f} 倍")
+            if speed_1m >= 0.25:
+                reasons.append(f"短时涨速 {speed_1m:.2f}%/分钟")
+            if _f(sector["mean"]) >= 0.5:
+                reasons.append(f"{industry}板块共振 {_f(sector['mean']):+.2f}%")
+            if range_position >= 0.8:
+                reasons.append("价格位于日内区间上部")
+            if status == "unbuyable":
+                reasons.insert(0, "距离涨停过近或已经封板，不再建议追入")
+            if status == "invalid":
+                reasons.insert(0, "价格或信号强度已跌破有效条件")
+
+            item = {
+                "symbol": symbol,
+                "name": name,
+                "industry": industry,
+                "status": status,
+                "status_label": STATUS_LABELS[status],
+                "score": score,
+                "current_price": round(price, 3),
+                "signal_price": round(signal_price, 3),
+                "pct_chg": round(pct, 2),
+                "entry_low": round(signal_price * 0.997, 3),
+                "entry_high": round(signal_price * 1.006, 3),
+                "chase_limit": round(min(signal_price * 1.015, prev_close * (1 + limit_pct / 100) - 0.01), 3),
+                "invalidation_price": round(invalidation, 3),
+                "distance_to_limit": round(max(0.0, distance_to_limit), 2),
+                "activity_ratio": round(activity_ratio, 2),
+                "feed_volume_ratio": round(feed_volume_ratio, 2),
+                "projected_amount_ratio": round(projected_ratio, 2),
+                "range_position": round(range_position, 3),
+                "speed_1m": round(speed_1m, 3),
+                "breakout20": breakout20,
+                "breakout60": breakout60,
+                "sector_change": round(_f(sector["mean"]), 2),
+                "market_median": round(market_median, 2),
+                "reasons": reasons[:5],
+                "phase": phase,
+                "phase_label": _phase_label(phase),
+                "first_seen": first_seen,
+                "triggered_at": triggered_at,
+                "last_seen": as_of,
+                "valid_until": valid_until,
+                "candidate_streak": streak,
+                "quote_source": quote.get("quote_source") or "",
+                "calibrated_probability": None,
+                "signal_mode": "live",
+                "actionable": status == "entry" and continuous,
+            }
+            self.states[symbol] = item
+
+            if prior_status != status:
+                event = self._new_event(item, current)
+                events.append(event)
+                self.recent_events.insert(0, event)
+
+            self.previous_quotes[symbol] = {
+                "price": price,
+                "amount": amount,
+                "timestamp": current.timestamp(),
+            }
+
+        # Keep price history for non-candidates so acceleration can be measured next cycle.
+        for symbol, quote in valid.items():
+            if symbol not in self.previous_quotes:
+                self.previous_quotes[symbol] = {
+                    "price": quote["price"],
+                    "amount": _f(quote.get("amount")),
+                    "timestamp": current.timestamp(),
+                }
+
+        self.recent_events = self.recent_events[:80]
+        active_items = []
+        for item in self.states.values():
+            if item.get("status") not in ACTIVE_STATUSES:
+                continue
+            try:
+                last_seen = datetime.fromisoformat(str(item.get("last_seen") or ""))
+                if last_seen.tzinfo is None:
+                    last_seen = last_seen.replace(tzinfo=_TZ)
+                if phase != "closed" and (current - last_seen).total_seconds() > 180:
+                    continue
+            except ValueError:
+                continue
+            active_items.append(dict(item))
+        priority = {"entry": 0, "watch": 1, "unbuyable": 2}
+        active_items.sort(key=lambda item: (priority.get(str(item.get("status")), 9), -_f(item.get("score"))))
+
+        market_tone = "偏暖" if breadth_up >= 0.6 and market_median > 0 else (
+            "偏冷" if breadth_up <= 0.4 and market_median < 0 else "中性"
+        )
+        return {
+            "status": "live" if phase != "closed" else "closed",
+            "as_of": as_of,
+            "trade_date": today,
+            "phase": phase,
+            "phase_label": _phase_label(phase),
+            "universe": len(valid),
+            "candidate_count": len(active_items),
+            "entry_count": sum(1 for item in active_items if item["status"] == "entry"),
+            "watch_count": sum(1 for item in active_items if item["status"] == "watch"),
+            "unbuyable_count": sum(1 for item in active_items if item["status"] == "unbuyable"),
+            "market": {
+                "tone": market_tone,
+                "median_pct": round(market_median, 2),
+                "breadth_up": round(breadth_up, 4),
+            },
+            "items": active_items,
+            "events": events,
+            "recent_events": list(self.recent_events),
+            "method_note": "日线结构预计算 + 盘中量价快扫 + 板块/市场共振；已涨停或距离涨停过近不推荐追入。",
+            "probability_note": "上涨概率尚未完成盘中样本外校准，当前仅展示可回放验证的信号强度。",
+        }
+
+
+def build_close_review(
+    snapshot: Dict[str, Dict[str, Any]],
+    baselines: Dict[str, Dict[str, Any]],
+    now: Optional[datetime] = None,
+    limit: int = 60,
+) -> Dict[str, Any]:
+    """Replay the closing snapshot without pretending it was a live intraday trigger."""
+    current = now or datetime.now(_TZ)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=_TZ)
+    current = current.astimezone(_TZ)
+    replay_at = current.replace(hour=14, minute=56, second=0, microsecond=0)
+    engine = IntradaySignalEngine(baselines=baselines)
+
+    # Two identical passes reproduce the normal confirmation state machine while
+    # deliberately leaving short-term acceleration at zero.
+    engine.scan(snapshot, replay_at)
+    result = engine.scan(snapshot, replay_at + timedelta(seconds=15))
+    safe_limit = max(1, min(int(limit), 200))
+    reviewed_at = current.isoformat(timespec="seconds")
+    labels = {
+        "entry": "收盘复盘候选",
+        "watch": "收盘复盘观察",
+        "unbuyable": "收盘不可追",
+    }
+    items: list[Dict[str, Any]] = []
+    for raw_item in result.get("items") or []:
+        item = dict(raw_item)
+        item["status_label"] = labels.get(str(item.get("status")), str(item.get("status_label") or "收盘复盘"))
+        item["signal_mode"] = "close_review"
+        item["actionable"] = False
+        item["reviewed_at"] = reviewed_at
+        item["triggered_at"] = ""
+        item["first_seen"] = ""
+        item["last_seen"] = reviewed_at
+        item["valid_until"] = ""
+        item["phase"] = "closed_review"
+        item["phase_label"] = "收盘复盘"
+        item["reasons"] = ["依据今日收盘快照回放，非盘中实时触发"] + list(item.get("reasons") or [])[:4]
+        items.append(item)
+        if len(items) >= safe_limit:
+            break
+
+    result.update({
+        "status": "closed",
+        "as_of": reviewed_at,
+        "trade_date": current.strftime("%Y-%m-%d"),
+        "phase": "closed",
+        "phase_label": "已收盘 · 显示今日复盘",
+        "review_mode": "close_review",
+        "items": items,
+        "events": [],
+        "recent_events": [],
+        "candidate_count": len(items),
+        "entry_count": sum(1 for item in items if item.get("status") == "entry"),
+        "watch_count": sum(1 for item in items if item.get("status") == "watch"),
+        "unbuyable_count": sum(1 for item in items if item.get("status") == "unbuyable"),
+        "method_note": "依据今日收盘快照回放量价与结构条件；无法还原盘中逐分钟触发时点，因此与实时入场信号分开标注。",
+        "probability_note": "收盘复盘候选用于次日观察，不代表明日开盘可直接买入；仍需等待下一交易日实时量价确认。",
+    })
+    return result

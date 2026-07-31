@@ -1,13 +1,16 @@
 <template>
   <div class="auction-page">
     <div class="page-head">
-      <div>
+      <div class="head-copy">
         <h1>集合竞价</h1>
         <p>先筛强势板块与健康高开，再用 09:15-09:25 四形态做买入硬闸门，仅供研究参考</p>
       </div>
       <div class="head-ctrl">
         <span v-if="updatedAt" class="updated">更新于 {{ updatedAt }}</span>
-        <el-button type="primary" :loading="loading" @click="load">刷新</el-button>
+        <el-button text size="small" @click="showAuctionDetails = !showAuctionDetails">
+          {{ showAuctionDetails ? '收起明细' : '展开明细' }}
+        </el-button>
+        <el-button size="small" type="primary" :loading="loading" @click="load">刷新</el-button>
       </div>
     </div>
 
@@ -46,12 +49,13 @@
 
       <div class="verdict">{{ data.overview.verdict }}</div>
 
+      <div class="auction-detail-grid">
       <!-- 竞价四形态（实时·不可回测） -->
       <section class="tape" v-if="data.auction_tape && data.auction_tape.available">
         <div class="tape-head">
           竞价盘口四形态
           <span class="tape-meta">初筛 {{ data.auction_tape.tracked }} 只 · 判出 {{ data.auction_tape.resolved }} 只</span>
-          <span class="tape-live">09:15-09:25 逐分钟撮合价</span>
+          <span class="tape-live">09:15-09:25</span>
         </div>
         <div class="tape-counts">
           <span class="tc t-acc">主力抢筹 <b>{{ data.auction_tape.pattern_counts.accumulation }}</b></span>
@@ -59,10 +63,10 @@
           <span class="tc t-shake">洗盘低吸 <b>{{ data.auction_tape.pattern_counts.shakeout }}</b></span>
           <span class="tc t-div">多空分歧 <b>{{ data.auction_tape.pattern_counts.divergence }}</b></span>
         </div>
-        <p class="tape-note">{{ data.auction_tape.note }}</p>
+        <p v-show="showAuctionDetails" class="tape-note">{{ data.auction_tape.note }}</p>
       </section>
       <el-alert v-else-if="data.auction_tape && !data.auction_tape.available"
-        type="info" :closable="false" show-icon style="margin:2px 0"
+        type="info" :closable="false" show-icon
         title="当前买入候选的竞价有效报价不足，判不出盘口形态" />
 
       <!-- 高开幅度分布（精确口径） -->
@@ -70,7 +74,7 @@
         <div class="dist-head">
           高开幅度分布
           <span class="caliber" :class="{ live: data.overview.is_auction_window }">
-            成交额{{ data.overview.caliber }} · 总额 {{ fmtAmt(data.overview.total_amount_yi) }}
+            成交额{{ data.overview.caliber }} · {{ fmtAmt(data.overview.total_amount_yi) }}
           </span>
         </div>
         <div class="dist-bar">
@@ -83,6 +87,7 @@
           </span>
         </div>
       </section>
+      </div>
 
       <div class="cols">
         <!-- 竞价热门板块 -->
@@ -166,6 +171,7 @@ const router = useRouter()
 const loading = ref(false)
 const data = ref<any>(null)
 const updatedAt = ref('')
+const showAuctionDetails = ref(false)
 
 const moodClass = (mood: string) => {
   if (mood === '强' || mood === '偏强') return 'mood-strong'
@@ -207,44 +213,51 @@ onMounted(load)
 </script>
 
 <style scoped lang="scss">
-.auction-page { display: flex; flex-direction: column; gap: 14px; }
-.page-head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 8px;
-  h1 { margin: 0 0 4px; font-size: 24px; }
-  p { margin: 0; color: var(--el-text-color-secondary); font-size: 13px; }
+.auction-page { display: flex; flex-direction: column; gap: 8px; }
+.page-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  h1 { margin: 0; font-size: 21px; line-height: 1.2; }
+  p { margin: 0; color: var(--el-text-color-secondary); font-size: 12px; }
 }
-.head-ctrl { display: flex; align-items: center; gap: 10px; }
+.head-copy { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.head-ctrl { display: flex; align-items: center; gap: 6px; }
 .updated { font-size: 12px; color: var(--el-text-color-secondary); }
 .loading-hint { color: var(--el-text-color-secondary); font-size: 13px; padding: 20px 0; }
 
 .up { color: #ef232a; }
 .down { color: #14b143; }
 
-.mood-band { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.mood-band { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 8px; }
 .mood-card, .kpi-card {
-  background: var(--el-fill-color-lighter); border-radius: 10px; padding: 14px 16px;
-  display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--el-border-color-lighter);
+  min-width: 0; min-height: 44px;
+  background: var(--el-fill-color-lighter); border-radius: 8px; padding: 7px 11px;
+  display: flex; flex-direction: row; align-items: baseline; gap: 8px;
+  border: 1px solid var(--el-border-color-lighter);
 }
 .mood-lbl, .kpi-lbl { font-size: 12px; color: var(--el-text-color-secondary); }
-.mood-val { font-size: 26px; font-weight: 800; }
-.kpi-num { font-size: 22px; font-weight: 700; i { font-style: normal; } }
-.mood-card small, .kpi-card small { font-size: 12px; color: var(--el-text-color-placeholder); }
+.mood-val { font-size: 22px; font-weight: 800; }
+.kpi-num { font-size: 19px; font-weight: 700; white-space: nowrap; i { font-style: normal; } }
+.mood-card small, .kpi-card small {
+  margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; color: var(--el-text-color-placeholder);
+}
 .mood-strong { border-color: #ef232a55; .mood-val { color: #ef232a; } }
 .mood-weak { border-color: #14b14355; .mood-val { color: #14b143; } }
 .mood-neutral { .mood-val { color: var(--el-color-warning); } }
 
 .verdict {
   background: var(--el-color-primary-light-9); border-left: 3px solid var(--el-color-primary);
-  padding: 10px 14px; border-radius: 6px; font-size: 13px; color: var(--el-text-color-primary);
+  padding: 6px 11px; border-radius: 6px; font-size: 12px; color: var(--el-text-color-primary);
 }
 
 /* 高开分布 */
-.dist { background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 10px; padding: 14px 16px; }
-.dist-head { font-size: 14px; font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; gap: 10px; }
+.auction-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: stretch; }
+.dist { background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 8px 11px; }
+.dist-head { font-size: 13px; font-weight: 700; margin-bottom: 7px; display: flex; align-items: center; gap: 8px; }
 .caliber { font-size: 11px; font-weight: 400; color: var(--el-text-color-secondary); padding: 2px 8px; border-radius: 4px; background: var(--el-fill-color); }
 .caliber.live { color: #fff; background: var(--el-color-success); }
-.dist-bar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; gap: 1px; }
+.dist-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 1px; }
 .dist-seg { min-width: 2px; }
-.dist-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 12px; color: var(--el-text-color-secondary);
+.dist-legend { display: flex; flex-wrap: wrap; gap: 5px 9px; margin-top: 7px; font-size: 11px; color: var(--el-text-color-secondary);
   .leg { display: inline-flex; align-items: center; gap: 4px; } i { width: 9px; height: 9px; border-radius: 2px; } b { color: var(--el-text-color-primary); } }
 .d-limit { background: #b71c1c; }
 .d-hi2 { background: #ef232a; }
@@ -254,8 +267,7 @@ onMounted(load)
 .d-lo1 { background: #7ed0a0; }
 .d-lo2 { background: #14b143; }
 
-.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-@media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .panel { background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 10px; padding: 14px 16px; }
 .panel-title { font-size: 15px; font-weight: 700; margin-bottom: 10px; em { font-style: normal; font-size: 12px; font-weight: 400; color: var(--el-text-color-secondary); margin-left: 6px; } }
 .empty { color: var(--el-text-color-secondary); font-size: 13px; padding: 16px 0; }
@@ -313,21 +325,31 @@ onMounted(load)
 .disclaimer { font-size: 11px; color: var(--el-text-color-placeholder); margin: 4px 0 0; }
 
 /* 竞价四形态 */
-.tape { background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 10px; padding: 12px 16px; }
-.tape-head { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
-.tape-meta { font-size: 12px; font-weight: 400; color: var(--el-text-color-secondary); }
+.tape { background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 8px 11px; }
+.tape-head { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.tape-meta { font-size: 11px; font-weight: 400; color: var(--el-text-color-secondary); }
 .tape-live { margin-left: auto; font-size: 11px; font-weight: 600; color: #fff; background: var(--el-color-success); padding: 2px 8px; border-radius: 4px; }
-.tape-counts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
-.tc { font-size: 12px; padding: 4px 10px; border-radius: 6px; b { font-size: 14px; margin-left: 4px; } }
+.tape-counts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.tc { font-size: 11px; padding: 3px 8px; border-radius: 5px; b { font-size: 12px; margin-left: 3px; } }
 .t-acc { background: rgba(183,28,28,.1); color: #b71c1c; }
 .t-dist { background: rgba(240,160,32,.14); color: #b7791f; }
 .t-shake { background: rgba(64,158,255,.12); color: #2f74c0; }
 .t-div { background: var(--el-fill-color); color: var(--el-text-color-secondary); }
-.tape-note { font-size: 11px; color: var(--el-text-color-placeholder); margin: 8px 0 0; }
+.tape-note { font-size: 11px; color: var(--el-text-color-placeholder); margin: 6px 0 0; }
 .pat-tag { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-left: 6px; color: #fff; }
 .p-acc { background: #b71c1c; }
 .p-dist { background: #f0a020; }
 .p-shake { background: #409eff; }
 .p-div { background: #909399; }
 .p-neu { background: #c0c4cc; }
+
+@media (max-width: 1100px) {
+  .mood-band { grid-template-columns: repeat(2, minmax(180px, 1fr)); }
+  .auction-detail-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 900px) {
+  .cols { grid-template-columns: 1fr; }
+  .head-copy { flex-wrap: wrap; }
+}
 </style>

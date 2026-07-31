@@ -4,10 +4,10 @@
 点进去时才现算全市场（breakdown ~10s、涨停热点 ~25s、一键智选 ~100s），冷缓存
 必超时，首页更没法一次性并发加载全部。
 
-对策：一个后台 asyncio 循环，交易时段周期性 proactively 把每个板块算好塞进它们
-各自既有的缓存（smart-pool 走已隔离的进程池，不饿死事件循环）。端点保持「只读
-缓存、冷则秒回 warming」，于是永不超时；首页 mount 时的并发拉取全部命中热缓存
-→ 一次看到全貌，且数据至多约一个刷新周期旧。
+对策：一个后台 asyncio 循环，交易时段周期性 proactively 把实时板块算好塞进它们
+各自既有的缓存；smart-pool 的日 K 结构池每天只预热一次，避免与用户点击争抢推荐锁。
+端点保持「只读缓存、冷则秒回 warming」，于是永不超时；首页 mount 时的并发拉取
+全部命中热缓存 → 一次看到全貌，且实时板块数据至多约一个刷新周期旧。
 
 全部 best-effort：单个板块算失败只记日志、不影响其他板块，也不影响 Web 主流程。
 可用 BOARD_REFRESH_ENABLED=false 关闭（预览/测试）。
@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 logger = logging.getLogger("board_refresh")
 
 _task: asyncio.Task | None = None
+_smart_pool_warm_date: str | None = None
 _TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -69,6 +70,8 @@ async def _safe(name: str, coro) -> None:
 
 async def _refresh_cycle() -> None:
     """算好一轮所有板块，灌进各自缓存。顺序执行、彼此隔离。"""
+    global _smart_pool_warm_date
+
     from app import lite_main as m
     from app.core import market_data as md
     from app.routers import insights as ins
@@ -92,10 +95,18 @@ async def _refresh_cycle() -> None:
     await _safe("call-auction", ins.lite_call_auction())
     await _safe("heatmap", ins.lite_heatmap("industry"))
 
-    # 5) 一键智选（结构候选 + 盘中时机层）→ 走进程池，暖 smart-pool 缓存（内存+持久）
-    #    仅交易时段跑：这是最重的一档（~100s），窗口外没必要反复算。
-    if _in_active_window():
-        await _safe(
-            "smart-pool",
-            m._compute_lite_smart_pool("balanced", 10, 5000, force_refresh=True),
-        )
+    # 5) 一键智选的结构因子基于完整日 K，每个交易日只需预热一次。
+    #    盘中实时价与时机层由用户请求刷新；后台每 60 秒进入推荐锁会让用户点击无谓排队。
+    today = datetime.now(_TZ).strftime("%Y-%m-%d")
+    if _in_active_window() and _smart_pool_warm_date != today:
+        try:
+            result = await m._compute_lite_smart_pool(
+                "balanced",
+                10,
+                5000,
+                force_refresh=False,
+            )
+            if m._smart_pool_response_has_items(result):
+                _smart_pool_warm_date = today
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("board refresh [smart-pool] failed: %s", exc)

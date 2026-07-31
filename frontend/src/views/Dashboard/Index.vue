@@ -41,15 +41,17 @@
           近5日 {{ marketCtx.index.items.map((item) => pct(item.window_pct)).join(' / ') }}
         </span>
       </div>
-      <div v-if="marketCtx?.divergence" class="mb-diverge">⚠ {{ marketCtx.divergence }}</div>
-      <div class="mb-advice">{{ marketCtx?.advice || '正在评估大盘环境…' }}</div>
-      <div v-if="marketCtx?.daily?.length" class="mb-daily">
-        近5日逐日：
-        <span v-for="day in marketCtx.daily" :key="day.date" :class="day.median_pct >= 0 ? 'up' : 'down'">
-          {{ day.date.slice(5) }} {{ pct(day.median_pct) }}/{{ Math.round(day.breadth_up * 100) }}%
-        </span>
+      <div class="market-pulse">
+        <div v-if="marketCtx?.divergence" class="mb-diverge">⚠ {{ marketCtx.divergence }}</div>
+        <div class="mb-advice">{{ marketCtx?.advice || '正在评估大盘环境…' }}</div>
+        <div v-if="marketCtx?.daily?.length" class="mb-daily">
+          <span class="mb-daily-label">近5日：</span>
+          <span v-for="day in marketCtx.daily" :key="day.date" :class="day.median_pct >= 0 ? 'up' : 'down'">
+            {{ day.date.slice(5) }} {{ pct(day.median_pct) }}/{{ Math.round(day.breadth_up * 100) }}%
+          </span>
+        </div>
+        <div v-if="coldEvidence" class="mb-evidence">{{ coldEvidence }}</div>
       </div>
-      <div v-if="coldEvidence" class="mb-evidence">{{ coldEvidence }}</div>
       <div
         v-if="risk"
         class="risk-console"
@@ -153,10 +155,10 @@
         </header>
         <div class="c-body">
           <template v-if="riskScan">
-            <div class="kpi-mini">
-              <div><b class="down2">{{ riskScan.recommendation_counts?.exit || 0 }}</b><span>退出/止损</span></div>
-              <div><b class="warn">{{ riskScan.recommendation_counts?.reduce || 0 }}</b><span>减仓防守</span></div>
-              <div><b class="up2">{{ riskScan.recommendation_counts?.rebound || 0 }}</b><span>反包观察</span></div>
+            <div class="kpi-mini kpi-link">
+              <div @click="go('/risk-alert?sig=exit')"><b class="down2">{{ riskScan.recommendation_counts?.exit || 0 }}</b><span>退出/止损</span></div>
+              <div @click="go('/risk-alert?sig=reduce')"><b class="warn">{{ riskScan.recommendation_counts?.reduce || 0 }}</b><span>减仓防守</span></div>
+              <div @click="go('/risk-alert?sig=rebound')"><b class="up2">{{ riskScan.recommendation_counts?.rebound || 0 }}</b><span>反包观察</span></div>
             </div>
             <div v-if="topSell.length" class="rank-list">
               <div v-for="s in topSell" :key="s.symbol" class="rank-row" @click="goStock(s.symbol)">
@@ -540,25 +542,25 @@ onUnmounted(stopHeroPolling)
 </script>
 
 <style scoped lang="scss">
-.dash { display: flex; flex-direction: column; gap: 18px; }
+.dash { display: flex; flex-direction: column; gap: 12px; }
 
 /* ---------- Market overview ---------- */
-.market-overview { padding: 16px 20px; border: 1px solid var(--el-border-color-light);
-  border-left: 6px solid var(--el-border-color); border-radius: 14px;
+.market-overview { position: relative; padding: 10px 16px 9px; border: 1px solid var(--el-border-color-light);
+  border-left: 5px solid var(--el-border-color); border-radius: 12px;
   background: var(--el-fill-color-extra-light); }
 .risk-console {
   --risk-accent: #139c6b;
   --risk-soft: #effbf6;
   display: grid;
-  grid-template-columns: minmax(250px, 300px) minmax(0, 1fr);
+  grid-template-columns: minmax(165px, 180px) minmax(0, 1fr);
   align-items: center;
-  gap: 24px;
-  margin-top: 13px;
-  padding: 12px 22px 14px;
+  gap: 16px;
+  margin-top: 8px;
+  padding: 4px 18px 6px;
   border: 1px solid color-mix(in srgb, var(--risk-accent) 30%, #d9e0e8);
-  border-radius: 13px;
+  border-radius: 11px;
   background: linear-gradient(135deg, rgba(255, 255, 255, .98), var(--risk-soft));
-  box-shadow: 0 10px 28px rgba(34, 50, 75, .06);
+  box-shadow: 0 6px 18px rgba(34, 50, 75, .05);
   cursor: pointer;
   transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
 }
@@ -569,8 +571,8 @@ onUnmounted(stopHeroPolling)
 .risk-console-danger { --risk-accent: #ed6a2c; --risk-soft: #fff2eb; }
 .risk-console-extreme { --risk-accent: #d92f42; --risk-soft: #fff0f2; }
 .risk-gauge { min-width: 0; }
-.risk-gauge svg { display: block; width: 100%; max-width: 300px; margin: 0 auto; overflow: visible; }
-.gauge-track, .gauge-band { fill: none; stroke-width: 18; }
+.risk-gauge svg { display: block; width: 100%; max-width: 180px; margin: 0 auto; overflow: visible; }
+.gauge-track, .gauge-band { fill: none; stroke-width: 16; }
 .gauge-track { stroke: #e7ebf0; stroke-linecap: round; }
 .gauge-band { stroke-linecap: butt; }
 .gauge-safe { stroke: #21b777; stroke-dasharray: 34 66; }
@@ -587,7 +589,7 @@ onUnmounted(stopHeroPolling)
 .gauge-score {
   fill: var(--risk-accent);
   font-family: "Bahnschrift", "Arial Narrow", sans-serif;
-  font-size: 33px;
+  font-size: 31px;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   letter-spacing: -.8px;
@@ -596,57 +598,76 @@ onUnmounted(stopHeroPolling)
 .gauge-labels {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  margin: -1px auto 0;
-  max-width: 280px;
+  margin: -4px auto 0;
+  max-width: 172px;
   color: var(--el-text-color-placeholder);
-  font-size: 10px;
+  font-size: 9px;
   text-align: center;
 }
-.risk-brief { min-width: 0; border-left: 1px solid rgba(101, 116, 139, .16); padding-left: 26px; }
+.risk-brief {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-areas:
+    "meta meta"
+    "level decision"
+    "action action"
+    "scale hint";
+  align-items: center;
+  column-gap: 22px;
+  row-gap: 3px;
+  border-left: 1px solid rgba(101, 116, 139, .16);
+  padding-left: 22px;
+}
 .risk-meta { display: flex; align-items: center; gap: 9px; color: var(--el-text-color-placeholder);
-  font-size: 11px; letter-spacing: .4px;
+  grid-area: meta; font-size: 10px; letter-spacing: .4px;
   time { font-variant-numeric: tabular-nums; }
   span::after { content: ""; display: inline-block; width: 18px; height: 1px; margin-left: 9px;
     vertical-align: middle; background: currentColor; opacity: .45; } }
-.risk-level { display: flex; align-items: center; gap: 10px; margin-top: 4px;
-  i { width: 15px; height: 15px; flex: 0 0 auto; border-radius: 50%; background: var(--risk-accent);
-    box-shadow: 0 0 0 5px color-mix(in srgb, var(--risk-accent) 14%, transparent); }
-  strong { color: var(--risk-accent); font-size: 30px; font-weight: 850; line-height: 1.15; letter-spacing: -.5px; }
+.risk-level { grid-area: level; display: flex; align-items: center; gap: 9px;
+  i { width: 12px; height: 12px; flex: 0 0 auto; border-radius: 50%; background: var(--risk-accent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--risk-accent) 14%, transparent); }
+  strong { color: var(--risk-accent); font-size: 25px; font-weight: 850; line-height: 1.1; letter-spacing: -.4px; }
+  span { color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; } }
+.risk-decision { grid-area: decision; display: flex; align-items: baseline; gap: 10px;
+  b { color: var(--el-text-color-primary); font-size: 16px; font-weight: 800; }
   span { color: var(--el-text-color-secondary); font-size: 12px; } }
-.risk-decision { display: flex; align-items: baseline; gap: 12px; margin-top: 7px;
-  b { color: var(--el-text-color-primary); font-size: 18px; font-weight: 800; }
-  span { color: var(--el-text-color-secondary); font-size: 13px; } }
-.risk-brief > p { margin: 6px 0 9px; color: var(--el-text-color-primary); font-size: 13px;
-  font-weight: 600; line-height: 1.55; }
-.risk-scale { display: flex; flex-wrap: wrap; gap: 7px 14px; color: var(--el-text-color-placeholder); font-size: 10px;
+.risk-brief > p { grid-area: action; margin: 1px 0 2px; color: var(--el-text-color-primary); font-size: 12px;
+  font-weight: 600; line-height: 1.4; }
+.risk-scale { grid-area: scale; display: flex; flex-wrap: wrap; gap: 5px 12px;
+  color: var(--el-text-color-placeholder); font-size: 9px;
   span { display: inline-flex; align-items: center; gap: 4px; }
-  i { width: 14px; height: 4px; border-radius: 3px; }
+  i { width: 12px; height: 3px; border-radius: 3px; }
   .safe { background: #21b777; } .warn { background: #e4b422; }
   .danger { background: #f07a2b; } .extreme { background: #e43d49; } }
-.risk-brief > small { display: block; margin-top: 7px; color: var(--risk-accent); font-size: 10px; font-weight: 600; }
+.risk-brief > small { grid-area: hint; justify-self: end; color: var(--risk-accent);
+  font-size: 9px; font-weight: 600; white-space: nowrap; }
 .market-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .market-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-.mb-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.mb-row { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
 .mb-tag { font-size: 12px; font-weight: 600; color: #fff; background: var(--el-text-color-secondary);
   padding: 2px 8px; border-radius: 6px; }
-.mb-state { font-size: 22px; font-weight: 800; }
+.mb-state { font-size: 19px; font-weight: 800; }
 .mb-temp { font-size: 12px; color: var(--el-text-color-secondary); padding: 1px 6px;
   border: 1px solid var(--el-border-color); border-radius: 4px; }
-.mb-metrics { font-size: 13px; color: var(--el-text-color-regular);
-  b { font-size: 15px; font-weight: 700; } }
+.mb-metrics { font-size: 12px; color: var(--el-text-color-regular);
+  b { font-size: 14px; font-weight: 700; } }
 .mb-when { font-weight: 600; &.live { color: #ef232a; } }
 .mb-day { font-size: 13px; color: var(--el-text-color-secondary); padding: 2px 8px;
   border-radius: 4px; background: var(--el-fill-color);
   &.rebound { color: #ef232a; background: rgba(239, 35, 42, .1); } }
-.mb-index { margin-top: 7px; }
-.mb-idx { font-size: 13px; color: var(--el-text-color-regular); b { font-weight: 700; } }
-.mb-idx-note { font-size: 12px; color: var(--el-text-color-secondary); }
-.mb-diverge { margin-top: 7px; font-size: 13px; font-weight: 600; color: #d46b08; }
-.mb-advice { margin-top: 7px; font-size: 14px; font-weight: 600; color: var(--el-text-color-primary); }
-.mb-daily { margin-top: 5px; font-size: 12px; color: var(--el-text-color-secondary);
-  span { margin-right: 10px; } }
-.mb-evidence { margin-top: 5px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; }
-.market-foot { margin-top: 7px; font-size: 11px; color: var(--el-text-color-placeholder); text-align: right; }
+.mb-index { margin-top: 4px; }
+.mb-idx { font-size: 12px; color: var(--el-text-color-regular); b { font-weight: 700; } }
+.mb-idx-note { font-size: 11px; color: var(--el-text-color-secondary); }
+.mb-diverge { font-size: 11px; font-weight: 600; color: #d46b08; }
+.market-pulse { display: flex; align-items: baseline; gap: 12px 20px; margin-top: 4px; flex-wrap: wrap; }
+.mb-advice { font-size: 12px; font-weight: 650; color: var(--el-text-color-primary); }
+.mb-daily { font-size: 11px; color: var(--el-text-color-secondary);
+  .mb-daily-label { margin-right: 2px; color: var(--el-text-color-placeholder); }
+  span { margin-right: 8px; } }
+.mb-evidence { flex-basis: 100%; font-size: 11px; color: var(--el-text-color-secondary); line-height: 1.4; }
+.market-foot { position: absolute; right: 30px; bottom: 13px; margin: 0;
+  font-size: 9px; color: var(--el-text-color-placeholder); text-align: right; pointer-events: none; }
 .ctx-warm { border-color: #ffb3a7; border-left-color: #ef232a; background: #fff1f0;
   .mb-tag { background: #ef232a; } .mb-state, .mb-metrics b { color: #ef232a; } }
 .ctx-cold { border-color: #a7d4b4; border-left-color: #0e9f5a; background: #f0fff4;
@@ -657,9 +678,19 @@ onUnmounted(stopHeroPolling)
 .mb-idx.down b, .mb-daily .down { color: #0e9f5a; }
 
 @media (max-width: 760px) {
-  .risk-console { grid-template-columns: 1fr; gap: 8px; padding: 10px 14px 14px; }
-  .risk-gauge svg { max-width: 270px; }
-  .risk-brief { border-top: 1px solid rgba(101, 116, 139, .16); border-left: 0; padding: 13px 0 0; }
+  .market-overview { padding: 10px 12px; }
+  .risk-console { grid-template-columns: 1fr; gap: 7px; padding: 8px 12px 11px; }
+  .risk-gauge svg { max-width: 230px; }
+  .risk-brief {
+    grid-template-columns: 1fr;
+    grid-template-areas: "meta" "level" "decision" "action" "scale" "hint";
+    gap: 5px;
+    border-top: 1px solid rgba(101, 116, 139, .16);
+    border-left: 0;
+    padding: 10px 0 0;
+  }
+  .risk-brief > small { justify-self: start; }
+  .market-foot { position: static; margin-top: 4px; }
   .risk-level { flex-wrap: wrap; }
   .risk-decision { align-items: flex-start; flex-direction: column; gap: 2px; }
   .market-head { flex-direction: column; }
@@ -713,6 +744,8 @@ onUnmounted(stopHeroPolling)
 .kpi-mini > div { flex: 1; background: var(--el-fill-color-light); border-radius: 8px; padding: 8px 4px;
   text-align: center; display: flex; flex-direction: column; gap: 2px;
   b { font-size: 20px; font-weight: 800; } span { font-size: 11px; color: var(--el-text-color-secondary); } }
+.kpi-link > div { cursor: pointer; transition: background .15s;
+  &:hover { background: var(--el-fill-color); } }
 
 /* mini table */
 .mini-table { width: 100%; border-collapse: collapse; font-size: 13px;

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -803,6 +804,76 @@ def _mark_countertrend_daytrade(items: list[dict[str, Any]]) -> int:
     return marked
 
 
+def _rerank_smart_pool_intraday(items: list[dict[str, Any]]) -> None:
+    """在强结构候选中叠加实时量价，盘中动态重排但不改写日 K 结构分。"""
+    if not items:
+        return
+
+    from quantcore.quant.factors import blend_intraday_score, intraday_strength_score
+
+    def number(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value) if value not in (None, "", "-") else default
+        except (TypeError, ValueError):
+            return default
+
+    ranked_amounts = sorted(
+        (number(item.get("amount")), str(item.get("symbol") or item.get("code") or ""))
+        for item in items
+        if number(item.get("amount")) > 0
+    )
+    amount_percentiles = {
+        symbol: (rank + 1) / len(ranked_amounts) * 100
+        for rank, (_, symbol) in enumerate(ranked_amounts)
+    } if ranked_amounts else {}
+
+    for item in items:
+        symbol = str(item.get("symbol") or item.get("code") or "")
+        amount_activity = amount_percentiles.get(symbol, 0.0)
+        volume_ratio = number(item.get("volume_ratio"))
+        if volume_ratio > 0:
+            volume_activity = max(0.0, min(100.0, 50.0 + (volume_ratio - 1.0) * 30.0))
+            activity = amount_activity * 0.7 + volume_activity * 0.3
+        else:
+            activity = amount_activity
+        pct_chg = number(item.get("pct_chg"))
+        intraday_score = intraday_strength_score(pct_chg, activity)
+        structure_score = number(
+            item.get("smart_score") or item.get("score") or item.get("quant_score")
+        )
+        structure_with_confluence = min(
+            100.0,
+            structure_score + number(item.get("confluence_bonus")),
+        )
+        realtime_rank_score = blend_intraday_score(
+            structure_with_confluence,
+            intraday_score,
+            intraday_weight=0.22,
+        )
+        item["intraday_strength_score"] = intraday_score
+        item["realtime_rank_score"] = realtime_rank_score
+        item["intraday_activity_percentile"] = round(activity, 1)
+        reasons = [
+            str(reason)
+            for reason in (item.get("reasons") or [])
+            if reason
+            and not str(reason).startswith("盘中动态分")
+            and not str(reason).startswith("盘中强度 ")
+        ]
+        reasons.insert(
+            0,
+            f"盘中动态分 {realtime_rank_score:.1f}（涨跌 {pct_chg:+.2f}%·量能活跃 {activity:.0f}）",
+        )
+        item["reasons"] = reasons[:8]
+
+    items.sort(
+        key=lambda item: (
+            -number(item.get("realtime_rank_score")),
+            -number(item.get("smart_score") or item.get("score")),
+        )
+    )
+
+
 def _stock_limit_percent(symbol: str) -> float:
     if symbol.startswith(("300", "301", "688", "689")):
         return 20.0
@@ -860,7 +931,10 @@ def _merge_intraday_quality(
 
         structure_score = float(item.get("smart_score") or item.get("score") or 0)
         confluence_bonus = float(item.get("confluence_bonus") or 0)
-        item["quality_score"] = round(structure_score + confluence_bonus + adjustment, 1)
+        live_base_score = float(
+            item.get("realtime_rank_score") or structure_score + confluence_bonus
+        )
+        item["quality_score"] = round(live_base_score + adjustment, 1)
         item["timing_status"] = timing_status
         item["timing_label"] = timing_label
         item["timing_score"] = round(float(signal.get("score") or 0), 1) if signal else None
@@ -903,8 +977,8 @@ def _merge_intraday_quality(
         "candidate_count": int(overlay.get("candidate_count") or 0),
     }
     data["ranking_basis"] = (
-        "日K结构因子负责入池，盘中量价/板块共振负责最终排序；"
-        "涨停或距离涨停过近的标的直接拦截。"
+        "最近完整日K负责筛出强结构底池，盘中实时涨跌、成交活跃度、量比与雷达时机"
+        "共同动态重排最终前10；涨停或距离涨停过近的标的直接拦截。"
     )
     basis = data.get("list_basis")
     if isinstance(basis, dict):
@@ -968,9 +1042,53 @@ def _finalize_intraday_quality(data: dict[str, Any], target: int) -> None:
     ][:5]
 
 
+def _update_smart_pool_list_basis(data: dict[str, Any]) -> None:
+    """同步结构基准与当前盘中榜单重合度，供前端准确说明两层数据口径。"""
+    items = data.get("items") or []
+    if not items:
+        return
+    try:
+        from quantcore.quant.local_store import get_local_store
+
+        store = get_local_store()
+        today = datetime.now().strftime("%Y-%m-%d")
+        previous_date = store.previous_pick_date("smart", today)
+        basis: dict[str, Any] = {
+            "as_of": data.get("daily_as_of") or "",
+            "frozen": False,
+            "structure_frozen": True,
+            "intraday_dynamic": True,
+            "candidate_count": int(
+                data.get("intraday_candidate_count")
+                or len(data.get("structure_candidates") or [])
+                or len(items)
+            ),
+            "prev_date": previous_date,
+        }
+        if previous_date:
+            previous_symbols = set(
+                store.load_picks_symbols(previous_date, "smart", limit=200)
+            )
+            basis["same_count"] = sum(
+                1
+                for item in items
+                if str(item.get("symbol") or item.get("code") or "") in previous_symbols
+            )
+            basis["total"] = len(items)
+        data["list_basis"] = basis
+    except Exception as exc:  # noqa: BLE001 — 基准信息缺失不能阻断推荐主流程
+        print(f"list_basis failed: {exc}")
+
+
 async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any]:
     data = dict(response.get("data") or {})
-    items = [dict(item) for item in data.get("items") or []]
+    structure_candidates = (
+        data.get("structure_candidates")
+        if isinstance(data.get("structure_candidates"), list)
+        else None
+    )
+    items = deepcopy(structure_candidates or data.get("items") or [])
+    data["intraday_candidate_count"] = len(items)
     # ②a 环境仓位闸门：用当前全市场快照算环境，缓存命中的旧池也会拿到当下的仓位建议。
     # 环境全市场同值，45s 缓存一次，避免每次 smart-pool 请求都重算 market_context 拖慢秒读。
     gate: dict[str, Any] = _cache_get("env_position_gate", 45) or {}
@@ -1028,6 +1146,7 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
             if isinstance(item.get("trade_plan"), dict):
                 item["trade_plan"]["env_position"] = gate.get("label")
                 item["trade_plan"]["env_note"] = gate.get("note")
+    _rerank_smart_pool_intraday(items)
     data["items"] = items
     await _apply_intraday_quality(data)
     _finalize_intraday_quality(
@@ -1035,6 +1154,7 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
         int(data.get("requested_limit") or len(items) or 10),
     )
     items = data.get("items") or []
+    _update_smart_pool_list_basis(data)
     # ③b 危险市况不再一刀切关闭：标出可做 T+1 短打的逆势票（依据见 _mark_countertrend_daytrade）
     try:
         data["daytrade_count"] = _mark_countertrend_daytrade(items)
@@ -1043,6 +1163,7 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
     if quote_updated_at:
         data["updated_at"] = quote_updated_at
         data["quote_updated_at"] = quote_updated_at
+        data["realtime_as_of"] = quote_updated_at
         data["price_source"] = "实时行情"
     data["position_gate"] = gate
     data["items"] = items
@@ -1143,6 +1264,11 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
             dict(item)
             for item in kept[: max(1, min(target or 10, 10))]
         ]
+        # 保留经过结构、形态和七不买筛选后的完整备选池。缓存命中时会给这批候选
+        # 全量刷新实时行情，再动态重排前 10，而不是永远只能在昨天的 10 只里换顺序。
+        data["structure_candidates"] = deepcopy(kept)
+        data["intraday_candidate_count"] = len(kept)
+        _rerank_smart_pool_intraday(kept)
         data["items"] = kept
         data["excluded_severe_count"] = len(excluded)
         data["excluded_severe_samples"] = [
@@ -1156,30 +1282,7 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
         # ①c 双确认子集计数，供前端展示/筛选
         data["dual_confirm_count"] = sum(1 for it in items if it.get("dual_confirm"))
         data["triple_confirm_count"] = sum(1 for it in items if it.get("triple_confirm"))
-        # 名单基准：排序只吃最近完整日线，所以两个收盘之间名单是**冻结的**——同一天里
-        # 反复点「一键推荐」会重扫 3000+ 只再得出完全一样的结果。不说清楚，用户会以为
-        # 数据没更新，或者以为今天又独立选中了同一批票。
-        if target > 0 and items:
-            try:
-                from quantcore.quant.local_store import get_local_store as _gls
-                _store = _gls()
-                _today = datetime.now().strftime("%Y-%m-%d")
-                _prev_date = _store.previous_pick_date("smart", _today)
-                _basis: dict[str, Any] = {
-                    "as_of": data.get("daily_as_of") or "",
-                    "frozen": False,
-                    "structure_frozen": True,
-                    "prev_date": _prev_date,
-                }
-                if _prev_date:
-                    _prev = set(_store.load_picks_symbols(_prev_date, "smart", limit=200))
-                    _same = sum(1 for it in items
-                                if str(it.get("symbol") or it.get("code") or "") in _prev)
-                    _basis["same_count"] = _same
-                    _basis["total"] = len(items)
-                data["list_basis"] = _basis
-            except Exception as exc:  # noqa: BLE001 — 基准信息缺失不能阻断推荐主流程
-                print(f"list_basis failed: {exc}")
+        _update_smart_pool_list_basis(data)
         # 同时留结构基线与时机融合池：否则无法用同一天、同一 T+1/T+5 口径回答
         # 「盘中时机层是否真的提升质量」。smart 仍等于用户最终看到的名单。
         # 必须在算完 list_basis 之后——否则 previous_pick_date 会把今天自己算进去。
@@ -1220,6 +1323,14 @@ def _smart_pool_task_cleanup(max_items: int = 20) -> None:
     for task_id, task in removable[: max(0, len(lite_smart_pool_tasks) - max_items)]:
         if task.get("status") != "running":
             lite_smart_pool_tasks.pop(task_id, None)
+
+
+def _smart_pool_response_has_items(response: Any) -> bool:
+    """只把真正有候选的响应当作可复用缓存，避免一次失败把当天推荐池永久清空。"""
+    if not isinstance(response, dict):
+        return False
+    data = response.get("data") if isinstance(response.get("data"), dict) else response
+    return bool(data.get("items")) if isinstance(data, dict) else False
 
 
 async def _compute_lite_swing_pool(
@@ -1290,7 +1401,10 @@ async def _compute_lite_swing_pool(
     return await _enrich_smart_pool_realtime(wrapped)
 
 
-async def _compute_lite_smart_pool(
+_smart_pool_compute_lock = asyncio.Lock()
+
+
+async def _compute_lite_smart_pool_unlocked(
     strategy: str = "balanced",
     limit: int = 10,
     universe_limit: int = 500,
@@ -1308,7 +1422,7 @@ async def _compute_lite_smart_pool(
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     cache_key = (
-        f"smart-pool:factor-v6-timing:{daily_as_of}:"
+        f"smart-pool:factor-v7-intraday-rank:{daily_as_of}:"
         f"{strategy}:{safe_limit}:{safe_universe}"
     )
     _smart_pool_task_update(
@@ -1319,12 +1433,12 @@ async def _compute_lite_smart_pool(
     )
     if not force_refresh:
         cached = _cache_get(cache_key, 900)
-        if cached:
+        if _smart_pool_response_has_items(cached):
             _smart_pool_task_update(task_id, progress=95, phase="realtime", message="缓存命中，刷新实时价格")
             return await _enrich_smart_pool_realtime(cached)
         # cache_only（进页面秒显）时放宽到一天，宁可端出稍旧名单也不现算阻塞。
         persistent_cached = _persistent_cache_get(cache_key, 86400 if cache_only else 3600)
-        if persistent_cached:
+        if _smart_pool_response_has_items(persistent_cached):
             _cache_set(cache_key, persistent_cached)
             _smart_pool_task_update(task_id, progress=95, phase="realtime", message="历史缓存命中，刷新实时价格")
             return await _enrich_smart_pool_realtime(persistent_cached)
@@ -1342,6 +1456,7 @@ async def _compute_lite_smart_pool(
     ai_factor_scores: dict[str, dict[str, Any]] = ai_factor_pool.get("scores") or {}
 
     # Keep the stock-screening smart pool aligned with Quant Center's one-click recommendation.
+    quant_scan_error: Exception | None = None
     try:
         def to_float(value: Any, default: float = 0.0) -> float:
             try:
@@ -1434,7 +1549,7 @@ async def _compute_lite_smart_pool(
                 "strategy": "quant_center_smart_pool",
                 "preset": {
                     "name": "全市场综合优选",
-                    "description": "日K结构因子先筛候选，再由盘中量价、板块共振与追高风控完成最终排序，只输出最优前10只。",
+                    "description": "完整日K先筛强结构备选池，再按盘中实时量价、板块共振与追高风控动态重排，只输出当前最优前10只。",
                 },
                 "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
                 "universe_size": quant_pool.get("universe_size") or len(items),
@@ -1451,15 +1566,17 @@ async def _compute_lite_smart_pool(
                     "pick_date": ai_factor_pool.get("pick_date"),
                     "universe": ai_factor_pool.get("universe"),
                 },
-                "source_note": "同源于量化中心结构候选，并叠加 AI 因子、形态强度与盘中量价时机层；时机层正在独立留痕验证，仅供研究与模拟使用。",
+                "source_note": "同源于量化中心结构候选，并在强结构备选池内叠加 AI 因子、形态强度与盘中实时量价动态排名；盘中层正在独立留痕验证，仅供研究与模拟使用。",
             }
             wrapped_response = {"success": True, "data": response, "message": "ok"}
             await _apply_confluence(wrapped_response)
-            _persistent_cache_set(cache_key, wrapped_response)
-            _cache_set(cache_key, wrapped_response)
+            if _smart_pool_response_has_items(wrapped_response):
+                _persistent_cache_set(cache_key, wrapped_response)
+                _cache_set(cache_key, wrapped_response)
             _smart_pool_task_update(task_id, progress=95, phase="realtime", message="模型完成，刷新实时价格")
             return await _enrich_smart_pool_realtime(wrapped_response)
     except Exception as exc:
+        quant_scan_error = exc
         print(f"Quant Center smart pool failed, falling back to lite smart pool: {exc}")
 
     _smart_pool_task_update(task_id, progress=34, phase="events", message="读取新闻事件和实时活跃股票")
@@ -1733,10 +1850,40 @@ async def _compute_lite_smart_pool(
     }
     response = {"success": True, "data": data, "message": "ok"}
     await _apply_confluence(response)
-    _persistent_cache_set(cache_key, response)
-    _cache_set(cache_key, response)
+    if _smart_pool_response_has_items(response):
+        _persistent_cache_set(cache_key, response)
+        _cache_set(cache_key, response)
+    elif quant_scan_error is not None:
+        raise RuntimeError(f"量化中心扫描失败，未生成可用候选：{quant_scan_error}") from quant_scan_error
     _smart_pool_task_update(task_id, progress=95, phase="realtime", message="推荐池完成，刷新实时价格")
     return await _enrich_smart_pool_realtime(response)
+
+
+async def _compute_lite_smart_pool(
+    strategy: str = "balanced",
+    limit: int = 10,
+    universe_limit: int = 500,
+    task_id: str | None = None,
+    force_refresh: bool = False,
+    cache_only: bool = False,
+) -> dict[str, Any]:
+    """串行化结构池生成；并发请求等待首个任务落缓存后直接复用，避免重复全市场扫描。"""
+    if _smart_pool_compute_lock.locked():
+        _smart_pool_task_update(
+            task_id,
+            progress=8,
+            phase="queued",
+            message="已有推荐池正在生成，完成后将直接复用结果",
+        )
+    async with _smart_pool_compute_lock:
+        return await _compute_lite_smart_pool_unlocked(
+            strategy,
+            limit,
+            universe_limit,
+            task_id=task_id,
+            force_refresh=force_refresh,
+            cache_only=cache_only,
+        )
 
 
 @app.get("/api/lite/smart-pool")
@@ -1823,7 +1970,7 @@ async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int,
 
 @app.post("/api/lite/smart-pool/tasks")
 async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 10,
-                                     universe_limit: int = 500, force_refresh: bool = True):
+                                     universe_limit: int = 500, force_refresh: bool = False):
     safe_limit = max(5, min(limit, 10))
     # 与 _compute_lite_smart_pool 同口径：全市场评分，才和回放验证的池是同一个池
     safe_universe = max(safe_limit * 2, min(universe_limit, 5000))

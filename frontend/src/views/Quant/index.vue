@@ -19,9 +19,17 @@
     <section class="page-head">
       <div class="head-line">
         <h1>智能选股</h1>
-        <p>自动横向比较全市场 A 股，优先输出短中期更值得跟踪的量化推荐池</p>
+        <p>全市场量价动态优选，优先展示当前前10只</p>
       </div>
-      <el-tag effect="plain" type="info">研究跟踪，不构成交易建议</el-tag>
+      <div class="head-tags">
+        <el-tag
+          v-if="isIntradayHealth"
+          effect="plain"
+          type="success"
+          title="交易时段内每30秒按实时价格、涨跌幅、成交活跃度、量比和雷达时机自动重排"
+        >盘中30秒更新</el-tag>
+        <el-tag effect="plain" type="info">研究跟踪，不构成交易建议</el-tag>
+      </div>
     </section>
 
     <section v-if="dataHealth" class="data-health" :class="[`health-${dataHealth.status}`, { collapsed: !showHealthDetail }]">
@@ -41,7 +49,7 @@
           缺口日 {{ dataHealth.gap_dates.join('、') }}（已触发自动补齐，统计自动排除）
         </span>
       </div>
-      <div class="health-actions">
+      <div v-show="showHealthDetail" class="health-actions">
         <el-tag v-if="dataHealth.sync_running || syncRunning" type="warning" effect="plain">
           同步中 {{ syncStatus.done || dataHealth.sync_done || 0 }}/{{ syncStatus.total || dataHealth.sync_total || 0 }}
         </el-tag>
@@ -50,16 +58,6 @@
         <el-button size="small" type="danger" plain :loading="syncRunning" @click="startSync(true)">重建历史日线</el-button>
       </div>
     </section>
-
-    <el-alert
-      v-if="isIntradayHealth"
-      title="盘中使用实时行情，日 K 不需要现在补"
-      description="智能推荐会使用最近完整日线做结构评分，并叠加实时价格和涨跌幅；市场雷达、涨停热点不依赖今日完整日 K。"
-      type="info"
-      show-icon
-      :closable="false"
-      class="smart-tip"
-    />
 
     <el-tabs v-model="activeTab" class="quant-tabs">
       <el-tab-pane label="一键推荐" name="screen">
@@ -73,7 +71,7 @@
                   {{ showPoolDesc ? '收起说明' : '选股逻辑' }}
                 </a>
               </h2>
-              <p v-if="showPoolDesc">结构因子评分先从全市场找候选（MACD、布林位置、趋势、动量、资金流，与历史回放同源），再由盘中雷达按量能、突破、板块共振完成二次确认；涨停或距离涨停过近直接剔除，最终只输出前10只。结构分保留不变，综合分仅用于本次时机排序。</p>
+              <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），再按盘中实时涨跌、成交活跃度、量比、突破与板块共振动态重排；涨停或距离涨停过近直接剔除，最终只输出当前前10只。结构分保留不变，综合分只用于盘中排名。</p>
             </div>
             <div class="smart-inline-settings">
               <label class="strategy-pick">
@@ -113,8 +111,17 @@
                 </div>
                 <strong>{{ smartProgress }}%</strong>
               </div>
-              <el-progress :percentage="smartProgress" :stroke-width="10" />
-              <p style="margin:8px 0 0;font-size:12px;color:#e6a23c;">全市场扫描约需 1~2 分钟，若已有扫描在跑会自动排队，请耐心等待、勿重复点击。</p>
+              <el-progress
+                :percentage="smartProgress"
+                :stroke-width="10"
+                :indeterminate="smartPoolTask?.phase === 'quant_center'"
+                :duration="4"
+              />
+              <p style="margin:8px 0 0;font-size:12px;color:#e6a23c;">
+                {{ smartPoolTask?.phase === 'quant_center'
+                  ? `当天首次全市场评分约需 1~2 分钟，已运行 ${smartElapsed} 秒；完成后当天再次推荐将优先秒读缓存。`
+                  : '优先读取当天强结构备选池，再按最新价格、成交量能和盘中信号动态重排。' }}
+              </p>
               <div class="progress-steps">
                 <div v-for="step in smartProgressSteps" :key="step.name" :class="['progress-step', step.status]">
                   <span>{{ step.index }}</span>
@@ -123,67 +130,53 @@
                 </div>
               </div>
             </div>
-            <div v-if="smartPoolResult?.items.length" class="mini-summary">
-              <span>自动候选 {{ smartPoolResult.universe_size }} 只</span>
-              <b>{{ riskLocked ? '观察名单' : '推荐' }} {{ smartPoolResult.items.length }} 只</b>
-              <el-tag
-                v-if="smartPoolResult.dual_confirm_count"
-                size="small" :type="smartDualOnly ? 'success' : 'info'" effect="plain"
-                class="dc-filter" @click="smartDualOnly = !smartDualOnly"
-                :title="'结构因子 + 低位形态双确认，最高把握子集。点击' + (smartDualOnly ? '取消筛选' : '只看双确认')"
-              >{{ smartDualOnly ? '✓ ' : '' }}双确认 {{ smartPoolResult.dual_confirm_count }} 只</el-tag>
-              <el-tag
-                v-if="smartPoolResult.excluded_severe_count"
-                size="small" type="danger" effect="plain"
-                title="命中七不买重度风险（回避级）已被风控剔除，不进推荐池"
-              >风控剔除 {{ smartPoolResult.excluded_severe_count }} 只雷票</el-tag>
-              <el-tag
-                v-if="smartPoolResult.timing_actionable_count"
-                size="small" type="success" effect="dark"
-                title="结构入选且盘中量价完成二次确认，目前仍在有效价格区间"
-              >可入场 {{ smartPoolResult.timing_actionable_count }} 只</el-tag>
-              <el-tag
-                v-if="smartPoolResult.timing_confirmed_count"
-                size="small" type="success" effect="plain"
-              >量价确认 {{ smartPoolResult.timing_confirmed_count }} 只</el-tag>
-              <el-tag
-                v-if="smartPoolResult.timing_watch_count"
-                size="small" type="warning" effect="plain"
-              >提前预警 {{ smartPoolResult.timing_watch_count }} 只</el-tag>
-              <el-tag
-                v-if="smartPoolResult.timing_wait_count"
-                size="small" type="info" effect="plain"
-              >等待确认 {{ smartPoolResult.timing_wait_count }} 只</el-tag>
-              <el-tag
-                v-if="smartPoolResult.timing_excluded_count"
-                size="small" type="danger" effect="plain"
-                title="已涨停或距离涨停过近，已从最终推荐中剔除"
-              >追高拦截 {{ smartPoolResult.timing_excluded_count }} 只</el-tag>
-              <span v-if="smartPoolResult.analyzed">已分析 {{ smartPoolResult.analyzed }} 只</span>
-              <el-tag v-if="smartPoolResult.daily_as_of" size="small" type="info" effect="plain">
-                日K {{ smartPoolResult.daily_as_of }}
-              </el-tag>
-              <el-tag v-if="smartPoolResult.realtime_as_of" size="small" type="success" effect="plain">
-                实时价 {{ smartPoolResult.realtime_as_of }}
-              </el-tag>
-              <el-tag
-                v-if="smartPoolResult.timing_gate"
-                size="small"
-                :type="smartPoolResult.timing_gate.is_current ? 'success' : 'warning'"
-                effect="plain"
-              >
-                时机层 {{ smartPoolResult.timing_gate.is_current
-                  ? (smartPoolResult.timing_gate.phase_label || '已更新')
-                  : '等待最新扫描' }}
-              </el-tag>
-              <el-tag
-                v-if="smartPoolResult.ai_factor"
-                size="small"
-                :type="smartPoolResult.ai_factor.status === 'ready' ? 'success' : 'warning'"
-                effect="plain"
-              >
-                AI因子 {{ smartPoolResult.ai_factor.status === 'ready' ? `已接入 ${smartPoolResult.ai_factor.pick_date || ''}` : '后台计算中' }}
-              </el-tag>
+            <div v-if="smartPoolResult?.items.length" class="mini-summary smart-summary">
+              <div class="summary-primary">
+                <b>{{ riskLocked ? '观察名单' : '推荐' }} {{ smartPoolResult.items.length }} 只</b>
+                <el-tag
+                  v-if="smartPoolResult.dual_confirm_count"
+                  size="small" :type="smartDualOnly ? 'success' : 'info'" effect="plain"
+                  class="dc-filter" @click="smartDualOnly = !smartDualOnly"
+                  :title="'结构因子 + 低位形态双确认，最高把握子集。点击' + (smartDualOnly ? '取消筛选' : '只看双确认')"
+                >{{ smartDualOnly ? '✓ ' : '' }}双确认 {{ smartPoolResult.dual_confirm_count }} 只</el-tag>
+                <el-tag
+                  v-if="smartPoolResult.excluded_severe_count"
+                  size="small" type="danger" effect="plain"
+                  title="命中七不买重度风险（回避级）已被风控剔除，不进推荐池"
+                >风控剔除 {{ smartPoolResult.excluded_severe_count }} 只</el-tag>
+                <el-tag
+                  v-if="smartPoolResult.timing_actionable_count"
+                  size="small" type="success" effect="dark"
+                  title="结构入选且盘中量价完成二次确认，目前仍在有效价格区间"
+                >可入场 {{ smartPoolResult.timing_actionable_count }} 只</el-tag>
+                <el-tag
+                  v-if="smartPoolResult.timing_watch_count"
+                  size="small" type="warning" effect="plain"
+                >提前预警 {{ smartPoolResult.timing_watch_count }} 只</el-tag>
+                <el-tag
+                  v-if="smartPoolResult.timing_wait_count"
+                  size="small" type="info" effect="plain"
+                >等待确认 {{ smartPoolResult.timing_wait_count }} 只</el-tag>
+                <el-tag
+                  v-if="smartPoolResult.timing_excluded_count"
+                  size="small" type="danger" effect="plain"
+                  title="已涨停或距离涨停过近，已从最终推荐中剔除"
+                >追高拦截 {{ smartPoolResult.timing_excluded_count }} 只</el-tag>
+                <el-tag
+                  v-if="smartPoolResult.realtime_as_of"
+                  size="small"
+                  type="success"
+                  effect="plain"
+                  title="交易时段每30秒按最新量价自动刷新"
+                >实时 {{ smartPoolResult.realtime_as_of }}</el-tag>
+                <el-tag
+                  v-if="smartPoolResult.intraday_candidate_count"
+                  size="small"
+                  type="primary"
+                  effect="plain"
+                  title="从强结构动态池中按实时量价重排前10"
+                >动态池 {{ smartPoolResult.intraday_candidate_count }} 只</el-tag>
+              </div>
               <div class="table-actions">
                 <el-button size="small" @click="toggleSmartSelection">全选/取消</el-button>
                 <el-button size="small" type="success" :disabled="!selectedSmartRows.length" @click="addSelectedToFavorites">
@@ -196,74 +189,104 @@
                   全部加入观察
                 </el-button>
               </div>
-            </div>
-            <div
-              v-if="smartPoolResult?.position_gate?.label"
-              class="env-gate"
-              :class="'env-' + (smartPoolResult.position_gate.state === '偏冷' ? 'cold' : smartPoolResult.position_gate.state === '偏暖' ? 'warm' : 'neutral')"
-            >
-              <span class="env-gate-head">环境仓位闸门 · <b>{{ smartPoolResult.position_gate.label }}</b></span>
-              <span class="env-gate-note">{{ smartPoolResult.position_gate.note }}</span>
-            </div>
-            <!-- 结构候选按最近完整日线冻结；盘中时机层只负责确认、拦截和重排。 -->
-            <div v-if="smartPoolResult?.list_basis?.as_of" class="basis-note">
-              <b>结构候选基于 {{ smartPoolResult.list_basis.as_of }} 收盘计算</b>
-              <span v-if="smartPoolResult.list_basis.same_count != null">
-                · 与上一份（{{ smartPoolResult.list_basis.prev_date }}）重合
-                <b :class="{ 'basis-high': basisOverlapHigh }">
-                  {{ smartPoolResult.list_basis.same_count }}/{{ smartPoolResult.list_basis.total }}
-                </b>
-              </span>
-              <span class="basis-tip">
-                · 结构池盘中保持稳定，<b>最终前10名会随量价确认、板块共振和追高状态动态变化</b>
-              </span>
-            </div>
-
-            <!-- 结构层有历史回放，新增时机层仍需独立留痕；两者证据边界必须清楚。 -->
-            <div v-if="smartPoolResult?.items.length" class="basket-note">
-              <div class="basket-head">
-                <b>双层推荐：结构选股 + 时机确认</b>
-                <span>前10名按量价时机重排，但当前名次不等于上涨概率。</span>
-                <a class="desc-toggle" @click="showBasketEvidence = !showBasketEvidence">
-                  {{ showBasketEvidence ? '收起依据' : '看结构层回放' }}
-                </a>
+              <div v-if="showPoolDesc" class="summary-meta">
+                <span>自动候选 {{ smartPoolResult.universe_size }} 只</span>
+                <span v-if="smartPoolResult.analyzed">已分析 {{ smartPoolResult.analyzed }} 只</span>
+                <el-tag v-if="smartPoolResult.timing_confirmed_count" size="small" type="success" effect="plain">
+                  量价确认 {{ smartPoolResult.timing_confirmed_count }} 只
+                </el-tag>
+                <el-tag v-if="smartPoolResult.daily_as_of" size="small" type="info" effect="plain">
+                  日K {{ smartPoolResult.daily_as_of }}
+                </el-tag>
+                <el-tag
+                  v-if="smartPoolResult.timing_gate"
+                  size="small"
+                  :type="smartPoolResult.timing_gate.is_current ? 'success' : 'warning'"
+                  effect="plain"
+                >
+                  时机层 {{ smartPoolResult.timing_gate.is_current
+                    ? (smartPoolResult.timing_gate.phase_label || '已更新')
+                    : '等待最新扫描' }}
+                </el-tag>
+                <el-tag
+                  v-if="smartPoolResult.ai_factor"
+                  size="small"
+                  :type="smartPoolResult.ai_factor.status === 'ready' ? 'success' : 'warning'"
+                  effect="plain"
+                >
+                  AI因子 {{ smartPoolResult.ai_factor.status === 'ready' ? `已接入 ${smartPoolResult.ai_factor.pick_date || ''}` : '后台计算中' }}
+                </el-tag>
               </div>
-              <div class="basket-usage">
-                <b>盘中只看绿色“可入场”：</b>它表示结构入选后又通过实时量价确认；
-                “提前预警”和“等待确认”都不应直接买入。收盘复盘候选必须等下一交易日再次确认。
+            </div>
+            <div v-if="smartPoolResult?.items.length" class="decision-context">
+              <div
+                v-if="smartPoolResult.position_gate?.label"
+                class="env-gate"
+                :class="'env-' + (smartPoolResult.position_gate.state === '偏冷' ? 'cold' : smartPoolResult.position_gate.state === '偏暖' ? 'warm' : 'neutral')"
+              >
+                <span class="env-gate-head">环境仓位 · <b>{{ smartPoolResult.position_gate.label }}</b></span>
+                <span class="env-gate-note" :title="smartPoolResult.position_gate.note">{{ smartPoolResult.position_gate.note }}</span>
               </div>
-              <div v-show="showBasketEvidence" class="basket-evidence">
-                <ul>
-                  <li>
-                    以下统计只证明<b>底层结构候选</b>，不等于新增时机层已经证明能提升收益；
-                    时机层从本次上线后单独留痕，样本足够后再比较。
-                  </li>
-                  <li>
-                    旧结构池名次没有区分度：第 1-5 名中位超额 −0.44pp、胜率 47.8%，
-                    反而低于第 6-10 名的 +0.64pp / 52.8%。量化分决定谁进名单，不决定谁涨得多。
-                  </li>
-                  <li>
-                    收益集中在每期最强的 1-2 只：篮子平均超额 +1.75pp，
-                    剔除每期最强 1 只只剩 +0.42pp，剔除 2 只转为 −0.50pp。
-                  </li>
-                  <li>所以买几只<b>不改变期望，只改变拿到结果的概率</b>：</li>
-                </ul>
-                <table class="basket-table">
-                  <thead>
-                    <tr><th>买几只</th><th>期望超额</th><th>中位超额</th><th>跑赢大盘概率</th><th>抓到那只大涨的概率</th></tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="r in BASKET_SIM" :key="r.k" :class="{ 'row-bad': r.k === 1, 'row-good': r.k === 20 }">
-                      <td>{{ r.k }} 只</td><td>{{ r.mean }}</td><td>{{ r.median }}</td>
-                      <td><b>{{ r.beat }}</b></td><td>{{ r.tail }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-                <p class="basket-src">
-                  底层结构模型旧口径：12 个月 / 36 期 / 每期 top20 / 次日开盘买入 → T+5 收盘 /
-                  超额对当期全市场中位（回放 anchor 2026-07-25，
-                  <code>experiments/median_ab.py</code>）。历史统计不代表未来收益。
-                </p>
+              <!-- 最近完整日线冻结结构底池；盘中实时量价负责动态换榜、确认与追高拦截。 -->
+              <div v-if="smartPoolResult.list_basis?.as_of" class="basis-note">
+                <b>结构底池 {{ smartPoolResult.list_basis.as_of }}</b>
+                <span v-if="smartPoolResult.list_basis.same_count != null">
+                  · 较上期重合
+                  <b :class="{ 'basis-high': basisOverlapHigh }">
+                    {{ smartPoolResult.list_basis.same_count }}/{{ smartPoolResult.list_basis.total }}
+                  </b>
+                </span>
+                <span class="basis-tip">
+                  · {{ smartPoolResult.list_basis.candidate_count || smartPoolResult.intraday_candidate_count || 10 }}
+                  只候选实时重排，<b>前10自动换榜</b>
+                </span>
+              </div>
+              <!-- 结构层有历史回放，新增时机层仍需独立留痕；两者证据边界必须清楚。 -->
+              <div class="basket-note">
+                <div class="basket-head">
+                  <b>盘中只看绿色“可入场”</b>
+                  <span>结构入选后须再通过实时量价确认；预警和等待状态不直接入场。</span>
+                  <a class="desc-toggle" @click="showBasketEvidence = !showBasketEvidence">
+                    {{ showBasketEvidence ? '收起依据' : '查看依据' }}
+                  </a>
+                </div>
+                <div v-show="showBasketEvidence" class="basket-evidence">
+                  <div class="basket-usage">
+                    <b>状态使用：</b>“可入场”表示结构与实时量价双确认；“提前预警”和“等待确认”都不应直接买入。
+                    收盘复盘候选必须等下一交易日再次确认。
+                  </div>
+                  <ul>
+                    <li>
+                      以下统计只证明<b>底层结构候选</b>，不等于新增时机层已经证明能提升收益；
+                      时机层从本次上线后单独留痕，样本足够后再比较。
+                    </li>
+                    <li>
+                      旧结构池名次没有区分度：第 1-5 名中位超额 −0.44pp、胜率 47.8%，
+                      反而低于第 6-10 名的 +0.64pp / 52.8%。量化分决定谁进名单，不决定谁涨得多。
+                    </li>
+                    <li>
+                      收益集中在每期最强的 1-2 只：篮子平均超额 +1.75pp，
+                      剔除每期最强 1 只只剩 +0.42pp，剔除 2 只转为 −0.50pp。
+                    </li>
+                    <li>所以买几只<b>不改变期望，只改变拿到结果的概率</b>：</li>
+                  </ul>
+                  <table class="basket-table">
+                    <thead>
+                      <tr><th>买几只</th><th>期望超额</th><th>中位超额</th><th>跑赢大盘概率</th><th>抓到那只大涨的概率</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="r in BASKET_SIM" :key="r.k" :class="{ 'row-bad': r.k === 1, 'row-good': r.k === 20 }">
+                        <td>{{ r.k }} 只</td><td>{{ r.mean }}</td><td>{{ r.median }}</td>
+                        <td><b>{{ r.beat }}</b></td><td>{{ r.tail }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <p class="basket-src">
+                    底层结构模型旧口径：12 个月 / 36 期 / 每期 top20 / 次日开盘买入 → T+5 收盘 /
+                    超额对当期全市场中位（回放 anchor 2026-07-25，
+                    <code>experiments/median_ab.py</code>）。历史统计不代表未来收益。
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -276,19 +299,20 @@
             <el-table
               v-if="smartPoolResult?.items.length"
               ref="smartTableRef"
+              class="smart-pool-table"
               :data="smartDisplayItems"
               max-height="520"
               size="small"
               @selection-change="handleSmartSelectionChange"
             >
-              <el-table-column type="selection" width="44" fixed />
-              <el-table-column label="综合排序" width="92" fixed>
+              <el-table-column type="selection" width="36" fixed />
+              <el-table-column label="综合排序" width="82" fixed>
                 <template #default="{ row }">
                   <b>{{ Number(row.quality_score ?? row.score).toFixed(1) }}</b>
                   <div class="score-pct">仅用于本次排序</div>
                 </template>
               </el-table-column>
-              <el-table-column label="结构分" width="90">
+              <el-table-column label="结构分" width="82">
                 <template #default="{ row }">
                   <b>{{ displayScore(row) }}</b>
                   <!-- 结构因子分全市场上限约 79.6，所以「79 分」是前 0.1% 而非「只有七八十分」。
@@ -298,7 +322,7 @@
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column label="时机确认" width="132">
+              <el-table-column label="时机确认" width="104">
                 <template #default="{ row }">
                   <el-tag
                     size="small"
@@ -312,7 +336,7 @@
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column label="AI因子" width="90">
+              <el-table-column label="AI因子" width="64">
                 <template #default="{ row }">
                   <el-tag v-if="row.ai_factor_score" size="small" type="success" effect="plain">
                     {{ Number(row.ai_factor_score).toFixed(0) }}
@@ -320,7 +344,7 @@
                   <span v-else>-</span>
                 </template>
               </el-table-column>
-              <el-table-column label="五方判读" width="110">
+              <el-table-column label="五方判读" width="82">
                 <template #default="{ row }">
                   <el-tooltip v-if="panelScores.smart[row.symbol]" :content="panelScores.smart[row.symbol].summary" placement="top">
                     <el-button text size="small" @click.stop="openPanelDialog(row, 'smart')">
@@ -331,19 +355,19 @@
                   <span v-else class="panel-pending">—</span>
                 </template>
               </el-table-column>
-              <el-table-column prop="symbol" label="代码" width="100" />
-              <el-table-column label="名称" width="140">
+              <el-table-column prop="symbol" label="代码" width="80" />
+              <el-table-column label="名称" width="116">
                 <template #default="{ row }">
                   <span>{{ row.name }}</span>
                   <el-tag v-if="row.triple_confirm" size="small" type="danger" effect="dark" class="dc-tag" title="结构因子 + 低位形态 + 相对强度 三重确认">三重</el-tag>
                   <el-tag v-else-if="row.dual_confirm" size="small" type="success" effect="dark" class="dc-tag" title="结构因子 + 低位形态 双确认">双确认</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="行业/板块" width="130">
+              <el-table-column label="行业/板块" width="110">
                 <template #default="{ row }">{{ row.industry || row.board || '-' }}</template>
               </el-table-column>
-              <el-table-column label="现价" width="90"><template #default="{ row }">{{ formatNumber(row.close) }}</template></el-table-column>
-              <el-table-column label="涨跌幅" width="90" align="right">
+              <el-table-column label="现价" width="72"><template #default="{ row }">{{ formatNumber(row.close) }}</template></el-table-column>
+              <el-table-column label="涨跌幅" width="72" align="right">
                 <template #default="{ row }">
                   <span :class="changeClass(row.pct_chg)">{{ signedPercent(row.pct_chg) }}</span>
                 </template>
@@ -412,7 +436,7 @@
                   <span v-else>-</span>
                 </template>
               </el-table-column>
-              <el-table-column label="形态 · 强度" min-width="300">
+              <el-table-column label="形态 · 强度" min-width="250">
                 <template #default="{ row }">
                   <el-tag v-if="row.confluence_bonus" class="capability-tag" type="warning" effect="dark"
                     :title="`结构因子之上，形态/强度共振加成 +${row.confluence_bonus}（已计入排序，量化分保持结构分不动）`">
@@ -434,7 +458,7 @@
                   <span v-if="!row.confluence_bonus && !(row.patterns || []).length && !row.strength" class="panel-pending">—</span>
                 </template>
               </el-table-column>
-              <el-table-column label="入选理由" min-width="360">
+              <el-table-column label="入选理由" min-width="300">
                 <template #default="{ row }">
                   <el-tooltip v-for="f in row.risk_flags || []" :key="f.key" :content="f.reason" placement="top">
                     <el-tag class="capability-tag" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="dark">
@@ -446,7 +470,7 @@
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="230" fixed="right">
+              <el-table-column label="操作" width="170" fixed="right">
                 <template #default="{ row }">
                   <el-button type="primary" link size="small" @click="addOneToFavorites(row)">加入自选</el-button>
                   <el-button link type="primary" size="small" @click="openChart(row)">看图</el-button>
@@ -896,6 +920,8 @@ const smartDisplayItems = computed(() => {
 const smartElapsed = ref(0)
 let smartProgressTimer: number | undefined
 let smartTaskTimer: number | undefined
+let smartLiveTimer: number | undefined
+let smartLiveRefreshing = false
 
 const backtestForm = ref({
   symbol: '600519',
@@ -1160,11 +1186,32 @@ const poolWinText = (pool: string) => {
   return `近30日 T+5 胜率 ${(s.win_rate * 100).toFixed(0)}%（${s.samples} 样本）`
 }
 
+const refreshSmartPoolLive = async () => {
+  if (
+    smartLiveRefreshing
+    || smartPoolLoading.value
+    || activeTab.value !== 'screen'
+    || document.hidden
+  ) return
+  smartLiveRefreshing = true
+  try {
+    const result = await quantApi.smartPool(
+      smartPoolForm.value.limit,
+      smartPoolForm.value.universe_limit,
+      true,
+    )
+    if (result?.items?.length) smartPoolResult.value = result
+  } catch {
+    // 静默刷新失败时保留上一份可用名单，用户手动点击仍会得到明确错误。
+  } finally {
+    smartLiveRefreshing = false
+  }
+}
+
 onMounted(async () => {
-  // 进页面即读后台保温器暖好的缓存池，秒显最新推荐；不触发全市场重算，点「一键智能推荐」才刷新。
-  quantApi.smartPool(smartPoolForm.value.limit, smartPoolForm.value.universe_limit, true)
-    .then((res) => { if (res?.items?.length) smartPoolResult.value = res })
-    .catch(() => {})
+  // 结构底池每天生成一次；页面打开后和停留期间每 30 秒按实时量价静默换榜。
+  refreshSmartPoolLive()
+  smartLiveTimer = window.setInterval(refreshSmartPoolLive, 30_000)
   quantApi.riskAlert().then((alert) => { riskAlert.value = alert || null }).catch(() => {})
   quantApi.picksStats(30).then((res) => {
     const map: Record<string, { win_rate: number | null; samples: number }> = {}
@@ -1185,6 +1232,7 @@ onMounted(async () => {
 })
 onUnmounted(() => {
   if (syncTimer) window.clearTimeout(syncTimer)
+  if (smartLiveTimer) window.clearInterval(smartLiveTimer)
   stopSmartTaskPolling()
   stopSmartProgress()
   Object.values(panelTimers).forEach(t => window.clearTimeout(t))
@@ -1507,7 +1555,7 @@ const openChart = async (row: any) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
 
   h1 {
     margin: 0;
@@ -1519,6 +1567,13 @@ const openChart = async (row: any) => {
     margin: 4px 0 0;
     color: var(--el-text-color-secondary);
   }
+}
+
+.head-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .data-health {
@@ -1603,7 +1658,11 @@ const openChart = async (row: any) => {
   background: var(--el-bg-color);
   border: 1px solid var(--el-border-color-light);
   border-radius: 8px;
-  padding: 10px 14px 14px;
+  padding: 8px 12px 10px;
+
+  :deep(.el-tabs__header) {
+    margin-bottom: 8px;
+  }
 }
 
 .tool-layout {
@@ -1629,10 +1688,6 @@ const openChart = async (row: any) => {
   }
 }
 
-.smart-tip {
-  margin-bottom: 14px;
-}
-
 .smart-home {
   display: flex;
   flex-direction: column;
@@ -1643,8 +1698,8 @@ const openChart = async (row: any) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 10px 12px;
+  gap: 10px;
+  padding: 7px 10px;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
   background: var(--el-fill-color-extra-light);
@@ -1665,7 +1720,7 @@ const openChart = async (row: any) => {
 
 .smart-inline-settings {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-shrink: 0;
   flex-wrap: wrap;
   align-items: center;
@@ -1724,6 +1779,7 @@ const openChart = async (row: any) => {
 
 .smart-result-panel {
   min-height: 0;
+  padding: 8px 10px;
 }
 
 .smart-progress {
@@ -1972,16 +2028,52 @@ const openChart = async (row: any) => {
   }
 }
 
+.smart-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  margin-bottom: 6px;
+}
+
+.summary-primary,
+.summary-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.summary-primary b {
+  font-size: 18px;
+}
+
+.summary-meta {
+  grid-column: 1 / -1;
+  padding-top: 5px;
+  border-top: 1px dashed var(--el-border-color-lighter);
+  font-size: 12px;
+}
+
 .few-picks-tip {
   margin-bottom: 8px;
 }
+.decision-context {
+  display: grid;
+  grid-template-columns: minmax(320px, .72fr) minmax(560px, 1.28fr);
+  gap: 6px;
+  margin-bottom: 6px;
+}
 .env-gate {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px;
-  margin-bottom: 10px; padding: 8px 12px; border-radius: 8px;
+  display: flex; flex-wrap: nowrap; align-items: baseline; gap: 6px 10px;
+  margin: 0; padding: 6px 10px; border-radius: 8px;
   border-left: 4px solid var(--el-border-color); font-size: 13px;
 }
 .env-gate-head { font-weight: 700; }
-.env-gate-note { color: var(--el-text-color-secondary); }
+.env-gate-note {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--el-text-color-secondary);
+}
 .env-gate.env-cold { background: rgba(239,35,42,.08); border-left-color: #ef232a; }
 .env-gate.env-cold .env-gate-head { color: #ef232a; }
 .env-gate.env-neutral { background: rgba(212,136,6,.10); border-left-color: #d48806; }
@@ -1989,21 +2081,31 @@ const openChart = async (row: any) => {
 .env-gate.env-warm { background: rgba(14,159,90,.10); border-left-color: #0e9f5a; }
 .env-gate.env-warm .env-gate-head { color: #0e9f5a; }
 .basket-note {
-  margin-bottom: 10px; padding: 8px 12px; border-radius: 8px; font-size: 13px;
+  grid-column: 1 / -1;
+  margin: 0; padding: 6px 10px; border-radius: 8px; font-size: 13px;
   background: rgba(64,158,255,.08); border-left: 4px solid var(--el-color-primary);
 }
-.basket-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px;
+.basket-head { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 6px 10px;
   b { color: var(--el-color-primary); }
-  span { color: var(--el-text-color-secondary); } }
+  span {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--el-text-color-secondary);
+  }
+  .desc-toggle { flex-shrink: 0; }
+}
 .basis-note {
-  margin-bottom: 10px; padding: 7px 12px; border-radius: 8px; font-size: 13px;
+  margin: 0; padding: 6px 10px; border-radius: 8px; font-size: 13px;
   background: var(--el-fill-color-light); border-left: 4px solid var(--el-color-info);
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
-  .basis-tip { color: var(--el-text-color-secondary); }
+  display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 8px;
+  > b, > span { flex-shrink: 0; }
+  .basis-tip {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--el-text-color-secondary);
+  }
   .basis-high { color: #e6a23c; }
 }
 .basket-usage {
-  margin-top: 6px; padding: 6px 10px; border-radius: 6px; line-height: 1.6;
+  margin-bottom: 8px; padding: 6px 10px; border-radius: 6px; line-height: 1.6;
   background: rgba(230,162,60,.12); color: var(--el-text-color-regular);
   b { color: #b88230; }
 }
@@ -2026,12 +2128,11 @@ const openChart = async (row: any) => {
 .dc-filter { cursor: pointer; user-select: none; }
 
 .table-actions {
-  flex: 1 0 100%;
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .equity-chart {
@@ -2187,6 +2288,25 @@ const openChart = async (row: any) => {
     align-items: flex-start;
   }
 
+  .smart-summary,
+  .decision-context {
+    grid-template-columns: 1fr;
+  }
+
+  .smart-summary .table-actions,
+  .summary-meta,
+  .basket-note {
+    grid-column: 1;
+  }
+
+  .table-actions,
+  .basket-head,
+  .basis-note,
+  .env-gate {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
   .smart-inline-settings {
     flex-wrap: wrap;
   }
@@ -2212,6 +2332,7 @@ const openChart = async (row: any) => {
 /* 紧凑表格：一页多显 */
 :deep(.el-table__cell) { padding: 4px 0; }
 :deep(.el-table .cell) { line-height: 1.3; font-size: 12px; padding-left: 6px; padding-right: 6px; }
+:deep(.smart-pool-table .cell) { padding-left: 4px; padding-right: 4px; }
 :deep(.el-table th.el-table__cell) { padding: 6px 0; }
 :deep(.el-tag) { height: 20px; line-height: 18px; padding: 0 5px; font-size: 11px; }
 
@@ -2233,7 +2354,7 @@ const openChart = async (row: any) => {
   color: var(--el-color-primary); cursor: pointer;
 }
 
-.data-health.collapsed { padding: 6px 12px; }
+.data-health.collapsed { display: block; padding: 5px 10px; }
 .health-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .health-title span { font-size: 12px; color: var(--el-text-color-secondary); }
 
@@ -2244,6 +2365,6 @@ const openChart = async (row: any) => {
   flex: 1; min-width: 0; color: var(--el-text-color-regular);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.compact-smart-hero h2 { font-size: 16px; margin-bottom: 4px; }
+.compact-smart-hero h2 { font-size: 16px; margin-bottom: 0; white-space: nowrap; }
 .compact-smart-hero p { margin: 4px 0 0; font-size: 12px; line-height: 1.6; }
 </style>

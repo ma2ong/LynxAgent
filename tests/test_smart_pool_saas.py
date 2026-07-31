@@ -6,6 +6,7 @@
 不是「买分数 > X 的」，因此不设绝对分数闸门。
 """
 import asyncio
+import inspect
 from typing import Any
 from unittest.mock import patch
 
@@ -62,13 +63,15 @@ def test_v3_score_scale_does_not_empty_the_pool():
     data = _compute(scores)
     items = data["items"]
     assert len(items) == len(scores), "低于旧闸门(80)的评分不应被丢弃"
-    assert [round(float(i["quant_score"]), 1) for i in items] == sorted(scores, reverse=True)
+    assert sorted(round(float(i["quant_score"]), 1) for i in items) == sorted(scores)
 
 
-def test_pool_ranked_desc_and_capped_by_limit():
+def test_pool_ranked_by_intraday_composite_without_overwriting_structure_score():
     data = _compute([70.0, 90.0, 50.0])
-    scores = [float(i["quant_score"]) for i in data["items"]]
-    assert scores == sorted(scores, reverse=True)
+    items = data["items"]
+    live_scores = [float(item["realtime_rank_score"]) for item in items]
+    assert live_scores == sorted(live_scores, reverse=True)
+    assert sorted(float(item["quant_score"]) for item in items) == [50.0, 70.0, 90.0]
 
 
 def test_intraday_strength_changes_same_daily_structure_rank():
@@ -77,6 +80,91 @@ def test_intraday_strength_changes_same_daily_structure_rank():
     strong = blend_intraday_score(base, intraday_strength_score(5.0, 70.0))
 
     assert strong > weak + 8
+
+
+def test_intraday_rerank_promotes_strong_live_candidate_without_changing_structure_score():
+    items = [
+        {
+            "symbol": "600001",
+            "smart_score": 80.0,
+            "quant_score": 80.0,
+            "pct_chg": -2.0,
+            "amount": 50_000_000,
+            "volume_ratio": 0.7,
+            "reasons": [],
+        },
+        {
+            "symbol": "600002",
+            "smart_score": 76.0,
+            "quant_score": 76.0,
+            "pct_chg": 6.0,
+            "amount": 500_000_000,
+            "volume_ratio": 2.2,
+            "reasons": [],
+        },
+    ]
+
+    lite_main._rerank_smart_pool_intraday(items)
+
+    assert items[0]["symbol"] == "600002"
+    assert items[0]["quant_score"] == 76.0
+    assert items[0]["realtime_rank_score"] > items[1]["realtime_rank_score"]
+    assert items[0]["reasons"][0].startswith("盘中动态分")
+
+
+def test_realtime_enrichment_reranks_full_structure_candidate_pool():
+    candidates = [
+        {
+            "symbol": f"6000{i:02d}",
+            "code": f"6000{i:02d}",
+            "name": f"候选{i}",
+            "smart_score": 81.0 - i,
+            "quant_score": 81.0 - i,
+            "score": 81.0 - i,
+            "pct_chg": -2.0,
+            "amount": 50_000_000,
+            "reasons": [],
+        }
+        for i in range(1, 12)
+    ]
+    promoted_symbol = candidates[-1]["symbol"]
+
+    async def realtime_quotes(symbols, **_kwargs):
+        return {
+            symbol: {
+                "price": 10.0,
+                "change_percent": 7.0 if symbol == promoted_symbol else -2.0,
+                "amount": 800_000_000 if symbol == promoted_symbol else 50_000_000,
+                "volume_ratio": 2.4 if symbol == promoted_symbol else 0.7,
+                "updated_at": "2026/07/30 10:30:00",
+            }
+            for symbol in symbols
+        }
+
+    async def no_intraday_overlay(_data):
+        return None
+
+    response = {
+        "success": True,
+        "data": {
+            "requested_limit": 10,
+            "daily_as_of": "2026-07-29",
+            "items": candidates[:10],
+            "structure_candidates": candidates,
+        },
+    }
+    gate = {"state": "偏暖", "label": "可正常参与", "coefficient": 1.0, "note": ""}
+    with patch.object(lite_main, "_cache_get", return_value=gate), \
+         patch.object(lite_main, "_realtime_quotes", new=realtime_quotes), \
+         patch.object(lite_main, "_apply_intraday_quality", new=no_intraday_overlay), \
+         patch.object(lite_main, "_update_smart_pool_list_basis", new=lambda _data: None):
+        result = asyncio.run(lite_main._enrich_smart_pool_realtime(response))
+
+    data = result["data"]
+    assert data["intraday_candidate_count"] == 11
+    assert len(data["items"]) == 10
+    assert promoted_symbol in {item["symbol"] for item in data["items"]}
+    assert data["realtime_as_of"] == "2026/07/30 10:30:00"
 
 
 def test_manual_generation_bypasses_old_pool_cache():
@@ -111,6 +199,39 @@ def test_manual_generation_bypasses_old_pool_cache():
     # assert_not_called 会被无关调用误伤。
     assert not _smart_pool_reads(memory_cache), "手动刷新不应读内存里的旧名单"
     assert not _smart_pool_reads(disk_cache), "手动刷新不应读磁盘里的旧名单"
+
+
+def test_one_click_task_defaults_to_reusing_daily_pool():
+    parameter = inspect.signature(lite_main.start_lite_smart_pool_task).parameters["force_refresh"]
+    assert parameter.default is False
+
+
+def test_nonempty_daily_pool_is_reused_without_full_market_scan():
+    cached = {
+        "success": True,
+        "data": {
+            "strategy": "quant_center_smart_pool",
+            "items": [{"symbol": "600001", "name": "缓存候选", "score": 88.0}],
+        },
+    }
+
+    async def fail_scan(*_args, **_kwargs):
+        raise AssertionError("当天已有推荐池时不应再次全市场扫描")
+
+    with patch.object(lite_main, "_cache_get", return_value=cached), \
+         patch.object(lite_main, "run_scan", new=fail_scan), \
+         patch.object(lite_main, "_enrich_smart_pool_realtime", new=_async_passthrough()):
+        result = asyncio.run(
+            lite_main._compute_lite_smart_pool(limit=10, universe_limit=5000)
+        )
+
+    assert result["data"]["items"][0]["symbol"] == "600001"
+
+
+def test_empty_failed_response_is_never_considered_reusable_cache():
+    assert not lite_main._smart_pool_response_has_items(
+        {"success": True, "data": {"strategy": "all_market_recommend", "items": []}}
+    )
 
 
 def test_intraday_entry_confirmation_promotes_lower_structure_candidate():
@@ -188,3 +309,9 @@ def test_one_click_recommendations_are_hard_capped_at_ten():
 
 def _smart_pool_reads(mock) -> list:
     return [c for c in mock.call_args_list if str(c.args[0] if c.args else "").startswith("smart-pool:")]
+
+
+def _async_passthrough():
+    async def _f(value, *_args, **_kwargs):
+        return value
+    return _f

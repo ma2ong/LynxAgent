@@ -197,8 +197,6 @@ const data = ref<IntradaySignalPayload | null>(null)
 const loading = ref(false)
 const keyword = ref('')
 const filter = ref<'all' | IntradaySignalStatus>('all')
-const initialized = ref(false)
-const seenEvents = new Set<string>()
 let timer: ReturnType<typeof setInterval> | null = null
 
 const filteredItems = computed(() => {
@@ -266,34 +264,11 @@ const toggleFilter = (next: IntradaySignalStatus) => {
   filter.value = filter.value === next ? 'all' : next
 }
 
-const notifyNewEntries = (payload: IntradaySignalPayload) => {
-  const events = payload.recent_events || []
-  if (!initialized.value) {
-    events.forEach((event) => seenEvents.add(event.event_id))
-    initialized.value = true
-    return
-  }
-  for (const event of [...events].reverse()) {
-    if (seenEvents.has(event.event_id)) continue
-    seenEvents.add(event.event_id)
-    if (event.status !== 'entry') continue
-    ElNotification({
-      title: `盘中入场触发 · ${event.name}`,
-      message: `${event.symbol} 信号价 ${price(event.signal_price)}，强度 ${event.score}`,
-      type: 'success',
-      duration: 8000,
-      position: 'bottom-right',
-      onClick: () => openStock(event.symbol),
-    })
-  }
-}
-
 const load = async (refresh = false) => {
   if (refresh || !data.value) loading.value = true
   try {
     const payload = await fetchIntradaySignals(refresh)
     data.value = payload
-    notifyNewEntries(payload)
   } catch (error: any) {
     if (refresh) {
       ElNotification({

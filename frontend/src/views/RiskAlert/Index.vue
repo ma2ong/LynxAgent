@@ -42,9 +42,7 @@
       <div class="scan-head">
         <h2>高位风险 · 涨高见顶</h2>
         <div class="scan-sub">
-          刚见顶 <b class="down">{{ hp.counts?.fresh || 0 }}</b> 只
-          · 下跌中继 <b class="risk-mid">{{ hp.counts?.falling || 0 }}</b> 只
-          · 深跌未反转 <b>{{ hp.counts?.deep || 0 }}</b> 只
+          共 <b>{{ hp.total || 0 }}</b> 只
           <span v-if="scan?.universe">/ 全市场 {{ scan.universe }} 只</span>
         </div>
       </div>
@@ -53,8 +51,16 @@
         不在这份名单里（在下面「问题股与破位股」）。
         <span class="hp-crit">{{ hp.criteria }}</span>
       </div>
-      <el-input v-model="hpKeyword" size="small" clearable placeholder="搜索股票/代码" class="stock-search hp-search" />
-      <el-table v-if="hp.items?.length" :data="filteredHp" size="small" stripe max-height="460">
+      <div class="scan-filters">
+        <el-radio-group v-model="hpTab" size="small">
+          <el-radio-button v-for="t in hpTabs" :key="t.key" :value="t.key">
+            {{ t.label }} {{ t.count }}
+          </el-radio-button>
+        </el-radio-group>
+        <el-input v-model="hpKeyword" size="small" clearable placeholder="搜索股票/代码" class="stock-search" />
+      </div>
+      <div class="tab-hint">{{ hpHint }}</div>
+      <el-table v-if="filteredHp.length" :data="filteredHp" size="small" stripe max-height="460">
         <el-table-column label="仓位动作" width="200" fixed="left">
           <template #default="{ row }">
             <el-tag size="small" :type="stageType(row.stage)" effect="dark">{{ row.stage }}</el-tag>
@@ -95,7 +101,7 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-else description="当前无个股同时满足全部高位风险条件" :image-size="70" />
+      <el-empty v-else :description="hpTab === 'all' ? '当前无个股同时满足全部高位风险条件' : '这一档当前没有个股'" :image-size="70" />
     </section>
 
     <!-- 全市场持仓风险复核 -->
@@ -103,10 +109,7 @@
       <div class="scan-head">
         <h2>问题股与破位股</h2>
         <div class="scan-sub" v-if="scan">
-          建议退出 <b>{{ scan.recommendation_counts?.exit || 0 }}</b> 只
-          · 减仓防守 <b>{{ scan.recommendation_counts?.reduce || 0 }}</b> 只
-          · 反包观察 <b>{{ scan.recommendation_counts?.rebound || 0 }}</b> 只
-          · 持有观察 <b>{{ scan.recommendation_counts?.watch || 0 }}</b> 只
+          共 <b>{{ scan.total_flagged || 0 }}</b> 只
           <span v-if="scan.universe">/ 全市场 {{ scan.universe }} 只</span>
           <span v-if="scan.as_of">· 日线截至 {{ scan.as_of }}</span>
         </div>
@@ -120,10 +123,18 @@
         </span>
       </div>
       <div class="scan-filters">
-        <span class="merged-hint">ST / 退市风险 / 业绩预亏，以及全市场跌破均线的个股，合并为一份，按严重度排序</span>
+        <el-radio-group v-model="sigTab" size="small">
+          <el-radio-button v-for="t in sigTabs" :key="t.key" :value="t.key">
+            {{ t.label }} {{ t.count }}
+          </el-radio-button>
+        </el-radio-group>
         <el-input v-model="keyword" size="small" clearable placeholder="搜索股票/代码" class="stock-search" />
       </div>
-      <el-table v-if="scan" :data="filteredScan" size="small" stripe max-height="520">
+      <div class="tab-hint">
+        {{ sigHint }}
+        <span v-if="sigTruncated" class="dim">· 本页只列前 {{ sigShown }} 只（按严重度截取）</span>
+      </div>
+      <el-table v-if="filteredScan.length" :data="filteredScan" size="small" stripe max-height="520">
         <el-table-column label="综合建议" width="105" fixed="left">
           <template #default="{ row }">
             <el-tag size="small" :type="signalType(row.signal)" effect="dark">{{ row.signal }}</el-tag>
@@ -185,18 +196,19 @@
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-else-if="!loading" description="暂无扫描数据" :image-size="80" />
+      <el-empty v-else-if="!loading" :description="scan ? '这一档当前没有个股' : '暂无扫描数据'" :image-size="80" />
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onActivated, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { quantApi, type RiskAlert, type RiskScan } from '@/api/quant'
 defineOptions({ name: 'RiskAlertPage' })
 
 const router = useRouter()
+const route = useRoute()
 const loading = ref(false)
 const alert = ref<RiskAlert | null>(null)
 const scan = ref<RiskScan | null>(null)
@@ -216,16 +228,58 @@ const signalType = (signal: string) =>
 const hp = computed(() => (scan.value as any)?.high_position || null)
 const stageType = (stage: string) =>
   stage === '刚见顶' ? 'danger' : stage === '下跌中继' ? 'warning' : 'info'
+
+// 分档：同一张名单里三种仓位动作差别很大，混在一起看不出该先处理谁
+const HP_STAGES = [
+  { key: 'fresh', label: '刚见顶', hint: '唯一还来得及行动的窗口：减仓至三成以下' },
+  { key: 'falling', label: '下跌中继', hint: '趋势已坏：逢反弹继续减仓，别等回本' },
+  { key: 'deep', label: '深跌未反转', hint: '已经跌透：不抄底，反弹到均线附近再减磅' },
+]
+const hpTab = ref('all')
+const hpTabs = computed(() => [
+  { key: 'all', label: '全部', count: hp.value?.total || 0 },
+  ...HP_STAGES.map((s) => ({ key: s.key, label: s.label, count: hp.value?.counts?.[s.key] || 0 })),
+])
+const hpHint = computed(() =>
+  HP_STAGES.find((s) => s.key === hpTab.value)?.hint || '按仓位动作分档，越靠前越紧急')
 const filteredHp = computed(() => {
   const kw = hpKeyword.value.trim().toLowerCase()
+  const stage = HP_STAGES.find((s) => s.key === hpTab.value)?.label
   return (hp.value?.items || []).filter((it: any) =>
-    !kw || it.name.toLowerCase().includes(kw) || it.symbol.includes(kw))
+    (!stage || it.stage === stage) &&
+    (!kw || it.name.toLowerCase().includes(kw) || it.symbol.includes(kw)))
 })
 
-// 其他关注：原来的重点复核 / 反包观察 / 问题股 合并为一份，不再分 tab
+// 问题股按综合建议分档：退出和持有观察是两件完全不同的事，不该在同一页翻
+const SIGNALS = [
+  { key: 'exit', label: '退出/止损', hint: '多个风险维度共振：反弹即走，不留隔夜' },
+  { key: 'reduce', label: '减仓防守', hint: '风险大于保护：降到半仓以下，再破位就清' },
+  { key: 'rebound', label: '反包观察', hint: '盘中已收复 MA10/MA20：先别砍，看能否站稳收盘' },
+  { key: 'watch', label: '持有观察', hint: '证据还不够动手：继续持有，跌破前低再处理' },
+]
+const sigTab = ref('all')
+const sigTabs = computed(() => [
+  { key: 'all', label: '全部', count: scan.value?.total_flagged || 0 },
+  ...SIGNALS.map((s) => ({
+    key: s.key,
+    label: s.label,
+    count: (scan.value?.recommendation_counts as any)?.[s.key] || 0,
+  })),
+])
+const sigHint = computed(() =>
+  SIGNALS.find((s) => s.key === sigTab.value)?.hint
+  || 'ST / 退市风险 / 业绩预亏，以及全市场跌破均线的个股，合并为一份，按严重度排序')
+const scanByTab = computed(() => {
+  const signal = SIGNALS.find((s) => s.key === sigTab.value)?.label
+  return (scan.value?.items || []).filter((item) => !signal || item.signal === signal)
+})
+const sigShown = computed(() => scanByTab.value.length)
+// 后端按配额截取，列表条数会少于统计口径——直说，别让人以为漏了票
+const sigTruncated = computed(() =>
+  sigShown.value < (sigTabs.value.find((t) => t.key === sigTab.value)?.count || 0))
 const filteredScan = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  return (scan.value?.items || []).filter((item) =>
+  return scanByTab.value.filter((item) =>
     !kw || item.name.toLowerCase().includes(kw) || item.symbol.includes(kw))
 })
 const openStock = (symbol: string) => router.push({ name: 'stock-analysis', query: { symbol } })
@@ -244,7 +298,20 @@ const loadAll = async () => {
   }
 }
 
-onMounted(loadAll)
+// 首页的分档数字直接点进对应分页。本页被 keep-alive 缓存，第二次进来只触发
+// activated，不会再 mounted，所以两处都要读一次 query。
+const applyQueryTab = () => {
+  const sig = String(route.query.sig || '')
+  if (SIGNALS.some((s) => s.key === sig)) sigTab.value = sig
+  const stage = String(route.query.stage || '')
+  if (HP_STAGES.some((s) => s.key === stage)) hpTab.value = stage
+}
+
+onMounted(() => {
+  applyQueryTab()
+  loadAll()
+})
+onActivated(applyQueryTab)
 </script>
 
 <style scoped lang="scss">
@@ -303,11 +370,12 @@ onMounted(loadAll)
 .hp-card { border-color: var(--el-color-danger-light-5); }
 .hp-note { line-height: 1.7; }
 .hp-crit { display: block; margin-top: 4px; font-size: 12px; color: var(--el-text-color-placeholder); }
-.hp-search { max-width: 220px; margin: 10px 0; }
 .hp-action { margin-top: 3px; font-size: 12px; color: var(--el-text-color-regular); line-height: 1.4; }
 .dim { color: var(--el-text-color-secondary); }
 .ev { font-size: 12px; color: var(--el-text-color-regular); line-height: 1.6; }
-.merged-hint { font-size: 12px; color: var(--el-text-color-placeholder); }
 .scan-filters { display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  flex-wrap: wrap; margin: 10px 0; }
+  flex-wrap: wrap; margin: 10px 0 6px; }
+.stock-search { max-width: 220px; }
+.tab-hint { margin-bottom: 10px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6;
+  .dim { color: var(--el-text-color-placeholder); margin-left: 4px; } }
 </style>

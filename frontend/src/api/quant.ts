@@ -71,8 +71,11 @@ export interface QuantSmartPoolItem {
   board?: string
   score: number
   quant_score: number
-  /** 原日K结构分保留不变；quality_score 只用于最终推荐排序 */
+  /** 原日K结构分保留不变；盘中动态分和时机分只用于当前推荐排序 */
   quality_score?: number
+  realtime_rank_score?: number
+  intraday_strength_score?: number
+  intraday_activity_percentile?: number
   timing_score?: number | null
   timing_status?: 'confirmed' | 'watch' | 'unconfirmed' | 'blocked' | 'pending'
   timing_label?: string
@@ -165,11 +168,14 @@ export interface QuantSmartPoolResult {
     label?: string
     note?: string
   }
-  // 名单基准：排序只吃最近完整日线，两个收盘之间名单是冻结的
+  intraday_candidate_count?: number
+  // 名单基准：完整日K冻结结构底池，盘中实时量价动态重排最终名单
   list_basis?: {
     as_of?: string
     frozen?: boolean
     structure_frozen?: boolean
+    intraday_dynamic?: boolean
+    candidate_count?: number
     prev_date?: string | null
     same_count?: number
     total?: number
@@ -424,6 +430,7 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     ranking_basis: raw?.ranking_basis,
     force_refreshed: raw?.force_refreshed,
     requested_limit: raw?.requested_limit,
+    intraday_candidate_count: raw?.intraday_candidate_count,
     position_gate: raw?.position_gate,
     list_basis: raw?.list_basis,
     dual_confirm_count: raw?.dual_confirm_count,
@@ -481,7 +488,7 @@ export const quantApi = {
 
   startSmartPoolTask: async (limit = 10, universeLimit = 300, strategy = 'balanced') =>
     unwrap<QuantSmartPoolTask>(await ApiClient.post('/api/lite/smart-pool/tasks', undefined, {
-      params: { limit, universe_limit: universeLimit, strategy, force_refresh: true, _ts: nonce() },
+      params: { limit, universe_limit: universeLimit, strategy, force_refresh: false, _ts: nonce() },
       timeout: 15000
     })),
 

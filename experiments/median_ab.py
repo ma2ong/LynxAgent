@@ -76,7 +76,9 @@ def evaluate(by_session: dict, spec: dict, top_n: int, caliber: str = "close") -
             rets = np.array([v["ret_open"] for v, _ in items], dtype=float)
         else:
             rets = np.array([r for _, r in items], dtype=float)
-        med = np.median(rets)                       # 基准：当期全市场中位收益（同口径）
+        # 基准必须与组合侧同一统计量：中位对中位、均值对均值。个股收益右偏，
+        # 全市场均值比中位高约 0.8pp/期（T+5），混用会凭空造出这么多"超额"。
+        med, avg = np.median(rets), np.mean(rets)
         keep = [i for i, (v, _) in enumerate(items) if _eligible(v, spec)]
         if len(keep) < MIN_PICKS:
             continue
@@ -85,7 +87,7 @@ def evaluate(by_session: dict, spec: dict, top_n: int, caliber: str = "close") -
         idx = np.array(keep)[np.argsort(-scores)[:top_n]]
         exc = rets[idx] - med
         per_median.append(float(np.median(exc)))
-        per_mean.append(float(np.mean(exc)))
+        per_mean.append(float(np.mean(rets[idx]) - avg))
         per_win.append(float((exc > 0).mean()))
         per_count.append(len(idx))
         pooled.append(exc)
@@ -315,10 +317,11 @@ def analyze_entry_drop(by_session: dict, keys: list, top_n: int) -> dict:
             continue
         rets = np.array([v["ret_entry_next_close"] for v, _ in items], dtype=float)
         moves = np.array([v["next_day_move"] for v, _ in items], dtype=float)
-        med = np.median(rets)
+        # 篮子侧取均值，基准就取均值（理由见 period_stats）
+        avg = np.mean(rets)
         X = np.array([[v[f] for f in FACTORS] for v, _ in items], dtype=float)
         idx = np.argsort(-(X @ w))[:top_n]
-        exc, mv = rets[idx] - med, moves[idx]
+        exc, mv = rets[idx] - avg, moves[idx]
         all_basket.append(float(exc.mean()))
         keep = exc[mv > -0.05]                     # 剔掉「今日已跌超 5%」的票
         if keep.size:

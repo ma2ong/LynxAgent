@@ -20,6 +20,7 @@ runtime/
 /reports/
 *.sqlite
 *.db
+experiments/.cache/
 
 # OS / editor
 .DS_Store

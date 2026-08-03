@@ -45,18 +45,23 @@ SCHEMES = {
 
 
 def evaluate(by_session: dict, weights: dict, top_n: int) -> np.ndarray:
-    """逐期取 top_n，返回每期的平均超额。"""
+    """逐期取 top_n，返回每期的平均超额。
+
+    基准必须与组合侧同一统计量。组合侧是等权持有 → 用均值，基准就得是全市场**均值**
+    （= 随机买 20 只的期望），不能拿中位当基准：个股收益右偏，全市场均值比中位高
+    约 0.8pp/期（T+5，2025-2026 实测），混用会凭空造出这么多"超额"。
+    """
     out = []
     for s in sorted(by_session):
         items = by_session[s]
         if len(items) < 200:
             continue
         rets = np.array([r for _, r in items], dtype=float)
-        med = np.median(rets)
+        bench = np.mean(rets)
         scores = np.array([min(100.0, max(0.0, sum(v[f] * weights[f] for f in FACTORS)))
                            for v, _ in items], dtype=float)
         idx = np.argsort(-scores)[:top_n]
-        out.append(float(np.mean(rets[idx] - med)))
+        out.append(float(np.mean(rets[idx]) - bench))
     return np.array(out, dtype=float)
 
 

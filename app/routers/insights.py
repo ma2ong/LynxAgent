@@ -15,6 +15,7 @@ import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 
@@ -117,10 +118,42 @@ async def lite_call_auction(
     top_k = max(3, min(top_k, 30))
     open_min = max(0.0, min(open_min, 10.0))
     open_max_ratio = max(0.2, min(open_max_ratio, 0.95))
-    cache_key = f"call-auction:v5:{window}:{top_k}:{open_min}:{open_max_ratio}"
-    cached = _cache_get(cache_key, 60)
-    if cached:
-        return cached
+    cache_key = f"call-auction:v6:{window}:{top_k}:{open_min}:{open_max_ratio}"
+
+    # —— 竞价结果日内冻结 ——
+    # 症结：本页原来全天每 60 秒重算。09:26 之后快照里的量比/成交额是盘中/全日口径，
+    # 拿它们给"竞价买入推荐"打分，名单会随盘面整天漂移——用户上午看到的推荐和收盘时
+    # 的推荐不是同一批，且每次重算都在留痕，午后漂进来的票以盘中价混进竞价池的复盘
+    # 统计。竞价是 09:25 一锤定音的事件，结果就该在窗口结束后冻结一整天。
+    import json as _json
+    from quantcore.quant.local_store import get_local_store
+
+    now_cn = datetime.now(ZoneInfo("Asia/Shanghai"))
+    today = now_cn.strftime("%Y-%m-%d")
+    param_sig = f"{window}:{top_k}:{open_min}:{open_max_ratio}"
+    post_auction = now_cn.weekday() < 5 and (now_cn.hour * 60 + now_cn.minute) >= 9 * 60 + 26
+    _FROZEN_STATE_KEY = "call_auction_frozen_v1"
+
+    def _load_frozen() -> dict | None:
+        try:
+            raw = get_local_store().get_state(_FROZEN_STATE_KEY)
+            if not raw:
+                return None
+            blob = _json.loads(raw)
+            if blob.get("date") == today and blob.get("params") == param_sig:
+                return blob.get("payload")
+        except Exception:
+            return None
+        return None
+
+    if post_auction:
+        frozen = await asyncio.to_thread(_load_frozen)
+        if frozen:
+            return frozen
+    else:
+        cached = _cache_get(cache_key, 60)
+        if cached:
+            return cached
 
     snapshot = await asyncio.to_thread(_load_realtime_quotes_snapshot, 60)
     industry_map = await asyncio.to_thread(_load_industry_map)
@@ -134,10 +167,13 @@ async def lite_call_auction(
             return set()
 
     bad_symbols = await asyncio.to_thread(_bad_forecast)
+    # 留痕只在冻结时刻记一次（09:26 后的首次计算）。窗口内(09:15-09:25)名单还在
+    # 逐分钟变化，窗口后重算已非竞价口径——两者都不该写复盘留痕。
+    freeze_now = post_auction
     result = await asyncio.to_thread(
         compute_call_auction, snapshot, SECTOR_LEADERS,
         industry_map=industry_map, hot_industries=hot_industries, exclude_symbols=bad_symbols,
-        open_min=open_min, open_max_ratio=open_max_ratio,
+        open_min=open_min, open_max_ratio=open_max_ratio, record=freeze_now,
     )
 
     # 四形态：按需回溯拉东财盘前分时（09:15-09:25 逐分钟虚拟撮合价），给买入候选贴上盘口
@@ -163,6 +199,9 @@ async def lite_call_auction(
     except Exception:
         pass
 
+    if freeze_now and result.get("available"):
+        result["frozen_at"] = now_cn.strftime("%H:%M:%S")
+        result["note"] = "本日竞价结果已于 09:26 后冻结，全天展示同一名单（竞价 09:25 定价，盘中重算无意义）。" + str(result.get("note") or "")
     payload = {
         "success": True,
         "data": {**result, "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S")},
@@ -170,6 +209,14 @@ async def lite_call_auction(
     }
     if result.get("available"):
         _cache_set(cache_key, payload)
+        if freeze_now:
+            def _save_frozen() -> None:
+                try:
+                    get_local_store().set_state(_FROZEN_STATE_KEY, _json.dumps(
+                        {"date": today, "params": param_sig, "payload": payload}, ensure_ascii=False))
+                except Exception:
+                    pass
+            await asyncio.to_thread(_save_frozen)
     return payload
 
 

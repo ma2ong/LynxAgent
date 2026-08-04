@@ -24,7 +24,69 @@ logger = logging.getLogger("board_refresh")
 
 _task: asyncio.Task | None = None
 _smart_pool_warm_date: str | None = None
+_last_auto_sync_attempt: float = 0.0
 _TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _latest_bar_is_stale(store) -> bool:
+    """本地日线是否落后于「最近一个应已收盘的交易日」。
+
+    背景：日线增量同步原本只在用户打开数据中心页(/datalake/health?auto_start)时触发。
+    没人开那页，daily_kline 就停在几天前——结构因子在同一份旧 K 线上反复评分，
+    一键智选的名单自然「来来去去就那几只」，且缓存 key 里的 daily_as_of 不变，
+    连强制刷新都算不出新结果。这是选股僵化的第一根因。
+
+    节假日无法本地判定，宁可误报（增量同步幂等且有 4h 尝试节流，空跑无害）。
+    """
+    from datetime import date, datetime as dt, time as dtime, timedelta
+
+    latest = ""
+    try:
+        latest = store.latest_real_bar_date() or ""
+    except Exception:
+        return False
+    if not latest:
+        return False  # 空库走全量同步路径，不归这里管
+    ref = date.today()
+    now = dt.now(_TZ)
+    # 今天的日线要 15:15 后才算「应已存在」；周末回退到最近的工作日
+    if ref.weekday() >= 5 or now.time() < dtime(15, 15):
+        ref = ref - timedelta(days=1)
+    while ref.weekday() >= 5:
+        ref = ref - timedelta(days=1)
+    return latest < ref.isoformat()
+
+
+async def _maybe_auto_sync() -> bool:
+    """需要时在后台拉起日线增量同步。返回 True 表示「正在同步中」。"""
+    global _last_auto_sync_attempt
+    import time as _time
+
+    from quantcore.quant.sync_service import get_sync_service
+
+    try:
+        svc = get_sync_service()
+        status = svc.status()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("board refresh [auto-sync] status failed: %s", exc)
+        return False
+    if status.get("running"):
+        return True
+    health = dict(status.get("health") or {})
+    stale = bool(health.get("needs_incremental_sync")) or _latest_bar_is_stale(svc.store)
+    if not stale:
+        return False
+    # 4 小时尝试节流：节假日误判 stale 时不至于反复空跑全市场
+    if _time.time() - _last_auto_sync_attempt < 4 * 3600:
+        return False
+    _last_auto_sync_attempt = _time.time()
+    try:
+        await asyncio.to_thread(svc.run_sync, False, False)  # 非阻塞：同步跑在它自己的后台线程
+        logger.info("board refresh [auto-sync] incremental sync started (stale local kline)")
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("board refresh [auto-sync] start failed: %s", exc)
+        return False
 
 
 def start() -> None:
@@ -77,6 +139,10 @@ async def _refresh_cycle() -> None:
     from app.routers import insights as ins
     from app.routers import quant as q
 
+    # 0) 日线新鲜度自愈：不再依赖用户打开数据中心页才同步。同步进行中则本轮跳过
+    #    智选池预热，等新 K 线落库后下一轮再预热（缓存 key 含 daily_as_of，自动换代）。
+    syncing = await _maybe_auto_sync()
+
     # 1) 实时快照：所有板块的公共底料，强制刷新（ttl=0），保它 <一个周期 旧。
     snapshot: dict = {}
     try:
@@ -98,7 +164,7 @@ async def _refresh_cycle() -> None:
     # 5) 一键智选的结构因子基于完整日 K，每个交易日只需预热一次。
     #    盘中实时价与时机层由用户请求刷新；后台每 60 秒进入推荐锁会让用户点击无谓排队。
     today = datetime.now(_TZ).strftime("%Y-%m-%d")
-    if _in_active_window() and _smart_pool_warm_date != today:
+    if _in_active_window() and _smart_pool_warm_date != today and not syncing:
         try:
             result = await m._compute_lite_smart_pool(
                 "balanced",

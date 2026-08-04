@@ -737,7 +737,7 @@ class QuantEngine:
                 pass
 
         return _json_safe({
-            "source": f"quant-engine-smart-pool-v3-structure:{pool_source}",
+            "source": f"quant-engine-smart-pool-v4-structure-fresh:{pool_source}",
             "universe_size": len(pool),
             "analyzed": len(items),
             "requested_limit": safe_limit,

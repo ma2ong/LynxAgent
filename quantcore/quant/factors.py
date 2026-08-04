@@ -65,7 +65,10 @@ def enrich_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["volatility20"] = out["ret"].rolling(20).std() * (252 ** 0.5)
     out["volume_ma20"] = out.get("volume", pd.Series(index=out.index, dtype=float)).rolling(20).mean()
     out["amount_ma20"] = out.get("amount", pd.Series(index=out.index, dtype=float)).rolling(20).mean()
-    out["rolling_peak"] = out["close"].cummax()
+    # 回撤基准用滚动 60 日峰值而非全窗口 cummax：半年前见顶、如今筑底启动的票会被
+    # 历史峰值永久压分，而长期慢牛贴着累计峰值的票 drawdown≈0 被结构性偏爱——这是
+    # 「推荐名单常年不换」的元凶之一。60 日窗口只惩罚"近期仍深套"的票。
+    out["rolling_peak"] = out["close"].rolling(60, min_periods=1).max()
     out["drawdown"] = out["close"] / out["rolling_peak"] - 1
 
     # MACD
@@ -165,6 +168,8 @@ def compute_factor_scores(df: pd.DataFrame) -> Dict[str, float]:
     close = _last(data["close"])
     ma20 = _last(data["ma20"], close)
     ma60 = _last(data["ma60"], close) if "ma60" in data.columns else close
+    momentum5 = _last(data["momentum_5"])
+    momentum10 = _last(data["momentum_10"])
     momentum20 = _last(data["momentum_20"])
     momentum60 = _last(data["momentum_60"])
     rsi14 = _last(data["rsi14"], 50.0)
@@ -173,30 +178,56 @@ def compute_factor_scores(df: pd.DataFrame) -> Dict[str, float]:
     amount_ma20 = _last(data["amount_ma20"])
 
     trend_score = _clip_score(50 + (close / ma20 - 1) * 250 + (ma20 / ma60 - 1) * 180)
-    momentum_score = _clip_score(50 + momentum20 * 180 + momentum60 * 120)
-    rsi_score = _clip_score(100 - abs(rsi14 - 55) * 2.2)
+    # 动量重心前移：旧公式只看 20/60 日，一只两个月前涨完横住的票动量分能高位挂一个月，
+    # 而近 5 日刚启动的新强势股几乎拿不到分——榜单因此僵化。5/10 日权重进来后，
+    # 名单会跟着市场轮动换血；60 日仍保留小权重防止纯追一日脉冲。
+    momentum_score = _clip_score(
+        50 + momentum5 * 110 + momentum10 * 95 + momentum20 * 80 + momentum60 * 45)
+    # RSI 容忍带放宽且中心上移(55→60)：强势启动股 RSI 常年 65-75，旧系数 2.2 把它们
+    # 一律压到 60 分以下，等于系统性歧视正在走强的票。
+    rsi_score = _clip_score(100 - abs(rsi14 - 60) * 1.6)
     risk_score = _clip_score(100 - vol20 * 120 - drawdown * 80)
-    liquidity_score = _clip_score(40 + amount_ma20 / 10_000_000 * 8) if amount_ma20 else 50.0
+    # 流动性 log 刻度：旧线性公式在 amount_ma20≥7500 万即触顶 100，全市场大半股票并列
+    # 满分，因子实际失效。log10 刻度让 2000 万→50 亿平滑分布，恢复区分度。
+    if amount_ma20 > 0:
+        import math
+        liquidity_score = _clip_score(35 + math.log10(max(amount_ma20, 1.0) / 2e7) * 28)
+    else:
+        liquidity_score = 50.0
 
     # MACD score: positive histogram (macd_line > signal) → bullish
     macd_line = _last(data["macd_line"])
     macd_signal = _last(data["macd_signal"])
     macd_score = _clip_score(50 + (macd_line - macd_signal) * 2000)
 
-    # Bollinger position: prefers midband (bb_pos=0.5 → score=100); penalizes both extremes (0 or 1 → score=40)
+    # 布林位置改为非对称：旧公式偏爱中轨、把上轨突破(bb_pos≈1)打到 40 分——但沿上轨
+    # 强势运行恰恰是本池想抓的形态。现在 0.35~0.9 都算健康(高分)，贴下轨(弱势/阴跌)
+    # 重罚，冲出上轨仅轻微降温防一字脉冲。
     bb_upper = _last(data["bb_upper"], close * 1.05)
     bb_lower = _last(data["bb_lower"], close * 0.95)
     band_width = bb_upper - bb_lower
     if band_width > 0:
-        bb_pos = (close - bb_lower) / band_width  # 0..1
-        # Prefer 0.3..0.7 range (neither oversold nor overbought)
-        bollinger_score = _clip_score(100 - abs(bb_pos - 0.5) * 120)
+        bb_pos = (close - bb_lower) / band_width  # 0..1（可越界）
+        if bb_pos < 0.35:
+            bollinger_score = _clip_score(100 - (0.35 - bb_pos) * 160)
+        elif bb_pos <= 0.9:
+            bollinger_score = 100.0
+        else:
+            bollinger_score = _clip_score(100 - (bb_pos - 0.9) * 90)
     else:
         bollinger_score = 50.0
 
-    # Capital flow proxy: amount * direction of price change
-    ret = _last(data["ret"])
-    capital_flow_score = _clip_score(50 + (ret * amount_ma20 / 1e8) * 5) if amount_ma20 else 50.0
+    # 资金流：旧公式 ret*amount_ma20/1e8*5 对 90% 的股票都落在 50±2，是个死因子。
+    # 改为近 5 日带方向的量能占比：Σ(方向×成交额)/Σ成交额 ∈ [-1,1]，量价配合连涨
+    # 且放量的票才拿高分，缩量阴跌为负。
+    vol_dir = data["ret"].apply(lambda r: 1.0 if r > 0 else (-1.0 if r < 0 else 0.0))
+    amt = data.get("amount", pd.Series(0.0, index=data.index)).fillna(0.0)
+    signed_amt_5 = float((vol_dir.tail(5) * amt.tail(5)).sum())
+    total_amt_5 = float(amt.tail(5).sum())
+    if total_amt_5 > 0:
+        capital_flow_score = _clip_score(50 + (signed_amt_5 / total_amt_5) * 80)
+    else:
+        capital_flow_score = 50.0
 
     return {
         "trend": round(trend_score, 2),

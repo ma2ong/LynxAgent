@@ -30,8 +30,8 @@ REPO = os.path.dirname(HERE)
 CACHE_DIR = os.path.join(HERE, ".cache")
 DEFAULT_DB = os.path.join(REPO, "runtime", "quant_data.sqlite")
 
-TEST_FROM = "2025-05-06"   # 250 日回看之后
-SPLIT = "2026-01-01"       # 前 / 后半分界
+TEST_FROM = "2021-01-04"   # 250 日回看之后（日线自 2020-01 起，见 scripts/backfill_history.py）
+SPLIT = "2023-10-01"       # 前 / 后半分界，约为测试区间中点
 
 G: dict = {}
 

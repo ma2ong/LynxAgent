@@ -195,6 +195,30 @@
         </div>
       </article>
 
+      <!-- 盘中机会雷达 -->
+      <article class="card">
+        <header @click="go('/intraday-signals')">
+          <span class="c-ico">📡</span><h3>盘中机会雷达</h3>
+          <span v-if="radar?.phase" class="c-badge">{{ radar.phase }}</span>
+          <span class="c-more">进入 →</span>
+        </header>
+        <div class="c-body">
+          <template v-if="radar?.items?.length">
+            <div class="rank-list">
+              <div v-for="s in radar.items" :key="s.symbol" class="rank-row" @click="goStock(s.symbol)">
+                <el-tag size="small" :type="s.status === 'entry' ? 'success' : s.status === 'watch' ? 'warning' : 'info'"
+                  effect="dark">{{ RADAR_STATUS[s.status] || s.status }}</el-tag>
+                <span class="rk-name">{{ s.name }}<small>{{ s.symbol }}</small></span>
+                <span v-if="s.pct != null" :class="(s.pct ?? 0) >= 0 ? 'up' : 'down'">{{ pct(s.pct ?? 0) }}</span>
+                <span v-else class="rk-score">{{ s.score }}分</span>
+              </div>
+            </div>
+            <small class="c-note">状态化入场信号 · 信号价即触发时价格</small>
+          </template>
+          <p v-else class="c-cta">交易时段实时扫描量价异动，状态化提示提前预警 / 入场触发</p>
+        </div>
+      </article>
+
       <!-- 涨停热点 -->
       <article class="card">
         <header @click="go('/limit-up')">
@@ -396,6 +420,8 @@ const poolStats = ref<{ label: string; t1: number | null; t3: number | null; t5:
 const topSell = ref<{ symbol: string; name: string; signal: string }[]>([])
 const auction = ref<{ pc: Record<string, number>; top: any[] } | null>(null)
 const limitUp = ref<{ up: number; down: number; maxBoards: number; causes: { name: string; n: number }[] } | null>(null)
+const radar = ref<{ items: { symbol: string; name: string; status: string; score: number; pct?: number }[]; phase: string } | null>(null)
+const RADAR_STATUS: Record<string, string> = { entry: '入场触发', watch: '提前预警', unbuyable: '不可追入' }
 const hotIndustries = ref<{ name: string; pct: number }[]>([])
 const favs = ref<{ symbol: string; name: string; pct: number | null }[]>([])
 const favTop = computed(() =>
@@ -502,6 +528,19 @@ const loadCards = async (retries = 1) => {
         causes: (d.causes || []).slice(0, 3).map((c: string) => ({ name: c, n: d.cause_total?.[c] || 0 })),
       }
     }).catch(() => { failed = true }),
+    // 盘中机会雷达：后台监控循环常驻扫描，这里只读其最新状态，不触发强制重扫
+    ApiClient.get<any>('/api/lite/intraday-signals', { limit: 8 }, { timeout: 20000 }).then((raw) => {
+      const d = raw?.data ?? raw
+      if (!d) return
+      const items = (d.items || [])
+        .filter((i: any) => ['entry', 'watch', 'unbuyable'].includes(i.status))
+        .slice(0, 4)
+        .map((i: any) => ({
+          symbol: i.symbol, name: i.name, status: i.status,
+          score: Math.round(Number(i.score) || 0), pct: i.pct ?? i.pct_chg ?? null,
+        }))
+      radar.value = { items, phase: String(d.phase_label || d.phase || '') }
+    }).catch(() => { /* 非交易时段或冷启动无信号，卡片显示引导文案即可 */ }),
   ])
   cardsLoadedAt = Date.now()
   cardsLoading.value = false

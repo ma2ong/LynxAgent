@@ -72,6 +72,7 @@ def compute_call_auction(
     exclude_symbols: set | None = None,
     open_min: float = 1.5,
     open_max_ratio: float = 0.6,
+    record: bool = True,
 ) -> Dict[str, object]:
     """把全市场快照算成：竞价情绪概览 + 竞价热门板块 + 竞价买入推荐。
 
@@ -328,8 +329,10 @@ def compute_call_auction(
             ratio = c["score"] / (smax or 1.0)
             c["tier"] = "最强推荐" if ratio >= 0.9 else ("强推荐" if ratio >= 0.78 else "推荐")
 
-    # 留痕当日竞价候选（首次快照），供复盘页统计真实 T+N 胜率。
-    if top_candidates:
+    # 留痕当日竞价候选，供复盘页统计真实 T+N 胜率。record 由路由层控制：只在竞价
+    # 冻结时刻记一次。旧行为是保温循环每 60 秒重算重记——盘中量比/成交额早已不是
+    # 竞价口径，午后混进来的"候选"以盘中价入史，把竞价池的复盘胜率彻底污染。
+    if record and top_candidates:
         try:
             from .local_store import get_local_store
             get_local_store().record_picks(

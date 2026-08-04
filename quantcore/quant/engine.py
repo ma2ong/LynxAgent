@@ -26,6 +26,11 @@ from .wyckoff import analyze_wyckoff
 
 logger = logging.getLogger("quant_engine")
 
+# 选股池上限：只作为「用户传入参数」的防呆边界，不该成为真实约束。
+# 原值 5000 小于 A 股全市场（现 5525 只），等于默认砍掉流动性最低的 525 只——
+# 该由引擎自己的 SMART_MIN_AMOUNT/ST/亏损规则决定谁出局，不该由一个凑整数字决定。
+MAX_UNIVERSE = 10000
+
 
 def _market_quote_code(symbol: str) -> str:
     clean = symbol.strip().zfill(6)
@@ -594,7 +599,7 @@ class QuantEngine:
         """
         safe_limit = max(1, min(limit, 50))
         # 全市场最多约 5000 只；结构评分来自本地日线，实时行情用于排除与展示
-        safe_universe_limit = max(safe_limit, min(universe_limit, 5000))
+        safe_universe_limit = max(safe_limit, min(universe_limit, MAX_UNIVERSE))
         pool, pool_source = self._scan_pool(safe_universe_limit)
         errors: Dict[str, str] = {}
         symbols = [str(meta.get("symbol") or "").strip().zfill(6) for meta in pool]
@@ -814,14 +819,14 @@ class QuantEngine:
             "errors": errors,
         })
 
-    def strength_pool(self, limit: int = 30, universe_limit: int = 5000,
+    def strength_pool(self, limit: int = 30, universe_limit: int = 10000,
                       dist_min: float = 70.0, adr_min: float = 4.5,
                       require_ema: bool = True, exclude_fundamental: bool = True) -> Dict[str, object]:
         """相对强度筛选器（强势股研究清单）。硬筛：距250日低点≥+70% / ADR≥4.5% /
         站上 EMA8&EMA21；按全市场横截面 RS 评级(1-99)排序。研究清单，非买入清单。"""
         from .relative_strength import assign_rs_rating, strength_chunk
         safe_limit = max(1, min(limit, 60))
-        safe_universe_limit = max(safe_limit, min(universe_limit, 5000))
+        safe_universe_limit = max(safe_limit, min(universe_limit, MAX_UNIVERSE))
         pool, pool_source = self._scan_pool(safe_universe_limit)
         symbols = [str(m.get("symbol") or "").strip().zfill(6) for m in pool]
         quote_map = _fetch_tencent_quotes(symbols)
@@ -947,11 +952,11 @@ class QuantEngine:
                      "按全市场相对强度(RS)排名。研究清单不是买入清单——基本面/底部结构/风险位需自行深挖。"),
         })
 
-    def sector_rotation(self, universe_limit: int = 5000,
+    def sector_rotation(self, universe_limit: int = 10000,
                         industry_map: Optional[Dict[str, str]] = None) -> Dict[str, object]:
         """板块轮动相对强度排名：行业 4周/12周相对大盘的超额，按 12周 RS 排名，标领先/落后。"""
         from .sector_rotation import rank_sectors, sector_return_chunk
-        pool, pool_source = self._scan_pool(max(1, min(universe_limit, 5000)))
+        pool, pool_source = self._scan_pool(max(1, min(universe_limit, MAX_UNIVERSE)))
         gated_symbols = [str(m.get("symbol") or "").strip().zfill(6) for m in pool
                          if str(m.get("symbol") or "").strip().zfill(6).isdigit()]
         cutoff = (date.today() - timedelta(days=100)).strftime("%Y-%m-%d")
@@ -997,10 +1002,10 @@ class QuantEngine:
                     "研究参考，不构成投资建议。",
         })
 
-    def pattern_pool(self, limit: int = 20, universe_limit: int = 5000, min_strength: float = 70.0,
+    def pattern_pool(self, limit: int = 20, universe_limit: int = 10000, min_strength: float = 70.0,
                      exclude_fundamental: bool = True) -> Dict[str, object]:
         safe_limit = max(1, min(limit, 50))
-        safe_universe_limit = max(safe_limit, min(universe_limit, 5000))
+        safe_universe_limit = max(safe_limit, min(universe_limit, MAX_UNIVERSE))
         pool, pool_source = self._scan_pool(safe_universe_limit)
         symbols = [str(meta.get("symbol") or "").strip().zfill(6) for meta in pool if meta.get("symbol")]
         local_kline_count = get_local_store().kline_symbol_count()
@@ -1205,7 +1210,7 @@ class QuantEngine:
             ],
         })
 
-    def swing_pool(self, limit: int = 20, universe_limit: int = 5000, min_score: float = 60.0,
+    def swing_pool(self, limit: int = 20, universe_limit: int = 10000, min_score: float = 60.0,
                    exclude_fundamental: bool = True) -> Dict[str, object]:
         """短线波段池（1-3 日持仓）：RSI 超卖 + KDJ/MACD 金叉 + 布林下轨 + 放量 + 资金代理的 6 维共振低吸选股。
 
@@ -1213,7 +1218,7 @@ class QuantEngine:
         依赖本地 K 线计算指标；本地数据不足时返回提示。每只票附 ATR 买卖点。
         """
         safe_limit = max(1, min(limit, 50))
-        safe_universe_limit = max(safe_limit, min(universe_limit, 5000))
+        safe_universe_limit = max(safe_limit, min(universe_limit, MAX_UNIVERSE))
         pool, pool_source = self._scan_pool(safe_universe_limit)
         local_kline_count = get_local_store().kline_symbol_count()
         if local_kline_count < 500:

@@ -313,6 +313,10 @@ async def health():
     return {"status": "healthy", "service": "saas-lite"}
 
 
+# 一键智选最终名单的条数上限。原先在 safe_limit / _finalize_intraday_quality /
+# structure_shadow 三处各写死 10，导致前端「推荐上限」控件调了也没用——改这里一处即可。
+SMART_POOL_MAX_ITEMS = 20
+
 SMART_POOL_RECOMMENDER = {
     "name": "全市场综合优选",
     "description": "系统自动优先筛短中期进攻型股票，并叠加 AI 因子模型 Top-K 排名作为机器学习评分因子。",
@@ -848,7 +852,7 @@ def _rerank_smart_pool_intraday(items: list[dict[str, Any]]) -> None:
         realtime_rank_score = blend_intraday_score(
             structure_with_confluence,
             intraday_score,
-            # 0.22→0.40:用户要求时效性优先——盘中爆发直通车的票要有真实机会冲进前10,
+            # 0.22→0.40:用户要求时效性优先——盘中爆发直通车的票要有真实机会冲进最终名单,
             # 旧权重下结构榜常驻股几乎不可撼动。0.40 是 blend 函数允许的上限。
             intraday_weight=0.40,
         )
@@ -987,7 +991,7 @@ def _merge_intraday_quality(
     }
     data["ranking_basis"] = (
         "最近完整日K筛结构底池 + 盘中爆发直通车(今日涨幅≥4%且实时成交≥2亿直接入候选),"
-        "盘中动态分(权重0.40)重排最终前10;涨停/近板不再拦截,醒目标注买入难度后照常上榜。"
+        "盘中动态分(权重0.40)重排最终名单;涨停/近板不再拦截,醒目标注买入难度后照常上榜。"
     )
     basis = data.get("list_basis")
     if isinstance(basis, dict):
@@ -1019,7 +1023,8 @@ def _finalize_intraday_quality(data: dict[str, Any], target: int) -> None:
     kept = [item for item in items if item.get("timing_status") != "blocked"]
     previous_excluded = int(data.get("timing_excluded_count") or 0)
     previous_samples = list(data.get("timing_excluded_samples") or [])
-    safe_target = max(1, min(int(target or 10), 10))
+    # 上限跟随端点的 safe_limit（现 20），不再写死 10——写死会让「推荐上限」控件失效。
+    safe_target = max(1, min(int(target or SMART_POOL_MAX_ITEMS), SMART_POOL_MAX_ITEMS))
     kept = kept[:safe_target]
     for rank, item in enumerate(kept, start=1):
         item["rank"] = rank
@@ -1160,7 +1165,7 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
     await _apply_intraday_quality(data)
     _finalize_intraday_quality(
         data,
-        int(data.get("requested_limit") or len(items) or 10),
+        int(data.get("requested_limit") or len(items) or SMART_POOL_MAX_ITEMS),
     )
     items = data.get("items") or []
     _update_smart_pool_list_basis(data)
@@ -1271,10 +1276,10 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
         target = int(data.get("requested_limit") or 0)
         structure_shadow = [
             dict(item)
-            for item in kept[: max(1, min(target or 10, 10))]
+            for item in kept[: max(1, min(target or SMART_POOL_MAX_ITEMS, SMART_POOL_MAX_ITEMS))]
         ]
         # 保留经过结构、形态和七不买筛选后的完整备选池。缓存命中时会给这批候选
-        # 全量刷新实时行情，再动态重排前 10，而不是永远只能在昨天的 10 只里换顺序。
+        # 全量刷新实时行情，再动态重排最终名单，而不是永远只能在昨天那批里换顺序。
         data["structure_candidates"] = deepcopy(kept)
         data["intraday_candidate_count"] = len(kept)
         _rerank_smart_pool_intraday(kept)
@@ -1286,7 +1291,7 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
             for it in excluded[:5]
         ]
         await _apply_intraday_quality(data)
-        _finalize_intraday_quality(data, target or 10)
+        _finalize_intraday_quality(data, target or SMART_POOL_MAX_ITEMS)
         items = data.get("items") or []
         # ①c 双确认子集计数，供前端展示/筛选
         data["dual_confirm_count"] = sum(1 for it in items if it.get("dual_confirm"))
@@ -1415,8 +1420,8 @@ _smart_pool_compute_lock = asyncio.Lock()
 
 async def _compute_lite_smart_pool_unlocked(
     strategy: str = "balanced",
-    limit: int = 10,
-    universe_limit: int = 5000,
+    limit: int = 20,
+    universe_limit: int = 10000,
     task_id: str | None = None,
     force_refresh: bool = False,
     cache_only: bool = False,
@@ -1424,14 +1429,14 @@ async def _compute_lite_smart_pool_unlocked(
     from quantcore.quant.local_store import get_local_store
 
     preset = SMART_POOL_RECOMMENDER
-    safe_limit = max(5, min(limit, 10))
+    safe_limit = max(5, min(limit, SMART_POOL_MAX_ITEMS))
     # 全市场评分（与回放口径一致：回放在全市场上取每期 top-N）。v3 结构因子分走进程池，
     # 3700 只约 32 秒，5000 只的上限扛得住；旧的 1200 截断会让线上池和回放验证的池不是一回事。
-    safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
+    safe_universe = max(safe_limit * 2, min(universe_limit, 10000))
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     cache_key = (
-        f"smart-pool:factor-v11-sector-stage:{daily_as_of}:"
+        f"smart-pool:factor-v13-top20-uncapped:{daily_as_of}:"
         f"{strategy}:{safe_limit}:{safe_universe}"
     )
     _smart_pool_task_update(
@@ -1562,7 +1567,7 @@ async def _compute_lite_smart_pool_unlocked(
                 "strategy": "quant_center_smart_pool",
                 "preset": {
                     "name": "全市场综合优选",
-                    "description": "完整日K先筛强结构备选池，再按盘中实时量价、板块共振与追高风控动态重排，只输出当前最优前10只。",
+                    "description": f"完整日K先筛强结构备选池，再按盘中实时量价、板块共振与追高风控动态重排，只输出当前最优的前 {safe_limit} 只。",
                 },
                 "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
                 "universe_size": quant_pool.get("universe_size") or len(items),
@@ -1859,7 +1864,7 @@ async def _compute_lite_smart_pool_unlocked(
             "universe": ai_factor_pool.get("universe"),
         },
         "items": items,
-        "source_note": "结构候选叠加 AI 因子、形态强度和盘中量价时机确认，只输出最优前10只；时机层正在独立留痕验证，仅供研究。",
+        "source_note": f"结构候选叠加 AI 因子、形态强度和盘中量价时机确认，只输出最优的前 {safe_limit} 只；时机层正在独立留痕验证，仅供研究。",
     }
     response = {"success": True, "data": data, "message": "ok"}
     await _apply_confluence(response)
@@ -1874,8 +1879,8 @@ async def _compute_lite_smart_pool_unlocked(
 
 async def _compute_lite_smart_pool(
     strategy: str = "balanced",
-    limit: int = 10,
-    universe_limit: int = 5000,
+    limit: int = 20,
+    universe_limit: int = 10000,
     task_id: str | None = None,
     force_refresh: bool = False,
     cache_only: bool = False,
@@ -1900,7 +1905,7 @@ async def _compute_lite_smart_pool(
 
 
 @app.get("/api/lite/smart-pool")
-async def lite_smart_pool(strategy: str = "balanced", limit: int = 10, universe_limit: int = 5000,
+async def lite_smart_pool(strategy: str = "balanced", limit: int = 20, universe_limit: int = 10000,
                           cache_only: bool = False):
     return await _compute_lite_smart_pool(strategy, limit, universe_limit, cache_only=cache_only)
 
@@ -1982,11 +1987,11 @@ async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int,
 
 
 @app.post("/api/lite/smart-pool/tasks")
-async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 10,
-                                     universe_limit: int = 5000, force_refresh: bool = False):
-    safe_limit = max(5, min(limit, 10))
+async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 20,
+                                     universe_limit: int = 10000, force_refresh: bool = False):
+    safe_limit = max(5, min(limit, SMART_POOL_MAX_ITEMS))
     # 与 _compute_lite_smart_pool 同口径：全市场评分，才和回放验证的池是同一个池
-    safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
+    safe_universe = max(safe_limit * 2, min(universe_limit, 10000))
     # 去重：同参数任务已在排队/运行则直接复用，避免连点堆叠多个全市场扫描把线程池占满。
     for existing in lite_smart_pool_tasks.values():
         if (
@@ -2068,10 +2073,10 @@ async def _run_lite_pattern_pool_task(task_id: str, limit: int, universe_limit: 
 
 
 @app.post("/api/lite/pattern-pool/tasks")
-async def start_lite_pattern_pool_task(limit: int = 20, universe_limit: int = 5000,
+async def start_lite_pattern_pool_task(limit: int = 20, universe_limit: int = 10000,
                                        min_strength: float = 70.0, exclude_fundamental: bool = True):
     safe_limit = max(5, min(limit, 50))
-    safe_universe = max(safe_limit * 2, min(universe_limit, 5000))
+    safe_universe = max(safe_limit * 2, min(universe_limit, 10000))
     # 连点去重：同参数任务在跑就复用，避免堆叠多个全市场扫描
     for existing in lite_pattern_pool_tasks.values():
         if (existing.get("status") in ("queued", "running")

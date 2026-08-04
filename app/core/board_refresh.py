@@ -166,10 +166,12 @@ async def _refresh_cycle() -> None:
     today = datetime.now(_TZ).strftime("%Y-%m-%d")
     if _in_active_window() and _smart_pool_warm_date != today and not syncing:
         try:
+            # 参数必须与端点默认值一致：cache_key 含 limit 与 universe，
+            # 预热用 10/5000 而用户默认请求 20/10000 会全部未命中，等于没预热。
             result = await m._compute_lite_smart_pool(
                 "balanced",
-                10,
-                5000,
+                20,
+                10000,
                 force_refresh=False,
             )
             if m._smart_pool_response_has_items(result):

@@ -19,7 +19,7 @@
     <section class="page-head">
       <div class="head-line">
         <h1>智能选股</h1>
-        <p>全市场量价动态优选，优先展示当前前10只</p>
+        <p>全市场量价动态优选，优先展示当前最优名单</p>
       </div>
       <div class="head-tags">
         <el-tag
@@ -71,7 +71,7 @@
                   {{ showPoolDesc ? '收起说明' : '选股逻辑' }}
                 </a>
               </h2>
-              <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），再按盘中实时涨跌、成交活跃度、量比、突破与板块共振动态重排；涨停或距离涨停过近直接剔除，最终只输出当前前10只。结构分保留不变，综合分只用于盘中排名。</p>
+              <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），再按盘中实时涨跌、成交活跃度、量比、突破与板块共振动态重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜，最终输出当前最优名单。结构分保留不变，综合分只用于盘中排名。</p>
             </div>
             <div class="smart-inline-settings">
               <label class="strategy-pick">
@@ -83,11 +83,11 @@
               </label>
               <label>
                 <span>候选</span>
-                <el-input-number v-model="smartPoolForm.universe_limit" :min="50" :max="5000" :step="50" controls-position="right" />
+                <el-input-number v-model="smartPoolForm.universe_limit" :min="50" :max="10000" :step="50" controls-position="right" />
               </label>
               <label>
                 <span>推荐上限</span>
-                <el-input-number v-model="smartPoolForm.limit" :min="5" :max="10" controls-position="right" />
+                <el-input-number v-model="smartPoolForm.limit" :min="5" :max="20" controls-position="right" />
               </label>
             </div>
             <div class="smart-actions">
@@ -174,7 +174,7 @@
                   size="small"
                   type="primary"
                   effect="plain"
-                  title="从强结构动态池中按实时量价重排前10"
+                  title="从强结构动态池中按实时量价重排最终名单"
                 >动态池 {{ smartPoolResult.intraday_candidate_count }} 只</el-tag>
               </div>
               <div class="table-actions">
@@ -238,7 +238,7 @@
                 </span>
                 <span class="basis-tip">
                   · {{ smartPoolResult.list_basis.candidate_count || smartPoolResult.intraday_candidate_count || 10 }}
-                  只候选实时重排，<b>前10自动换榜</b>
+                  只候选实时重排，<b>前 {{ smartPoolResult.items.length }} 名自动换榜</b>
                 </span>
               </div>
               <!-- 结构层有历史回放，新增时机层仍需独立留痕；两者证据边界必须清楚。 -->
@@ -905,7 +905,7 @@ const screenSymbolsText = ref('600519\n000001\n300750')
 const screenForm = ref({ limit: 30 })
 const screenLoading = ref(false)
 const screenResult = ref<QuantScreenResult | null>(null)
-const smartPoolForm = ref({ limit: 10, universe_limit: 5000, strategy: 'balanced' })
+const smartPoolForm = ref({ limit: 20, universe_limit: 10000, strategy: 'balanced' })
 const smartPoolLoading = ref(false)
 const smartPoolResult = ref<QuantSmartPoolResult | null>(null)
 const smartPoolTask = ref<QuantSmartPoolTask | null>(null)

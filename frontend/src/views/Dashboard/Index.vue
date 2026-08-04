@@ -135,7 +135,7 @@
               </div>
             </div>
             <small class="c-note">
-              <template v-if="smartLive">当下前10推荐 · 结构基于 {{ smartBasis }} 收盘，量价动态重排</template>
+              <template v-if="smartLive">当下推荐名单 · 结构基于 {{ smartBasis }} 收盘，量价动态重排</template>
               <template v-else>最近一批一键智选留痕（{{ smartDate }}）</template>
             </small>
           </template>

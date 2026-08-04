@@ -767,12 +767,14 @@ class QuantEngine:
 
         # —— 盘中爆发直通车 ——
         # 结构榜之外,今日盘中涨幅居前且实时成交额≥2亿的票直接进候选(带完整结构因子分),
-        # 不等今晚日线落库。用户明确要求时效性:今天爆发的票今天就要能被推荐,
-        # 由 lite 层的盘中动态分决定它们能否冲进最终前10。
+        # 不等今晚日线落库。用户明确要求时效性:今天爆发的票今天就要能被推荐。
+        # 唯一约束是结构质量前10%——只涨得快但日K结构烂的不算爆发,算追高。
+        # 涨停/近板照常补入:封板本身就是强势证据,买入难度由 lite 层标签提示。
         chosen_syms = {str(it.get("symbol")) for it in final_items}
         movers = [
             it for it in items
             if str(it.get("symbol")) not in chosen_syms
+            and _safe_float(it.get("score_percentile"), 100) <= 10.0
             and _safe_float(it.get("pct_chg"), 0) >= 4.0
             and _safe_float(it.get("amount"), 0) >= 2e8
         ]
@@ -804,7 +806,7 @@ class QuantEngine:
                 pass
 
         return _json_safe({
-            "source": f"quant-engine-smart-pool-v5-heat-breakout:{pool_source}",
+            "source": f"quant-engine-smart-pool-v7-quality-breakout:{pool_source}",
             "universe_size": len(pool),
             "analyzed": len(items),
             "requested_limit": safe_limit,
@@ -815,7 +817,7 @@ class QuantEngine:
                 (str(quote.get("updated_at") or "") for quote in quote_map.values()),
                 default="",
             ),
-            "ranking_basis": "按日K结构因子分排序并留痕（回放验证口径，实盘可回放）；盘中强度、实时价格仅用于排除与展示，不参与排序。",
+            "ranking_basis": "日K结构因子负责主排序；盘中爆发仅允许结构前10%且成交达标的标的补入候选，不改写结构分。",
             "errors": errors,
         })
 

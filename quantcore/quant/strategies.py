@@ -5,8 +5,13 @@ import pandas as pd
 from .factors import enrich_indicators
 
 
+def _indicator_frame(df: pd.DataFrame, required: set[str]) -> pd.DataFrame:
+    """Reuse a caller-provided indicator frame instead of recalculating it."""
+    return df if required.issubset(df.columns) else enrich_indicators(df)
+
+
 def moving_average_volume_signal(df: pd.DataFrame) -> pd.Series:
-    data = enrich_indicators(df)
+    data = _indicator_frame(df, {"ma20", "ma60", "volume_ma20"})
     volume = data.get("volume", pd.Series(index=data.index, dtype=float))
     return (data["ma20"] > data["ma60"]) & (data["close"] > data["ma20"]) & (volume > data["volume_ma20"] * 1.2)
 
@@ -18,13 +23,13 @@ def turtle_breakout_signal(df: pd.DataFrame, window: int = 20) -> pd.Series:
 
 
 def rps_breakout_signal(df: pd.DataFrame) -> pd.Series:
-    data = enrich_indicators(df)
+    data = _indicator_frame(df, {"momentum_60"})
     high_60 = data["high"].rolling(60).max().shift(1)
     return (data["close"] > high_60) & (data["momentum_60"] > 0.18)
 
 
 def high_tight_flag_signal(df: pd.DataFrame) -> pd.Series:
-    data = enrich_indicators(df)
+    data = _indicator_frame(df, {"ma20", "volume_ma20"})
     advance = data["close"] / data["close"].rolling(45).min() - 1
     consolidation = (data["high"].rolling(15).max() / data["low"].rolling(15).min() - 1) < 0.18
     volume_calm = data["volume"] < data["volume_ma20"] * 1.15
@@ -32,7 +37,7 @@ def high_tight_flag_signal(df: pd.DataFrame) -> pd.Series:
 
 
 def limit_up_washout_signal(df: pd.DataFrame) -> pd.Series:
-    data = enrich_indicators(df)
+    data = _indicator_frame(df, {"ma20", "volume_ma20", "rsi14"})
     pct = data["close"].pct_change()
     recent_limit = pct.rolling(10).max().shift(1) > 0.095
     pullback = data["close"] > data["ma20"]
@@ -41,7 +46,7 @@ def limit_up_washout_signal(df: pd.DataFrame) -> pd.Series:
 
 
 def multi_ma_breakout_signal(df: pd.DataFrame) -> pd.Series:
-    data = enrich_indicators(df)
+    data = _indicator_frame(df, {"ma5", "ma10", "ma20", "ma60", "volume_ma20"})
     ma_stack = (data["ma5"] > data["ma10"]) & (data["ma10"] > data["ma20"]) & (data["ma20"] > data["ma60"])
     prior_high = data["high"].rolling(30).max().shift(1)
     volume_confirm = data["volume"] > data["volume_ma20"] * 1.3
@@ -49,7 +54,7 @@ def multi_ma_breakout_signal(df: pd.DataFrame) -> pd.Series:
 
 
 def keltner_breakout_signal(df: pd.DataFrame) -> pd.Series:
-    data = enrich_indicators(df)
+    data = _indicator_frame(df, {"kc_upper", "kc_mid", "volume_ma20"})
     volume = data.get("volume", pd.Series(index=data.index, dtype=float))
     # 收盘突破 Keltner 上轨（EMA20 + 2*ATR）且站上中轨，配合放量确认
     return (data["close"] > data["kc_upper"]) & (data["close"] > data["kc_mid"]) & (volume > data["volume_ma20"])

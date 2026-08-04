@@ -59,6 +59,7 @@ from app.core.market_data import (  # 行情/缓存底座；缓存 getter 仍是
 )
 from app.core.schema import init_all as _init_lite_schema
 from app.routers.quant import router as quant_router
+from quantcore.quant.intraday_signals import trading_phase
 from quantcore.quant.sync_service import get_sync_service
 from quantcore.trading import EasyTraderBridge
 
@@ -316,6 +317,7 @@ async def health():
 # 一键智选最终名单的条数上限。原先在 safe_limit / _finalize_intraday_quality /
 # structure_shadow 三处各写死 10，导致前端「推荐上限」控件调了也没用——改这里一处即可。
 SMART_POOL_MAX_ITEMS = 20
+SMART_POOL_INTRADAY_WEIGHT = 0.22
 
 SMART_POOL_RECOMMENDER = {
     "name": "全市场综合优选",
@@ -750,16 +752,28 @@ def _env_position_gate(mkt: dict[str, Any] | None) -> dict[str, Any]:
     回放实证：弱市短线信号系统性失效、偏冷期超额贴零——所以偏冷自动把单票仓位砍到
     「只观察」，不是靠用户自觉。系数用于前端把「满仓基准」折算成建议仓位。
     """
-    state = (mkt or {}).get("state") or "中性"
-    temp = float((mkt or {}).get("temp") or 50.0)
+    if not isinstance(mkt, dict) or not mkt.get("state"):
+        return {
+            "state": "数据不可用",
+            "temp": None,
+            "coefficient": 0.0,
+            "max_single_position_pct": 0,
+            "label": "数据不足 · 暂停入场",
+            "note": "全市场环境数据暂不可用，不能把未知状态当成中性行情；恢复后再给仓位建议。",
+        }
+    state = str(mkt.get("state"))
+    temp = float(mkt.get("temp") or 50.0)
     if state == "偏冷":
-        return {"state": state, "temp": temp, "coefficient": 0.3, "label": "轻仓 · 只观察",
-                "note": "大盘偏冷，弱市短线信号系统性失效（回放偏冷期超额贴零）。建议单票仓位 ≤3 成，或仅观察等企稳。"}
+        return {"state": state, "temp": temp, "coefficient": 0.3, "max_single_position_pct": 3,
+                "label": "单票≤3% · 观察为主",
+                "note": "大盘偏冷，弱市短线信号系统性失效（回放偏冷期超额贴零）。单票不超过总资金 3%，优先观察等企稳。"}
     if state == "偏暖":
-        return {"state": state, "temp": temp, "coefficient": 1.0, "label": "可正常参与",
-                "note": "大盘偏暖，赚钱效应尚可。仍按纪律控制单票仓位、分批介入。"}
-    return {"state": state, "temp": temp, "coefficient": 0.6, "label": "半仓以内",
-            "note": "大盘中性，方向不明。单票仓位建议 ≤5 成，优先强势主线、回踩企稳再介入。"}
+        return {"state": state, "temp": temp, "coefficient": 1.0, "max_single_position_pct": 10,
+                "label": "单票≤10% · 可参与",
+                "note": "大盘偏暖，赚钱效应尚可。单票不超过总资金 10%，仍需分批介入并执行失效线。"}
+    return {"state": state, "temp": temp, "coefficient": 0.6, "max_single_position_pct": 6,
+            "label": "单票≤6% · 分批",
+            "note": "大盘中性，方向不明。单票不超过总资金 6%，优先强势主线、回踩企稳再介入。"}
 
 
 def _mark_countertrend_daytrade(items: list[dict[str, Any]]) -> int:
@@ -808,7 +822,10 @@ def _mark_countertrend_daytrade(items: list[dict[str, Any]]) -> int:
     return marked
 
 
-def _rerank_smart_pool_intraday(items: list[dict[str, Any]]) -> None:
+def _rerank_smart_pool_intraday(
+    items: list[dict[str, Any]],
+    fresh_symbols: set[str] | None = None,
+) -> None:
     """在强结构候选中叠加实时量价，盘中动态重排但不改写日 K 结构分。"""
     if not items:
         return
@@ -822,8 +839,10 @@ def _rerank_smart_pool_intraday(items: list[dict[str, Any]]) -> None:
             return default
 
     ranked_amounts = sorted(
-        (number(item.get("amount")), str(item.get("symbol") or item.get("code") or ""))
+        (number(item.get("amount")), str(item.get("symbol") or item.get("code") or "").zfill(6))
         for item in items
+        if fresh_symbols is None
+        or str(item.get("symbol") or item.get("code") or "").zfill(6) in fresh_symbols
         if number(item.get("amount")) > 0
     )
     amount_percentiles = {
@@ -832,7 +851,8 @@ def _rerank_smart_pool_intraday(items: list[dict[str, Any]]) -> None:
     } if ranked_amounts else {}
 
     for item in items:
-        symbol = str(item.get("symbol") or item.get("code") or "")
+        symbol = str(item.get("symbol") or item.get("code") or "").zfill(6)
+        has_fresh_quote = fresh_symbols is None or symbol in fresh_symbols
         amount_activity = amount_percentiles.get(symbol, 0.0)
         volume_ratio = number(item.get("volume_ratio"))
         if volume_ratio > 0:
@@ -841,7 +861,6 @@ def _rerank_smart_pool_intraday(items: list[dict[str, Any]]) -> None:
         else:
             activity = amount_activity
         pct_chg = number(item.get("pct_chg"))
-        intraday_score = intraday_strength_score(pct_chg, activity)
         structure_score = number(
             item.get("smart_score") or item.get("score") or item.get("quant_score")
         )
@@ -849,16 +868,22 @@ def _rerank_smart_pool_intraday(items: list[dict[str, Any]]) -> None:
             100.0,
             structure_score + number(item.get("confluence_bonus")),
         )
+        intraday_score = (
+            intraday_strength_score(pct_chg, activity)
+            if has_fresh_quote
+            else None
+        )
+        # 行情缺失的票按「盘中中性 50」参与混合，而不是退回结构原分：两者刻度必须一致。
+        # 直接用结构原分排序会让未覆盖的票凭空高出约 4 分（平盘票混合后≈0.78S+11），
+        # 等于把我们最不了解的股票系统性顶到榜首。
         realtime_rank_score = blend_intraday_score(
             structure_with_confluence,
-            intraday_score,
-            # 0.22→0.40:用户要求时效性优先——盘中爆发直通车的票要有真实机会冲进最终名单,
-            # 旧权重下结构榜常驻股几乎不可撼动。0.40 是 blend 函数允许的上限。
-            intraday_weight=0.40,
+            intraday_score if intraday_score is not None else 50.0,
+            intraday_weight=SMART_POOL_INTRADAY_WEIGHT,
         )
         item["intraday_strength_score"] = intraday_score
         item["realtime_rank_score"] = realtime_rank_score
-        item["intraday_activity_percentile"] = round(activity, 1)
+        item["intraday_activity_percentile"] = round(activity, 1) if has_fresh_quote else None
         reasons = [
             str(reason)
             for reason in (item.get("reasons") or [])
@@ -866,10 +891,13 @@ def _rerank_smart_pool_intraday(items: list[dict[str, Any]]) -> None:
             and not str(reason).startswith("盘中动态分")
             and not str(reason).startswith("盘中强度 ")
         ]
-        reasons.insert(
-            0,
-            f"盘中动态分 {realtime_rank_score:.1f}（涨跌 {pct_chg:+.2f}%·量能活跃 {activity:.0f}）",
-        )
+        if has_fresh_quote:
+            reasons.insert(
+                0,
+                f"盘中动态分 {realtime_rank_score:.1f}（涨跌 {pct_chg:+.2f}%·量能活跃 {activity:.0f}）",
+            )
+        else:
+            reasons.insert(0, "实时行情未覆盖，盘中项按中性计入，主要看结构分")
         item["reasons"] = reasons[:8]
 
     items.sort(
@@ -905,7 +933,7 @@ def _merge_intraday_quality(
         signal_status = str(signal.get("status") or "")
         pct = float(item.get("pct_chg") or 0)
         distance_to_limit = _stock_limit_percent(symbol) - pct
-        # 涨停/近板不再拦截压底(旧逻辑 -100 分沉底):用户要求榜单必须呈现当下最强的票,
+        # 涨停/近板不拦截压底(旧逻辑 -100 分沉底):用户要求榜单必须呈现当下最强的票,
         # 今天封板买不进,明天后天仍是跟踪对象。改为醒目标注 + 不加不减,
         # 由盘中动态分决定名次;买入难度通过标签提示,判断交给用户。
         near_limit = bool(item.get("limit_up")) or distance_to_limit <= 1.5
@@ -990,8 +1018,8 @@ def _merge_intraday_quality(
         "candidate_count": int(overlay.get("candidate_count") or 0),
     }
     data["ranking_basis"] = (
-        "最近完整日K筛结构底池 + 盘中爆发直通车(今日涨幅≥4%且实时成交≥2亿直接入候选),"
-        "盘中动态分(权重0.40)重排最终名单;涨停/近板不再拦截,醒目标注买入难度后照常上榜。"
+        "最近完整日K筛结构底池；盘中爆发仅允许结构质量前10%、今日涨幅≥4%且实时成交≥2亿的股票补入候选；"
+        "盘中动态分权重22%重排最终名单；涨停/近板不拦截，醒目标注买入难度后照常上榜。"
     )
     basis = data.get("list_basis")
     if isinstance(basis, dict):
@@ -1054,6 +1082,28 @@ def _finalize_intraday_quality(data: dict[str, Any], target: int) -> None:
             or seen.add(symbol)
         )
     ][:5]
+    industry_counts: dict[str, int] = {}
+    for item in kept:
+        industry = str(item.get("industry") or item.get("board") or "").strip()
+        if industry and industry not in {"A股", "行业待识别", "其他", "-"}:
+            industry_counts[industry] = industry_counts.get(industry, 0) + 1
+    top_industry, top_count = max(industry_counts.items(), key=lambda pair: pair[1], default=("", 0))
+    top_share = round(top_count / len(kept), 4) if kept else 0.0
+    # 阈值走占比不走绝对条数：名单可以是 5~20 只，写死「≥4 只」在 20 只名单里等于 20%，
+    # 天天告警就没人看了。≥30% 且至少 3 只才算真集中。
+    concentration_warning = bool(len(kept) >= 5 and top_count >= 3 and top_share >= 0.3)
+    data["industry_concentration"] = {
+        "top_industry": top_industry or None,
+        "top_count": top_count,
+        "top_share": top_share,
+        "warning": concentration_warning,
+        "note": (
+            f"推荐名单 {len(kept)} 只里 {top_industry} 占 {top_count} 只（{top_share:.0%}），"
+            "个股数量不等于风险分散；同一行业建议合并控制仓位。"
+            if top_industry and concentration_warning
+            else ""
+        ),
+    }
 
 
 def _update_smart_pool_list_basis(data: dict[str, Any]) -> None:
@@ -1103,6 +1153,7 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
     )
     items = deepcopy(structure_candidates or data.get("items") or [])
     data["intraday_candidate_count"] = len(items)
+    realtime_quote_total = len(items)
     # ②a 环境仓位闸门：用当前全市场快照算环境，缓存命中的旧池也会拿到当下的仓位建议。
     # 环境全市场同值，45s 缓存一次，避免每次 smart-pool 请求都重算 market_context 拖慢秒读。
     gate: dict[str, Any] = _cache_get("env_position_gate", 45) or {}
@@ -1119,10 +1170,19 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
         [item.get("symbol") or item.get("code") for item in items],
         allow_snapshot_fallback=False,
     )
-    quote_updated_at = None
+    quote_updated_times: list[str] = []
+    fresh_symbols: set[str] = set()
     for item in items:
         symbol = str(item.get("symbol") or item.get("code") or "").zfill(6)
         quote = quotes.get(symbol)
+        quote_ok = bool(
+            quote
+            and (quote.get("price") is not None or quote.get("close") is not None)
+            and (quote.get("change_percent") is not None or quote.get("pct_chg") is not None)
+        )
+        item["realtime_quote_ok"] = quote_ok
+        if quote_ok:
+            fresh_symbols.add(symbol)
         _apply_realtime_quote(item, quote)
         # 涨停标记跟着实时涨跌幅走：缓存命中时价格会刷新，扫描那一刻的旧标记会撒谎。
         if item.get("pct_chg") is not None:
@@ -1152,17 +1212,26 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
                 f"实时涨跌幅 {quote['change_percent']:+.2f}%" if str(reason).startswith("实时涨跌幅 ") else reason
                 for reason in item["reasons"]
             ]
-        if quote and quote.get("updated_at"):
-            quote_updated_at = quote["updated_at"]
+        if quote_ok and quote and quote.get("updated_at"):
+            quote_updated_times.append(str(quote["updated_at"]))
         # ②a 把环境仓位闸门写进每票交易计划，理由卡直接可读。
         if gate:
             item["env_position"] = {"label": gate.get("label"), "coefficient": gate.get("coefficient")}
             if isinstance(item.get("trade_plan"), dict):
                 item["trade_plan"]["env_position"] = gate.get("label")
                 item["trade_plan"]["env_note"] = gate.get("note")
-    _rerank_smart_pool_intraday(items)
+    _rerank_smart_pool_intraday(items, fresh_symbols=fresh_symbols)
     data["items"] = items
     await _apply_intraday_quality(data)
+    if float(gate.get("coefficient") or 0) <= 0:
+        # 环境数据缺失时不给「可入场」绿灯。radar_signal.actionable 也要一起熄，
+        # 否则前端理由卡仍会读到 True，两处状态打架。
+        for item in data.get("items") or []:
+            item["timing_actionable"] = False
+            if isinstance(item.get("radar_signal"), dict):
+                item["radar_signal"]["actionable"] = False
+            if item.get("timing_status") == "confirmed":
+                item["timing_label"] = "环境数据不足·暂停入场"
     _finalize_intraday_quality(
         data,
         int(data.get("requested_limit") or len(items) or SMART_POOL_MAX_ITEMS),
@@ -1174,11 +1243,33 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
         data["daytrade_count"] = _mark_countertrend_daytrade(items)
     except Exception:
         data["daytrade_count"] = 0
+    quote_updated_at = max(quote_updated_times, default="")
+    quote_total = realtime_quote_total
+    quote_count = len(fresh_symbols)
+    phase = trading_phase()
+    active_phase = phase in {"auction", "opening_wait", "morning", "afternoon", "closing_auction"}
+    if quote_count == 0:
+        realtime_status = "unavailable"
+    elif quote_count < quote_total:
+        realtime_status = "partial"
+    elif active_phase:
+        realtime_status = "live"
+    else:
+        realtime_status = "snapshot"
+    data["realtime_status"] = realtime_status
+    data["realtime_market_phase"] = phase
+    data["realtime_quote_count"] = quote_count
+    data["realtime_quote_total"] = quote_total
+    data["realtime_coverage"] = round(quote_count / quote_total, 4) if quote_total else 0.0
     if quote_updated_at:
         data["updated_at"] = quote_updated_at
         data["quote_updated_at"] = quote_updated_at
         data["realtime_as_of"] = quote_updated_at
-        data["price_source"] = "实时行情"
+        data["price_source"] = "实时行情" if active_phase else "最近行情快照"
+    else:
+        data["realtime_as_of"] = None
+        data["quote_updated_at"] = None
+        data["price_source"] = "最近完整日K（实时行情不可用）"
     data["position_gate"] = gate
     data["items"] = items
     enriched = dict(response)
@@ -1436,7 +1527,7 @@ async def _compute_lite_smart_pool_unlocked(
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     cache_key = (
-        f"smart-pool:factor-v13-top20-uncapped:{daily_as_of}:"
+        f"smart-pool:factor-v15-top20-hotlimit-ok:{daily_as_of}:"
         f"{strategy}:{safe_limit}:{safe_universe}"
     )
     _smart_pool_task_update(

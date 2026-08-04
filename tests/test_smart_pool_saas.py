@@ -112,6 +112,36 @@ def test_intraday_rerank_promotes_strong_live_candidate_without_changing_structu
     assert items[0]["reasons"][0].startswith("盘中动态分")
 
 
+def test_partial_realtime_coverage_does_not_rank_missing_quotes_as_fresh():
+    items = [
+        {
+            "symbol": "600001",
+            "smart_score": 80.0,
+            "pct_chg": 1.5,
+            "amount": 300_000_000,
+            "reasons": [],
+        },
+        {
+            "symbol": "600002",
+            "smart_score": 70.0,
+            "pct_chg": 9.0,
+            "amount": 2_000_000_000,
+            "reasons": [],
+        },
+    ]
+
+    lite_main._rerank_smart_pool_intraday(items, fresh_symbols={"600001"})
+
+    fresh = next(item for item in items if item["symbol"] == "600001")
+    stale = next(item for item in items if item["symbol"] == "600002")
+    assert stale["intraday_strength_score"] is None
+    # 未覆盖的票按盘中中性 50 混合，和已覆盖的票同刻度，不能靠"退回结构原分"占便宜。
+    assert stale["realtime_rank_score"] == round(70.0 * 0.78 + 50.0 * 0.22, 2)
+    assert stale["reasons"][0] == "实时行情未覆盖，盘中项按中性计入，主要看结构分"
+    assert fresh["intraday_strength_score"] is not None
+    assert items[0]["symbol"] == "600001"
+
+
 def test_realtime_enrichment_reranks_full_structure_candidate_pool():
     candidates = [
         {
@@ -165,6 +195,58 @@ def test_realtime_enrichment_reranks_full_structure_candidate_pool():
     assert len(data["items"]) == 10
     assert promoted_symbol in {item["symbol"] for item in data["items"]}
     assert data["realtime_as_of"] == "2026/07/30 10:30:00"
+    assert data["realtime_quote_count"] == 11
+    assert data["realtime_quote_total"] == 11
+    assert data["realtime_coverage"] == 1.0
+
+
+def test_realtime_enrichment_marks_missing_quotes_and_clears_stale_timestamp():
+    response = {
+        "success": True,
+        "data": {
+            "requested_limit": 10,
+            "daily_as_of": "2026-07-29",
+            "realtime_as_of": "2026/07/29 14:30:00",
+            "items": [
+                {"symbol": "600001", "smart_score": 80.0, "score": 80.0, "pct_chg": 8.0, "amount": 9e8, "reasons": []},
+                {"symbol": "600002", "smart_score": 78.0, "score": 78.0, "pct_chg": 6.0, "amount": 8e8, "reasons": []},
+            ],
+        },
+    }
+
+    async def no_quotes(_symbols, **_kwargs):
+        return {}
+
+    async def no_intraday_overlay(_data):
+        return None
+
+    gate = lite_main._env_position_gate(None)
+    with patch.object(lite_main, "_cache_get", return_value=gate), \
+         patch.object(lite_main, "_realtime_quotes", new=no_quotes), \
+         patch.object(lite_main, "_apply_intraday_quality", new=no_intraday_overlay), \
+         patch.object(lite_main, "_update_smart_pool_list_basis", new=lambda _data: None):
+        result = asyncio.run(lite_main._enrich_smart_pool_realtime(response))
+
+    data = result["data"]
+    assert data["realtime_status"] == "unavailable"
+    assert data["realtime_quote_count"] == 0
+    assert data["realtime_quote_total"] == 2
+    assert data["realtime_coverage"] == 0.0
+    assert data["realtime_as_of"] is None
+    assert data["price_source"] == "最近完整日K（实时行情不可用）"
+    assert all(item["intraday_strength_score"] is None for item in data["items"])
+
+
+def test_environment_gate_never_treats_missing_market_data_as_neutral():
+    missing = lite_main._env_position_gate(None)
+    cold = lite_main._env_position_gate({"state": "偏冷", "temp": 21})
+    neutral = lite_main._env_position_gate({"state": "中性", "temp": 50})
+    warm = lite_main._env_position_gate({"state": "偏暖", "temp": 76})
+
+    assert missing["coefficient"] == 0.0
+    assert missing["max_single_position_pct"] == 0
+    assert "暂停入场" in missing["label"]
+    assert [cold["max_single_position_pct"], neutral["max_single_position_pct"], warm["max_single_position_pct"]] == [3, 6, 10]
 
 
 def test_manual_generation_bypasses_old_pool_cache():
@@ -265,7 +347,11 @@ def test_intraday_entry_confirmation_promotes_lower_structure_candidate():
     assert data["timing_actionable_count"] == 1
 
 
-def test_intraday_timing_gate_blocks_near_limit_without_misclassifying_star_market():
+def test_near_limit_stays_on_list_and_star_market_is_not_misclassified():
+    """涨停/近板是强势证据，标注买入难度后照常上榜，不做剔除。
+
+    688 的涨跌幅上限是 20%，涨 9% 离板还远——板别判错会把正常上涨误标成近板。
+    """
     data = {
         "items": [
             {"symbol": "600001", "name": "主板近涨停", "smart_score": 82.0, "score": 82.0, "pct_chg": 9.0},
@@ -277,12 +363,16 @@ def test_intraday_timing_gate_blocks_near_limit_without_misclassifying_star_mark
     lite_main._merge_intraday_quality(data, overlay)
     lite_main._finalize_intraday_quality(data, 10)
 
-    assert [item["symbol"] for item in data["items"]] == ["688001"]
-    assert data["timing_excluded_count"] == 1
-    assert data["timing_excluded_samples"][0]["symbol"] == "600001"
+    by_symbol = {item["symbol"]: item for item in data["items"]}
+    assert set(by_symbol) == {"600001", "688001"}
+    assert by_symbol["600001"]["timing_status"] == "hot_limit"
+    assert by_symbol["600001"]["timing_adjustment"] == 0.0
+    assert by_symbol["600001"]["timing_actionable"] is False
+    assert by_symbol["688001"]["timing_status"] == "unconfirmed"
+    assert data["timing_excluded_count"] == 0
 
 
-def test_one_click_recommendations_are_hard_capped_at_ten():
+def test_one_click_recommendations_are_hard_capped_at_pool_max():
     data = {
         "items": [
             {
@@ -292,7 +382,7 @@ def test_one_click_recommendations_are_hard_capped_at_ten():
                 "score": 90.0 - i,
                 "pct_chg": 1.0,
             }
-            for i in range(12)
+            for i in range(25)
         ]
     }
 
@@ -300,11 +390,37 @@ def test_one_click_recommendations_are_hard_capped_at_ten():
         data,
         {"status": "waiting", "is_current": False, "signals": {}},
     )
-    lite_main._finalize_intraday_quality(data, 20)
+    lite_main._finalize_intraday_quality(data, 30)
+
+    assert len(data["items"]) == lite_main.SMART_POOL_MAX_ITEMS
+    assert data["requested_limit"] == lite_main.SMART_POOL_MAX_ITEMS
+    assert [item["rank"] for item in data["items"]] == list(
+        range(1, lite_main.SMART_POOL_MAX_ITEMS + 1)
+    )
+
+
+def test_final_list_reports_industry_concentration_without_hiding_candidates():
+    data = {
+        "items": [
+            {
+                "symbol": f"600{i:03d}",
+                "name": f"候选{i}",
+                "industry": "半导体" if i < 4 else f"行业{i}",
+                "smart_score": 90.0 - i,
+                "score": 90.0 - i,
+                "pct_chg": 1.0,
+            }
+            for i in range(10)
+        ]
+    }
+
+    lite_main._merge_intraday_quality(data, {"status": "waiting", "is_current": False, "signals": {}})
+    lite_main._finalize_intraday_quality(data, 10)
 
     assert len(data["items"]) == 10
-    assert data["requested_limit"] == 10
-    assert [item["rank"] for item in data["items"]] == list(range(1, 11))
+    assert data["industry_concentration"]["warning"] is True
+    assert data["industry_concentration"]["top_industry"] == "半导体"
+    assert data["industry_concentration"]["top_count"] == 4
 
 
 def _smart_pool_reads(mock) -> list:

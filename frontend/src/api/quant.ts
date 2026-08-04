@@ -74,10 +74,10 @@ export interface QuantSmartPoolItem {
   /** 原日K结构分保留不变；盘中动态分和时机分只用于当前推荐排序 */
   quality_score?: number
   realtime_rank_score?: number
-  intraday_strength_score?: number
-  intraday_activity_percentile?: number
+  intraday_strength_score?: number | null
+  intraday_activity_percentile?: number | null
   timing_score?: number | null
-  timing_status?: 'confirmed' | 'watch' | 'unconfirmed' | 'blocked' | 'pending'
+  timing_status?: 'confirmed' | 'watch' | 'unconfirmed' | 'blocked' | 'hot_limit' | 'pending'
   timing_label?: string
   timing_adjustment?: number
   timing_actionable?: boolean
@@ -153,6 +153,11 @@ export interface QuantSmartPoolResult {
   analyzed?: number
   daily_as_of?: string
   realtime_as_of?: string
+  realtime_status?: 'live' | 'partial' | 'snapshot' | 'unavailable'
+  realtime_market_phase?: string
+  realtime_quote_count?: number
+  realtime_quote_total?: number
+  realtime_coverage?: number
   ranking_basis?: string
   force_refreshed?: boolean
   requested_limit?: number
@@ -165,6 +170,7 @@ export interface QuantSmartPoolResult {
     state?: string
     temp?: number
     coefficient?: number
+    max_single_position_pct?: number
     label?: string
     note?: string
   }
@@ -190,6 +196,13 @@ export interface QuantSmartPoolResult {
   timing_actionable_count?: number
   timing_excluded_count?: number
   timing_excluded_samples?: Array<{ name?: string; symbol?: string; reason?: string }>
+  industry_concentration?: {
+    top_industry?: string | null
+    top_count?: number
+    top_share?: number
+    warning?: boolean
+    note?: string
+  }
   timing_gate?: {
     status?: string
     is_current?: boolean
@@ -427,6 +440,11 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     ai_factor: raw?.ai_factor,
     daily_as_of: raw?.daily_as_of,
     realtime_as_of: raw?.realtime_as_of,
+    realtime_status: raw?.realtime_status,
+    realtime_market_phase: raw?.realtime_market_phase,
+    realtime_quote_count: raw?.realtime_quote_count,
+    realtime_quote_total: raw?.realtime_quote_total,
+    realtime_coverage: raw?.realtime_coverage,
     ranking_basis: raw?.ranking_basis,
     force_refreshed: raw?.force_refreshed,
     requested_limit: raw?.requested_limit,
@@ -443,6 +461,7 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     timing_actionable_count: raw?.timing_actionable_count,
     timing_excluded_count: raw?.timing_excluded_count,
     timing_excluded_samples: raw?.timing_excluded_samples,
+    industry_concentration: raw?.industry_concentration,
     timing_gate: raw?.timing_gate,
     items,
     errors: raw?.errors || {}

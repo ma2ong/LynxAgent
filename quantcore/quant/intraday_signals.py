@@ -433,6 +433,15 @@ class IntradaySignalEngine:
                 if prior_status == status and prior_state.get("valid_until")
                 else (current + timedelta(minutes=valid_minutes)).isoformat(timespec="seconds")
             )
+            actionable = False
+            if status == "entry" and continuous:
+                try:
+                    action_deadline = datetime.fromisoformat(valid_until)
+                    if action_deadline.tzinfo is None:
+                        action_deadline = action_deadline.replace(tzinfo=_TZ)
+                    actionable = current <= action_deadline
+                except ValueError:
+                    actionable = False
 
             reasons = []
             if breakout60:
@@ -489,7 +498,7 @@ class IntradaySignalEngine:
                 "quote_source": quote.get("quote_source") or "",
                 "calibrated_probability": None,
                 "signal_mode": "live",
-                "actionable": status == "entry" and continuous,
+                "actionable": actionable,
             }
             self.states[symbol] = item
 

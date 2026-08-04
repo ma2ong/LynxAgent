@@ -71,7 +71,7 @@
                   {{ showPoolDesc ? '收起说明' : '选股逻辑' }}
                 </a>
               </h2>
-              <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），再按盘中实时涨跌、成交活跃度、量比、突破与板块共振动态重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜，最终输出当前最优名单。结构分保留不变，综合分只用于盘中排名。</p>
+              <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），盘中爆发只允许结构质量前 10% 的股票晋级，再按实时量价与雷达时机重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜，最终输出当前最优名单。只有绿色“可入场”才代表量价二次确认。</p>
             </div>
             <div class="smart-inline-settings">
               <label class="strategy-pick">
@@ -160,15 +160,20 @@
                 <el-tag
                   v-if="smartPoolResult.timing_excluded_count"
                   size="small" type="danger" effect="plain"
-                  title="已涨停或距离涨停过近，已从最终推荐中剔除"
-                >追高拦截 {{ smartPoolResult.timing_excluded_count }} 只</el-tag>
+                  title="命中重度风险或不可追入，已从最终推荐中剔除"
+                >风控剔除 {{ smartPoolResult.timing_excluded_count }} 只</el-tag>
                 <el-tag
-                  v-if="smartPoolResult.realtime_as_of"
+                  v-if="smartPoolResult.industry_concentration?.warning"
+                  size="small" type="warning" effect="plain"
+                  :title="smartPoolResult.industry_concentration.note"
+                >行业集中 {{ smartPoolResult.industry_concentration.top_industry }} {{ smartPoolResult.industry_concentration.top_count }}只</el-tag>
+                <el-tag
+                  v-if="realtimeBadge"
                   size="small"
-                  type="success"
+                  :type="realtimeBadge.type"
                   effect="plain"
-                  title="交易时段每30秒按最新量价自动刷新"
-                >实时 {{ smartPoolResult.realtime_as_of }}</el-tag>
+                  :title="realtimeBadge.title"
+                >{{ realtimeBadge.text }}</el-tag>
                 <el-tag
                   v-if="smartPoolResult.intraday_candidate_count"
                   size="small"
@@ -1166,10 +1171,26 @@ const BASKET_SIM = [
   { k: 20, mean: '+1.75pp', median: '+1.60pp', beat: '77.8%', tail: '91.7%' },
 ]
 const riskLocked = computed(() => ['危险', '极危'].includes(riskAlert.value?.level || ''))
+const realtimeBadge = computed(() => {
+  const result = smartPoolResult.value
+  if (!result?.realtime_status) return null
+  const coverage = `${result.realtime_quote_count || 0}/${result.realtime_quote_total || 0}`
+  if (result.realtime_status === 'live') {
+    return { type: 'success' as const, text: `实时 ${result.realtime_as_of || ''}`, title: '交易时段每30秒按最新量价自动刷新' }
+  }
+  if (result.realtime_status === 'partial') {
+    return { type: 'warning' as const, text: `实时覆盖 ${coverage}`, title: '部分候选行情未返回；未覆盖股票仅按结构分排序，不使用旧行情冒充实时数据' }
+  }
+  if (result.realtime_status === 'snapshot') {
+    return { type: 'info' as const, text: `行情快照 ${result.realtime_as_of || ''}`, title: '当前不在连续交易时段，展示最近行情快照与收盘复盘状态' }
+  }
+  return { type: 'danger' as const, text: '实时行情不可用', title: '当前仅展示结构候选，不提供实时买入判断' }
+})
 const timingTagType = (row: QuantSmartPoolItem) => {
   if (row.timing_status === 'blocked') return 'danger'
-  if (row.timing_actionable || row.timing_status === 'confirmed') return 'success'
-  if (row.timing_status === 'watch') return 'warning'
+  if (row.timing_actionable) return 'success'
+  // hot_limit（涨停/近板）照常上榜，用橙色提示买入难度，不当成拦截。
+  if (['confirmed', 'watch', 'hot_limit'].includes(row.timing_status || '')) return 'warning'
   return 'info'
 }
 // ③b 危险市况下不再整池锁死：后端标了 daytrade_ok 的逆势票仍给买入计划，但限定 T+1。

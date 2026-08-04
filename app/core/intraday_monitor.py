@@ -331,6 +331,46 @@ async def payload(
     return current
 
 
+def _timing_snapshot_is_fresh(current: dict[str, Any], now: datetime) -> bool:
+    """Only live snapshots inside the scan window need a strict age check.
+
+    Closing-review/archive snapshots are intentionally kept for the rest of the
+    day and are already non-actionable. A live snapshot that stopped updating
+    must not keep an entry signal green after its scanner failed.
+    """
+    today = now.astimezone(_TZ).strftime("%Y-%m-%d")
+    if current.get("trade_date") != today:
+        return False
+    if current.get("review_mode") in {"intraday_archive", "close_review"}:
+        return True
+    if not is_scan_window(now):
+        return True
+    try:
+        as_of = datetime.fromisoformat(str(current.get("as_of") or ""))
+        if as_of.tzinfo is None:
+            as_of = as_of.replace(tzinfo=_TZ)
+        age = (now.astimezone(_TZ) - as_of.astimezone(_TZ)).total_seconds()
+    except ValueError:
+        return False
+    return age <= max(60.0, scan_interval_seconds() * 4)
+
+
+def _expire_overlay_actionability(signal: dict[str, Any], now: datetime) -> dict[str, Any]:
+    current = dict(signal)
+    if not current.get("actionable"):
+        return current
+    try:
+        valid_until = datetime.fromisoformat(str(current.get("valid_until") or ""))
+        if valid_until.tzinfo is None:
+            valid_until = valid_until.replace(tzinfo=_TZ)
+    except ValueError:
+        current["actionable"] = False
+        return current
+    if now.astimezone(_TZ) > valid_until.astimezone(_TZ):
+        current["actionable"] = False
+    return current
+
+
 async def timing_overlay(symbols: list[str]) -> dict[str, Any]:
     """Return the monitor's full current-day signal set for smart-pool reranking.
 
@@ -344,17 +384,16 @@ async def timing_overlay(symbols: list[str]) -> dict[str, Any]:
         if str(symbol or "").strip()
     }
     now = datetime.now(_TZ)
-    today = now.strftime("%Y-%m-%d")
     current = dict(_latest_full)
-    is_current = current.get("trade_date") == today
+    is_current = _timing_snapshot_is_fresh(current, now)
     signal_map: dict[str, dict[str, Any]] = {}
     if is_current:
         for raw in current.get("items") or []:
             symbol = str(raw.get("symbol") or "").strip().zfill(6)
             if symbol in wanted:
-                signal_map[symbol] = dict(raw)
+                signal_map[symbol] = _expire_overlay_actionability(raw, now)
     return {
-        "status": current.get("status") or "waiting",
+        "status": (current.get("status") or "waiting") if is_current else "stale",
         "as_of": current.get("as_of"),
         "trade_date": current.get("trade_date"),
         "phase": current.get("phase") or trading_phase(now),

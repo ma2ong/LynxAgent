@@ -52,23 +52,36 @@ def factor_frame(df: pd.DataFrame) -> pd.DataFrame:
 
     out = pd.DataFrame(index=d.index)
     out["trend"] = _clip(50 + (close / ma20 - 1) * 250 + (ma20 / ma60 - 1) * 180)
-    out["momentum"] = _clip(50 + d["momentum_20"].fillna(0) * 180 + d["momentum_60"].fillna(0) * 120)
-    out["rsi"] = _clip(100 - (d["rsi14"].fillna(50.0) - 55).abs() * 2.2)
+    out["momentum"] = _clip(
+        50
+        + d["momentum_5"].fillna(0) * 110
+        + d["momentum_10"].fillna(0) * 95
+        + d["momentum_20"].fillna(0) * 80
+        + d["momentum_60"].fillna(0) * 45
+    )
+    out["rsi"] = _clip(100 - (d["rsi14"].fillna(50.0) - 60).abs() * 1.6)
     out["risk_control"] = _clip(100 - d["volatility20"].fillna(0.35) * 120
                                 - d["drawdown"].fillna(0).abs() * 80)
-    liq = _clip(40 + amount_ma20.fillna(0) / 10_000_000 * 8)
-    out["liquidity"] = liq.where(amount_ma20.fillna(0) != 0, 50.0)
+    amount_base = amount_ma20.fillna(0)
+    liq = _clip(35 + np.log10(amount_base.clip(lower=1.0) / 2e7) * 28)
+    out["liquidity"] = liq.where(amount_base > 0, 50.0)
     out["macd"] = _clip(50 + (d["macd_line"].fillna(0) - d["macd_signal"].fillna(0)) * 2000)
 
     bb_u = d["bb_upper"].fillna(close * 1.05)
     bb_l = d["bb_lower"].fillna(close * 0.95)
     bb_pos = (close - bb_l) / (bb_u - bb_l).replace(0, np.nan)
-    out["bollinger"] = _clip(100 - (bb_pos - 0.5).abs() * 120).fillna(50.0)
+    bb_score = pd.Series(100.0, index=d.index)
+    bb_score = bb_score.where(bb_pos >= 0.35, 100 - (0.35 - bb_pos) * 160)
+    bb_score = bb_score.where(bb_pos <= 0.9, 100 - (bb_pos - 0.9) * 90)
+    out["bollinger"] = _clip(bb_score).fillna(50.0)
 
-    cf = _clip(50 + (d["ret"].fillna(0) * amount_ma20.fillna(0) / 1e8) * 5)
-    out["capital_flow"] = cf.where(amount_ma20.fillna(0) != 0, 50.0)
+    amount = d["amount"].fillna(0) if "amount" in d.columns else pd.Series(0.0, index=d.index)
+    signed_amount_5 = (np.sign(d["ret"].fillna(0)) * amount).rolling(5).sum()
+    total_amount_5 = amount.rolling(5).sum()
+    cf = _clip(50 + signed_amount_5 / total_amount_5.replace(0, np.nan) * 80)
+    out["capital_flow"] = cf.where(total_amount_5 > 0, 50.0).fillna(50.0)
 
-    out["composite"] = _clip(sum(out[k] * w for k, w in _WEIGHTS.items()))
+    out["composite"] = _clip(sum(out[k] * w if k in out else 50.0 * w for k, w in _WEIGHTS.items()))
     out["close"] = close
     out["amount"] = d["amount"] if "amount" in d.columns else np.nan
     out["date"] = d["date"].astype(str) if "date" in d.columns else d.index.astype(str)

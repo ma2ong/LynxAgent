@@ -186,7 +186,8 @@ def test_recommendations_are_limited_to_top_ten(monkeypatch):
 
 
 def test_smart_pool_overlay_can_read_full_signal_set_behind_public_top_ten(monkeypatch):
-    today = datetime.now(TZ).strftime("%Y-%m-%d")
+    now = datetime.now(TZ)
+    today = now.strftime("%Y-%m-%d")
     full_items = [
         {"symbol": str(index).zfill(6), "status": "entry", "score": 100 - index}
         for index in range(15)
@@ -197,6 +198,7 @@ def test_smart_pool_overlay_can_read_full_signal_set_behind_public_top_ten(monke
         {
             "status": "live",
             "trade_date": today,
+            "as_of": now.isoformat(timespec="seconds"),
             "phase": "morning",
             "items": full_items,
         },
@@ -209,3 +211,42 @@ def test_smart_pool_overlay_can_read_full_signal_set_behind_public_top_ten(monke
     assert result["is_current"] is True
     assert result["candidate_count"] == 15
     assert len(result["signals"]) == 15
+
+
+def test_live_timing_snapshot_expires_when_scanner_stops():
+    now = datetime(2026, 7, 29, 10, 30, tzinfo=TZ)
+    current = {
+        "status": "live",
+        "trade_date": "2026-07-29",
+        "as_of": (now - timedelta(minutes=3)).isoformat(timespec="seconds"),
+        "phase": "morning",
+    }
+
+    assert intraday_monitor._timing_snapshot_is_fresh(current, now) is False
+
+
+def test_entry_actionability_expires_at_valid_until():
+    now = datetime(2026, 7, 29, 10, 30, tzinfo=TZ)
+    signal = {
+        "status": "entry",
+        "actionable": True,
+        "valid_until": (now - timedelta(seconds=1)).isoformat(timespec="seconds"),
+    }
+
+    result = intraday_monitor._expire_overlay_actionability(signal, now)
+
+    assert result["status"] == "entry"
+    assert result["actionable"] is False
+
+
+def test_persistent_entry_is_no_longer_actionable_after_original_window():
+    engine = IntradaySignalEngine(baselines=_baseline())
+    first_at = datetime(2026, 7, 29, 10, 0, tzinfo=TZ)
+    engine.scan(_quote(price=10.55, pct=5.5, volume_ratio=3.2, amount=35_000_000), first_at)
+    later = engine.scan(
+        _quote(price=10.60, pct=6.0, volume_ratio=3.2, amount=80_000_000),
+        first_at + timedelta(minutes=21),
+    )
+
+    assert later["items"][0]["status"] == "entry"
+    assert later["items"][0]["actionable"] is False

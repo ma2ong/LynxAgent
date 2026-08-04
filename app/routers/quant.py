@@ -118,7 +118,14 @@ async def quant_data_sources():
 @router.get("/smart-pool")
 async def quant_smart_pool(limit: int = 20, universe_limit: int = 300):
     try:
-        return await run_scan("smart_pool", limit=limit, universe_limit=universe_limit)
+        # 原始量化接口只返回结构池，不应抢先写入用户最终看到的 smart 留痕；
+        # 最终留痕由 lite 层完成七不买、时机和可买性过滤后统一记录。
+        return await run_scan(
+            "smart_pool",
+            limit=max(1, min(limit, 20)),
+            universe_limit=universe_limit,
+            record=False,
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -757,4 +764,3 @@ async def quant_red_flags(symbol: str, user: dict = require_quota("red_flags")):
 
 
 # ---- 加权情绪：个股 / 大盘 / 板块（纯本地，无 LLM，不计费）----
-

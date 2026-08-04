@@ -848,7 +848,9 @@ def _rerank_smart_pool_intraday(items: list[dict[str, Any]]) -> None:
         realtime_rank_score = blend_intraday_score(
             structure_with_confluence,
             intraday_score,
-            intraday_weight=0.22,
+            # 0.22→0.40:用户要求时效性优先——盘中爆发直通车的票要有真实机会冲进前10,
+            # 旧权重下结构榜常驻股几乎不可撼动。0.40 是 blend 函数允许的上限。
+            intraday_weight=0.40,
         )
         item["intraday_strength_score"] = intraday_score
         item["realtime_rank_score"] = realtime_rank_score
@@ -899,16 +901,23 @@ def _merge_intraday_quality(
         signal_status = str(signal.get("status") or "")
         pct = float(item.get("pct_chg") or 0)
         distance_to_limit = _stock_limit_percent(symbol) - pct
-        blocked = bool(item.get("limit_up")) or distance_to_limit <= 1.5 or signal_status == "unbuyable"
+        # 涨停/近板不再拦截压底(旧逻辑 -100 分沉底):用户要求榜单必须呈现当下最强的票,
+        # 今天封板买不进,明天后天仍是跟踪对象。改为醒目标注 + 不加不减,
+        # 由盘中动态分决定名次;买入难度通过标签提示,判断交给用户。
+        near_limit = bool(item.get("limit_up")) or distance_to_limit <= 1.5
 
         timing_status = "pending"
         timing_label = "雷达数据待更新"
         adjustment = 0.0
         actionable = False
-        if blocked:
-            timing_status = "blocked"
-            timing_label = "不可追入"
-            adjustment = -100.0
+        if near_limit:
+            timing_status = "hot_limit"
+            timing_label = "涨停/近板·当日最强(注意买入难度)"
+            adjustment = 0.0
+        elif signal_status == "unbuyable":
+            timing_status = "hot_limit"
+            timing_label = "急拉近板·不宜追(可次日跟踪)"
+            adjustment = 0.0
         elif signal_status == "entry":
             timing_status = "confirmed"
             actionable = bool(signal.get("actionable"))
@@ -939,7 +948,7 @@ def _merge_intraday_quality(
         item["timing_label"] = timing_label
         item["timing_score"] = round(float(signal.get("score") or 0), 1) if signal else None
         item["timing_adjustment"] = adjustment
-        item["timing_actionable"] = actionable and not blocked
+        item["timing_actionable"] = actionable and not near_limit
         item["timing_signal_mode"] = signal.get("signal_mode") if signal else None
         item["timing_reasons"] = [str(reason) for reason in (signal.get("reasons") or []) if reason][:3]
         item["distance_to_limit"] = round(max(0.0, distance_to_limit), 2)
@@ -977,8 +986,8 @@ def _merge_intraday_quality(
         "candidate_count": int(overlay.get("candidate_count") or 0),
     }
     data["ranking_basis"] = (
-        "最近完整日K负责筛出强结构底池，盘中实时涨跌、成交活跃度、量比与雷达时机"
-        "共同动态重排最终前10；涨停或距离涨停过近的标的直接拦截。"
+        "最近完整日K筛结构底池 + 盘中爆发直通车(今日涨幅≥4%且实时成交≥2亿直接入候选),"
+        "盘中动态分(权重0.40)重排最终前10;涨停/近板不再拦截,醒目标注买入难度后照常上榜。"
     )
     basis = data.get("list_basis")
     if isinstance(basis, dict):
@@ -1422,7 +1431,7 @@ async def _compute_lite_smart_pool_unlocked(
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     cache_key = (
-        f"smart-pool:factor-v8-fresh-momentum:{daily_as_of}:"
+        f"smart-pool:factor-v9-heat-breakout:{daily_as_of}:"
         f"{strategy}:{safe_limit}:{safe_universe}"
     )
     _smart_pool_task_update(

@@ -596,7 +596,7 @@ class QuantEngine:
 
         _FACTOR_LABELS = {"trend": "趋势", "momentum": "动量", "macd": "MACD",
                           "bollinger": "布林位置", "capital_flow": "资金流",
-                          "rsi": "RSI", "risk_control": "风控", "liquidity": "流动性",
+                          "rsi": "RSI", "risk_control": "风控", "liquidity": "流动性", "industry_heat": "板块热度",
                           "intraday_strength": "盘中强度"}
 
         def _build_item(meta: Dict[str, object], scored: Dict[str, object]) -> Dict[str, object]:
@@ -688,12 +688,33 @@ class QuantEngine:
             rt_amounts[symbol] = rt_amount
         cutoff = (date.today() - timedelta(days=200)).strftime("%Y-%m-%d")
         db_path = get_local_store().db_path
+        # 板块热度:行业近5日平均涨幅 → 全行业百分位(0-100),随因子进评分
+        industry_heat: Dict[str, float] = {}
+        try:
+            r5 = get_local_store().recent_returns(5)
+            ind_by_symbol = {
+                str(m.get("symbol") or "").zfill(6): str(m.get("industry") or "")
+                for m in pool
+            }
+            ind_rets: Dict[str, List[float]] = {}
+            for sym_r, ret in r5.items():
+                ind = ind_by_symbol.get(str(sym_r).zfill(6))
+                if ind:
+                    ind_rets.setdefault(ind, []).append(float(ret))
+            ind_avg = {ind: sum(v) / len(v) for ind, v in ind_rets.items() if v}
+            ranked_inds = sorted(ind_avg.items(), key=lambda kv: kv[1])
+            n_ind = len(ranked_inds)
+            ind_pct = {ind: (i + 1) / n_ind * 100 for i, (ind, _) in enumerate(ranked_inds)} if n_ind else {}
+            industry_heat = {s: ind_pct.get(ind, 50.0) for s, ind in ind_by_symbol.items() if ind}
+        except Exception:
+            industry_heat = {}
         workers = min(6, max(1, os.cpu_count() or 4))
         chunk_size = max(1, (len(gated_symbols) + workers - 1) // workers)
         payloads = [{
             "db_path": db_path, "cutoff": cutoff, "min_amount": self.SMART_MIN_AMOUNT,
             "symbols": gated_symbols[i:i + chunk_size],
             "rt_amounts": {s: rt_amounts[s] for s in gated_symbols[i:i + chunk_size]},
+            "industry_heat": {s: industry_heat.get(s, 50.0) for s in gated_symbols[i:i + chunk_size]},
         } for i in range(0, len(gated_symbols), chunk_size)]
         scored_rows: List[Dict[str, object]] = []
         try:
@@ -717,6 +738,26 @@ class QuantEngine:
 
         # 仅为最终展示的标的附交易计划：优先本地 K 线算 ATR，无本地数据则按比例兜底。
         final_items = items[:min(len(items), safe_limit + max(0, spare))]
+
+        # —— 盘中爆发直通车 ——
+        # 结构榜之外,今日盘中涨幅居前且实时成交额≥2亿的票直接进候选(带完整结构因子分),
+        # 不等今晚日线落库。用户明确要求时效性:今天爆发的票今天就要能被推荐,
+        # 由 lite 层的盘中动态分决定它们能否冲进最终前10。
+        chosen_syms = {str(it.get("symbol")) for it in final_items}
+        movers = [
+            it for it in items
+            if str(it.get("symbol")) not in chosen_syms
+            and _safe_float(it.get("pct_chg"), 0) >= 4.0
+            and _safe_float(it.get("amount"), 0) >= 2e8
+        ]
+        movers.sort(key=lambda it: -_safe_float(it.get("pct_chg"), 0))
+        for it in movers[:10]:
+            it["intraday_breakout"] = True
+            it["reasons"] = (
+                [f"盘中爆发直通车:今日 {_safe_float(it.get('pct_chg'), 0):+.1f}%,实时成交 {_safe_float(it.get('amount'), 0) / 1e8:.1f}亿"]
+                + list(it.get("reasons") or [])
+            )[:8]
+        final_items = final_items + movers[:10]
         for it in final_items:
             atr = 0.0
             try:
@@ -737,7 +778,7 @@ class QuantEngine:
                 pass
 
         return _json_safe({
-            "source": f"quant-engine-smart-pool-v4-structure-fresh:{pool_source}",
+            "source": f"quant-engine-smart-pool-v5-heat-breakout:{pool_source}",
             "universe_size": len(pool),
             "analyzed": len(items),
             "requested_limit": safe_limit,

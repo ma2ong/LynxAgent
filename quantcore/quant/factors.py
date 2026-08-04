@@ -6,14 +6,18 @@ import pandas as pd
 
 
 _WEIGHTS = {
-    "trend": 0.22,
+    "trend": 0.20,
     "momentum": 0.22,
-    "rsi": 0.12,
-    "risk_control": 0.15,
+    "rsi": 0.09,
+    "risk_control": 0.10,
     "liquidity": 0.10,
     "macd": 0.08,
     "bollinger": 0.06,
     "capital_flow": 0.05,
+    # 板块热度：个股所在行业近5日涨幅的全行业百分位。压低了风控/RSI 两个"偏爱低波动
+    # 老登股"的因子来腾权重——同样结构健康,身处热门行业的票明确压过冷门行业。
+    # 软加权而非硬闸门:竞价模块回测证明过热门板块做准入闸会把资金送进最接近见顶的方向。
+    "industry_heat": 0.10,
 }
 
 # 权重 A/B 实验用的覆盖开关（生产不设此变量，走上面的默认值）。
@@ -242,7 +246,9 @@ def compute_factor_scores(df: pd.DataFrame) -> Dict[str, float]:
 
 
 def composite_score(factors: Dict[str, float]) -> float:
-    score = sum(factors.get(name, 0.0) * weight for name, weight in _WEIGHTS.items())
+    # 缺失因子按中性 50 计而不是 0:individual analyze/回放等路径不产 industry_heat,
+    # 按 0 计会让这些路径的综合分被静默压低 10%。
+    score = sum(factors.get(name, 50.0) * weight for name, weight in _WEIGHTS.items())
     return round(_clip_score(score), 2)
 
 
@@ -272,6 +278,7 @@ def smart_factor_chunk(payload: Dict[str, object]) -> list:
     conn = store._conn()
     min_amount = float(payload["min_amount"])
     rt_amounts: Dict[str, float] = payload.get("rt_amounts") or {}
+    industry_heat: Dict[str, float] = payload.get("industry_heat") or {}
     out = []
     for sym in payload["symbols"]:
         rows = conn.execute(
@@ -286,6 +293,7 @@ def smart_factor_chunk(payload: Dict[str, object]) -> list:
             continue
         try:
             factors = compute_factor_scores(df)
+            factors["industry_heat"] = round(float(industry_heat.get(sym, 50.0)), 2)
             score = composite_score(factors)
         except Exception:
             continue

@@ -145,6 +145,7 @@ class LocalQuantStore:
         if parent:
             os.makedirs(parent, exist_ok=True)
         self._local = threading.local()
+        self._stage_cache: Optional[tuple] = None  # (最新真实bar日, stage_inputs 结果)
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
 
@@ -405,6 +406,50 @@ class LocalQuantStore:
         """最后一根真实日线（amount>0）的日期。盘中占位 bar 不算，与 recent_returns 口径一致。"""
         row = self._conn().execute("SELECT MAX(date) FROM daily_kline WHERE amount > 0").fetchone()
         return str(row[0]) if row and row[0] else ""
+
+    def stage_inputs(self) -> Dict[str, Dict[str, float]]:
+        """每只股票的量价阶段原料：现价 / 5日前 / 20日前收盘、60日高低、近5与近20日成交额。
+
+        供板块量价阶段因子按行业聚合。一次窗口查询算完（约 5500 行返回），不把
+        近 60 日的几十万根 bar 拉进 Python。只取 amount>0 的真实 bar，与
+        recent_returns / latest_real_bar_date 口径一致（跳过盘中占位 bar）。
+
+        按最新真实 bar 日缓存：查询要 ~10s，而一个交易日内结果恒定，影子池一天要跑
+        三轮扫描，不缓存等于白付 30s。
+        """
+        from datetime import date as _date, timedelta as _td
+        as_of = self.latest_real_bar_date()
+        if self._stage_cache and self._stage_cache[0] == as_of:
+            return self._stage_cache[1]
+        cutoff = (_date.today() - _td(days=130)).strftime("%Y-%m-%d")
+        sql = """
+        WITH b AS (
+            SELECT symbol, close, amount,
+                   ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
+            FROM daily_kline
+            WHERE amount > 0 AND date >= ?
+        )
+        SELECT symbol,
+               MAX(CASE WHEN rn = 1  THEN close END),
+               MAX(CASE WHEN rn = 6  THEN close END),
+               MAX(CASE WHEN rn = 21 THEN close END),
+               MIN(close), MAX(close),
+               SUM(CASE WHEN rn <= 5  THEN amount ELSE 0 END),
+               SUM(CASE WHEN rn <= 20 THEN amount ELSE 0 END)
+        FROM b WHERE rn <= 60
+        GROUP BY symbol
+        """
+        out: Dict[str, Dict[str, float]] = {}
+        for sym, now, c5, c20, lo, hi, amt5, amt20 in self._conn().execute(sql, (cutoff,)):
+            close_now = _f(now)
+            if close_now <= 0:
+                continue
+            out[str(sym).zfill(6)] = {
+                "close": close_now, "close_5": _f(c5), "close_20": _f(c20),
+                "low": _f(lo), "high": _f(hi), "amt5": _f(amt5), "amt20": _f(amt20),
+            }
+        self._stage_cache = (as_of, out)
+        return out
 
     def liquid_symbols(self, limit: int, days: int = 10) -> List[str]:
         """按近 days 天平均成交额降序取前 limit 只，用于给"要截断的选股池"排优先级。

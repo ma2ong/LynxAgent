@@ -54,6 +54,65 @@ def industry_map() -> Dict[str, str]:
     return mapping
 
 
+def industry_stage_scores(
+    stage_inputs: Dict[str, Dict[str, float]],
+    industry_by_symbol: Dict[str, str],
+    min_members: int = 3,
+) -> Dict[str, float]:
+    """板块量价阶段分（0-100，未做百分位）。
+
+    换掉了"行业近5日涨幅百分位"那版纯动量口径。纯涨幅只回答"涨了多少"，不回答
+    "涨到哪个阶段了"——它给分最高的恰恰是放量赶顶的板块，而那是最该躲的位置。
+    这里按量价关系判阶段：缩量回撤=散户在交筹码(可潜伏)，放量启动=大资金进场(要买)，
+    高位放量且已大涨=赶顶(要罚)。
+
+    输入是全市场个股的 stage_inputs，按行业等权聚合；成分不足 min_members 的行业
+    不出分（单只票的波动不配代表一个板块）。
+    """
+    members: Dict[str, List[Dict[str, float]]] = {}
+    for symbol, row in stage_inputs.items():
+        ind = industry_by_symbol.get(symbol)
+        if ind:
+            members.setdefault(ind, []).append(row)
+
+    out: Dict[str, float] = {}
+    for ind, rows in members.items():
+        if len(rows) < min_members:
+            continue
+        mom5 = _mean([_pct(r["close"], r["close_5"]) for r in rows])
+        mom20 = _mean([_pct(r["close"], r["close_20"]) for r in rows])
+        pos = _mean([
+            (r["close"] - r["low"]) / (r["high"] - r["low"])
+            for r in rows if r["high"] > r["low"]
+        ])
+        amt5 = sum(r["amt5"] for r in rows)
+        amt20 = sum(r["amt20"] for r in rows)
+        # 量能扩张：近5日日均额 / 近20日日均额 - 1。>0 放量，<0 缩量。
+        vol_exp = ((amt5 / 5) / (amt20 / 20) - 1) if amt20 > 0 else 0.0
+
+        score = 50.0
+        score += _clip(vol_exp, -0.5, 1.0) * 40      # 放量加分、缩量减分
+        score += _clip(mom5, -8.0, 8.0) * 1.8        # 近期在涨加分
+        if pos > 0.85 and vol_exp > 0.30 and mom20 > 12.0:
+            score -= 30.0                            # 放量赶顶：高位 + 放量 + 已大涨
+        if pos < 0.40 and vol_exp < -0.15:
+            score += 8.0                             # 缩量回撤到低位：可潜伏，等它放量
+        out[ind] = _clip(score, 0.0, 100.0)
+    return out
+
+
+def _pct(now: float, base: float) -> float:
+    return (now / base - 1) * 100 if base > 0 else 0.0
+
+
+def _mean(values: List[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _clip(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
 def _industry_text(value: Any) -> str:
     text = str(value or "").strip()
     if not text or text.lower() == "nan" or text in {"--", "-"}:

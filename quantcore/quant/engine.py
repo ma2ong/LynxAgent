@@ -706,35 +706,28 @@ class QuantEngine:
             rt_amounts[symbol] = rt_amount
         cutoff = (date.today() - timedelta(days=200)).strftime("%Y-%m-%d")
         db_path = get_local_store().db_path
-        # 板块热度:行业近5日平均涨幅 → 全行业百分位(0-100),随因子进评分。
-        # 两处口径要点:
+        # 板块量价阶段 → 全行业百分位(0-100),随因子进评分。
+        # 口径要点:
         # 1) 行业取 industry.industry_map()(app 维护的东财映射,5211 只/128 行业),不用
         #    stock_meta.industry——那一列 100% 为空,拿它聚合会让本因子恒等于 50 静默失效。
-        # 2) 行业均值按全市场算而不是只按池内样本:池被截断到 1500 时,冷门行业在池里可能
-        #    只剩两三只,均值噪声大到百分位失去意义。
-        from .industry import industry_map as _industry_map
+        # 2) 按全市场聚合而不是只按池内样本:池被截断时冷门行业在池里可能只剩两三只,
+        #    均值噪声大到百分位失去意义。
+        from .industry import industry_map as _industry_map, industry_stage_scores
         industry_heat: Dict[str, float] = {}
         try:
-            r5 = get_local_store().recent_returns(5)
             ind_by_symbol = _industry_map()
-            ind_rets: Dict[str, List[float]] = {}
-            for sym_r, ret in r5.items():
-                ind = ind_by_symbol.get(str(sym_r).zfill(6))
-                if ind:
-                    ind_rets.setdefault(ind, []).append(float(ret))
-            # 样本太少的行业不参与排名，避免单只票的涨幅冒充"板块热度"
-            ind_avg = {ind: sum(v) / len(v) for ind, v in ind_rets.items() if len(v) >= 3}
-            ranked_inds = sorted(ind_avg.items(), key=lambda kv: kv[1])
-            n_ind = len(ranked_inds)
+            stage = industry_stage_scores(get_local_store().stage_inputs(), ind_by_symbol)
+            ranked = sorted(stage.items(), key=lambda kv: kv[1])
+            n_ind = len(ranked)
             if n_ind < 10:
-                logger.warning("smart_pool industry_heat 退化：仅 %d 个有效行业，本因子按中性计", n_ind)
+                logger.warning("smart_pool 板块阶段分退化：仅 %d 个有效行业，本因子按中性计", n_ind)
             else:
-                ind_pct = {ind: (i + 1) / n_ind * 100 for i, (ind, _) in enumerate(ranked_inds)}
+                ind_pct = {ind: (i + 1) / n_ind * 100 for i, (ind, _) in enumerate(ranked)}
                 industry_heat = {
                     s: ind_pct[ind] for s, ind in ind_by_symbol.items() if ind in ind_pct
                 }
         except Exception as exc:  # noqa: BLE001
-            logger.warning("smart_pool industry_heat 计算失败，本因子按中性计: %s", exc)
+            logger.warning("smart_pool 板块阶段分计算失败，本因子按中性计: %s", exc)
             industry_heat = {}
         workers = min(6, max(1, os.cpu_count() or 4))
         chunk_size = max(1, (len(gated_symbols) + workers - 1) // workers)

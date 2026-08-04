@@ -406,6 +406,22 @@ class LocalQuantStore:
         row = self._conn().execute("SELECT MAX(date) FROM daily_kline WHERE amount > 0").fetchone()
         return str(row[0]) if row and row[0] else ""
 
+    def liquid_symbols(self, limit: int, days: int = 10) -> List[str]:
+        """按近 days 天平均成交额降序取前 limit 只，用于给"要截断的选股池"排优先级。
+
+        存在的理由：stock_meta 按 symbol 排序，直接 [:500] 等于只取 000001~001338 这段
+        深主板，沪市/创业板/科创板一只都进不了池。要截断就得按"最值得看"截断，成交额是
+        最直白的可交易性代理。只扫近 days 天（走 idx_kline_date），冷查询亦在百毫秒级。
+        """
+        from datetime import date as _date, timedelta as _td
+        cutoff = (_date.today() - _td(days=max(5, days))).strftime("%Y-%m-%d")
+        rows = self._conn().execute(
+            "SELECT symbol FROM daily_kline WHERE amount > 0 AND date >= ? "
+            "GROUP BY symbol ORDER BY AVG(amount) DESC LIMIT ?",
+            (cutoff, max(1, int(limit))),
+        ).fetchall()
+        return [str(r[0]).zfill(6) for r in rows]
+
     def recent_returns(self, window: int = 5) -> Dict[str, float]:
         """每只股票最近 window 个交易日的涨跌幅%（最新完整 bar vs window 根前的 bar）。
 

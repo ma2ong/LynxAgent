@@ -1416,7 +1416,7 @@ _smart_pool_compute_lock = asyncio.Lock()
 async def _compute_lite_smart_pool_unlocked(
     strategy: str = "balanced",
     limit: int = 10,
-    universe_limit: int = 500,
+    universe_limit: int = 5000,
     task_id: str | None = None,
     force_refresh: bool = False,
     cache_only: bool = False,
@@ -1431,7 +1431,7 @@ async def _compute_lite_smart_pool_unlocked(
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     cache_key = (
-        f"smart-pool:factor-v9-heat-breakout:{daily_as_of}:"
+        f"smart-pool:factor-v10-heat-live-universe:{daily_as_of}:"
         f"{strategy}:{safe_limit}:{safe_universe}"
     )
     _smart_pool_task_update(
@@ -1537,6 +1537,10 @@ async def _compute_lite_smart_pool_unlocked(
                 "grade": "核心候选" if display_score >= 90 else "高质量候选" if display_score >= 85 else "重点观察",
                 "signal": raw.get("signal") or "",
                 "limit_up": bool(raw.get("limit_up")),
+                # 因子分项与直通车标志要透出：前端要展示「板块热度」等分项，也要给
+                # 结构榜外的爆发票打徽标；旧的白名单 item 把这两个字段整个丢了。
+                "factors": factors,
+                "intraday_breakout": bool(raw.get("intraday_breakout")),
                 "reasons": reasons[:8],
                 "latest_events": raw.get("latest_events") or [],
                 "forecast": raw.get("forecast") or {},
@@ -1871,7 +1875,7 @@ async def _compute_lite_smart_pool_unlocked(
 async def _compute_lite_smart_pool(
     strategy: str = "balanced",
     limit: int = 10,
-    universe_limit: int = 500,
+    universe_limit: int = 5000,
     task_id: str | None = None,
     force_refresh: bool = False,
     cache_only: bool = False,
@@ -1896,7 +1900,7 @@ async def _compute_lite_smart_pool(
 
 
 @app.get("/api/lite/smart-pool")
-async def lite_smart_pool(strategy: str = "balanced", limit: int = 10, universe_limit: int = 500,
+async def lite_smart_pool(strategy: str = "balanced", limit: int = 10, universe_limit: int = 5000,
                           cache_only: bool = False):
     return await _compute_lite_smart_pool(strategy, limit, universe_limit, cache_only=cache_only)
 
@@ -1979,7 +1983,7 @@ async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int,
 
 @app.post("/api/lite/smart-pool/tasks")
 async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 10,
-                                     universe_limit: int = 500, force_refresh: bool = False):
+                                     universe_limit: int = 5000, force_refresh: bool = False):
     safe_limit = max(5, min(limit, 10))
     # 与 _compute_lite_smart_pool 同口径：全市场评分，才和回放验证的池是同一个池
     safe_universe = max(safe_limit * 2, min(universe_limit, 5000))

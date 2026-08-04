@@ -170,10 +170,14 @@ async def lite_call_auction(
     # 留痕只在冻结时刻记一次（09:26 后的首次计算）。窗口内(09:15-09:25)名单还在
     # 逐分钟变化，窗口后重算已非竞价口径——两者都不该写复盘留痕。
     freeze_now = post_auction
+    # 但「冻结」与「留痕」的门槛不同：显示可以任何时刻冻结，留痕必须紧贴竞价窗口。
+    # 当天首次请求若发生在盘中（服务重启、当日新上线），名单是盘中口径，写进 picks_history
+    # 会污染竞价池的 T+N 胜率——历史上 auction 池日均 26 条、实际候选仅 3-8 只，就是这么来的。
+    record_now = freeze_now and (now_cn.hour * 60 + now_cn.minute) <= 9 * 60 + 40
     result = await asyncio.to_thread(
         compute_call_auction, snapshot, SECTOR_LEADERS,
         industry_map=industry_map, hot_industries=hot_industries, exclude_symbols=bad_symbols,
-        open_min=open_min, open_max_ratio=open_max_ratio, record=freeze_now,
+        open_min=open_min, open_max_ratio=open_max_ratio, record=record_now,
     )
 
     # 四形态：按需回溯拉东财盘前分时（09:15-09:25 逐分钟虚拟撮合价），给买入候选贴上盘口
@@ -200,8 +204,17 @@ async def lite_call_auction(
         pass
 
     if freeze_now and result.get("available"):
-        result["frozen_at"] = now_cn.strftime("%H:%M:%S")
-        result["note"] = "本日竞价结果已于 09:26 后冻结，全天展示同一名单（竞价 09:25 定价，盘中重算无意义）。" + str(result.get("note") or "")
+        frozen_at = now_cn.strftime("%H:%M:%S")
+        result["frozen_at"] = frozen_at
+        # 文案报真实冻结时刻，不能硬写 09:26：冻结发生在「09:26 后的首次计算」，
+        # 若当天首次请求发生在盘中（服务重启、当日新上线），名单实际是那一刻的口径，
+        # 谎称 09:26 会让用户误以为拿到的是竞价原始名单。
+        if frozen_at <= "09:30:00":
+            head = f"本日竞价结果已于 {frozen_at} 冻结，全天展示同一名单（竞价 09:25 定价，盘中重算无意义）。"
+        else:
+            head = (f"本日名单于 {frozen_at} 首次生成并冻结，晚于竞价窗口，"
+                    "其量比/成交额为盘中口径而非 09:25 竞价口径，仅供参考。")
+        result["note"] = head + str(result.get("note") or "")
     payload = {
         "success": True,
         "data": {**result, "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S")},

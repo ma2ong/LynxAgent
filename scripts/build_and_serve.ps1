@@ -32,15 +32,20 @@ function Get-BackendSignature {
     # Hash each backend path's tree/blob, not the global HEAD: otherwise a
     # frontend-only commit bumps HEAD and forces a needless backend restart.
     # --verify -q fails cleanly (no output / no stderr) on paths that don't exist.
+    # Route git through cmd /c + 2>nul: PS 5.1 wraps a native command's stderr in an
+    # ErrorRecord, which aborts the script under -EA Stop. Whenever app/ or quantcore/
+    # has uncommitted changes, git diff prints an autocrlf "LF will be replaced by CRLF"
+    # warning and the deploy dies. Same trap as taskkill below.
     $head = (
         $backendPaths | ForEach-Object {
             $p = $_
-            $h = & git rev-parse --verify -q "HEAD:$p" 2>$null
+            $h = cmd /c "git rev-parse --verify -q `"HEAD:$p`" 2>nul"
             if ($h) { "$h".Trim() }
         } | Where-Object { $_ }
     ) -join ";"
-    $diff = (& git diff --no-ext-diff --binary HEAD -- $backendPaths 2>$null | Out-String)
-    $untracked = (& git ls-files --others --exclude-standard -- $backendPaths 2>$null | Out-String)
+    $pathArgs = ($backendPaths | ForEach-Object { "`"$_`"" }) -join " "
+    $diff = (cmd /c "git diff --no-ext-diff --binary HEAD -- $pathArgs 2>nul" | Out-String)
+    $untracked = (cmd /c "git ls-files --others --exclude-standard -- $pathArgs 2>nul" | Out-String)
     $environment = @(".env", ".env.local") |
         Where-Object { Test-Path $_ } |
         ForEach-Object { "$_`n$(Get-Content -Raw $_)" } |

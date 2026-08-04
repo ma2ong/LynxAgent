@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
@@ -22,6 +23,8 @@ from .integrations import integration_capabilities, kronos_style_forecast, recog
 from .models import BacktestResult, ForecastResult, PatternRecognitionResult, QuantAnalysisResult, QuantPick
 from .strategies import STRATEGIES, resolve_strategy
 from .wyckoff import analyze_wyckoff
+
+logger = logging.getLogger("quant_engine")
 
 
 def _market_quote_code(symbol: str) -> str:
@@ -450,10 +453,25 @@ class QuantEngine:
         self.factor_agent = FactorResearchAgent()
 
     def _scan_pool(self, limit: int) -> tuple[List[Dict[str, object]], str]:
-        """Use the synced local universe first; fall back to AKShare only when empty."""
+        """Use the synced local universe first; fall back to AKShare only when empty.
+
+        截断按成交额而不是按代码：load_meta 是 ORDER BY symbol，旧的 [:limit] 让
+        smart_pool(limit=500) 的池永远等于 000001~001338 这 500 只深主板——沪主板
+        1705 只、创业板 1398 只、科创板 609 只从未被评分过，"全市场综合优选"名不副实，
+        也是名单常年就那几只的结构性原因。limit 覆盖全市场时不做重排，省掉这次查询。
+        """
         try:
-            local_items = get_local_store().load_meta()
+            store = get_local_store()
+            local_items = store.load_meta()
             if local_items:
+                if limit >= len(local_items):
+                    return local_items, "local-store"
+                ranked = store.liquid_symbols(limit)
+                if ranked:
+                    by_symbol = {str(m.get("symbol") or "").zfill(6): m for m in local_items}
+                    picked = [by_symbol[s] for s in ranked if s in by_symbol]
+                    if picked:
+                        return picked, "local-store-by-liquidity"
                 return local_items[:limit], "local-store"
         except Exception:
             pass
@@ -688,25 +706,35 @@ class QuantEngine:
             rt_amounts[symbol] = rt_amount
         cutoff = (date.today() - timedelta(days=200)).strftime("%Y-%m-%d")
         db_path = get_local_store().db_path
-        # 板块热度:行业近5日平均涨幅 → 全行业百分位(0-100),随因子进评分
+        # 板块热度:行业近5日平均涨幅 → 全行业百分位(0-100),随因子进评分。
+        # 两处口径要点:
+        # 1) 行业取 industry.industry_map()(app 维护的东财映射,5211 只/128 行业),不用
+        #    stock_meta.industry——那一列 100% 为空,拿它聚合会让本因子恒等于 50 静默失效。
+        # 2) 行业均值按全市场算而不是只按池内样本:池被截断到 1500 时,冷门行业在池里可能
+        #    只剩两三只,均值噪声大到百分位失去意义。
+        from .industry import industry_map as _industry_map
         industry_heat: Dict[str, float] = {}
         try:
             r5 = get_local_store().recent_returns(5)
-            ind_by_symbol = {
-                str(m.get("symbol") or "").zfill(6): str(m.get("industry") or "")
-                for m in pool
-            }
+            ind_by_symbol = _industry_map()
             ind_rets: Dict[str, List[float]] = {}
             for sym_r, ret in r5.items():
                 ind = ind_by_symbol.get(str(sym_r).zfill(6))
                 if ind:
                     ind_rets.setdefault(ind, []).append(float(ret))
-            ind_avg = {ind: sum(v) / len(v) for ind, v in ind_rets.items() if v}
+            # 样本太少的行业不参与排名，避免单只票的涨幅冒充"板块热度"
+            ind_avg = {ind: sum(v) / len(v) for ind, v in ind_rets.items() if len(v) >= 3}
             ranked_inds = sorted(ind_avg.items(), key=lambda kv: kv[1])
             n_ind = len(ranked_inds)
-            ind_pct = {ind: (i + 1) / n_ind * 100 for i, (ind, _) in enumerate(ranked_inds)} if n_ind else {}
-            industry_heat = {s: ind_pct.get(ind, 50.0) for s, ind in ind_by_symbol.items() if ind}
-        except Exception:
+            if n_ind < 10:
+                logger.warning("smart_pool industry_heat 退化：仅 %d 个有效行业，本因子按中性计", n_ind)
+            else:
+                ind_pct = {ind: (i + 1) / n_ind * 100 for i, (ind, _) in enumerate(ranked_inds)}
+                industry_heat = {
+                    s: ind_pct[ind] for s, ind in ind_by_symbol.items() if ind in ind_pct
+                }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("smart_pool industry_heat 计算失败，本因子按中性计: %s", exc)
             industry_heat = {}
         workers = min(6, max(1, os.cpu_count() or 4))
         chunk_size = max(1, (len(gated_symbols) + workers - 1) // workers)

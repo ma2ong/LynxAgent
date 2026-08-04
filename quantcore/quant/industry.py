@@ -6,17 +6,52 @@ stock_meta.industry 常为空，导致选股/形态结果的「行业/板块」�
 """
 from __future__ import annotations
 
+import json
+import os
 import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List
 
 _cache: Dict[str, tuple] = {}  # symbol -> (ts, industry)
 _TTL = timedelta(days=7)
 _lock = threading.Lock()
 _POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="industry")
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_MAP_PATH = os.environ.get("INDUSTRY_MAP_PATH", str(_PROJECT_ROOT / "runtime" / "industry_map.json"))
+_map_cache: tuple[float, Dict[str, str]] | None = None  # (mtime, mapping)
+
+
+def industry_map() -> Dict[str, str]:
+    """全市场 代码->行业 映射（读 app 侧维护的 runtime/industry_map.json，按 mtime 失效）。
+
+    这是给"要按行业聚合"的批量场景用的，不走 cninfo 逐只补全。之所以不读
+    stock_meta.industry：那一列实测 100% 为空（见模块开头），拿它做行业聚合会得到
+    单一空行业 → 任何行业因子恒等于中性值，静默失效。
+    """
+    global _map_cache
+    try:
+        mtime = os.path.getmtime(_MAP_PATH)
+    except OSError:
+        return {}
+    if _map_cache and _map_cache[0] == mtime:
+        return _map_cache[1]
+    try:
+        with open(_MAP_PATH, "r", encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError):
+        return _map_cache[1] if _map_cache else {}
+    mapping = {
+        str(k).zfill(6): _industry_text(v)
+        for k, v in (raw or {}).items()
+        if _industry_text(v)
+    }
+    _map_cache = (mtime, mapping)
+    return mapping
 
 
 def _industry_text(value: Any) -> str:

@@ -32,6 +32,12 @@ def _sector_weight() -> float:
     return _clip(_f(os.getenv("LYNX_RADAR_SECTOR_WEIGHT"), _SECTOR_WEIGHT_DEFAULT), 0.0, 0.6)
 
 
+def _env_num(name: str, default: float) -> float:
+    """数值型环境变量；写错格式就按默认值，不让一个手滑的字符串把雷达停掉。"""
+    import os
+    return _f(os.getenv(name), default)
+
+
 ACTIVE_STATUSES = {"watch", "entry", "unbuyable"}
 STATUS_LABELS = {
     "watch": "提前预警",
@@ -281,6 +287,29 @@ class IntradaySignalEngine:
             market_returns.append(pct)
             sector_returns.setdefault(str(base.get("industry") or "其他"), []).append(pct)
 
+        # 当日成交额的横截面分位（0..1）。用于「主力票」并列通道：那批票天天二十几亿，
+        # 相对自己放不出量，但绝对成交额就是全市场最前面的一批。
+        amt_pairs = sorted(
+            (_f(q.get("amount")), s) for s, q in valid.items() if _f(q.get("amount")) > 0
+        )
+        amount_pctl = {
+            sym: (i + 1) / len(amt_pairs) for i, (_a, sym) in enumerate(amt_pairs)
+        } if amt_pairs else {}
+
+        # 概念分位：与行业并列，取较强者用于「主力票」通道（见下）。概念映射拿不到就退回空，
+        # 只用行业，不影响主流程。
+        concept_ranks: Dict[str, float] = {}
+        try:
+            from .concept_lookup import code_concept_map
+            from .industry import live_theme_ranks
+
+            concept_ranks = {
+                sym: rank for sym, (rank, _name) in
+                live_theme_ranks(valid, [code_concept_map()]).items()
+            }
+        except Exception:  # noqa: BLE001 — 概念映射不可用时退回纯行业口径
+            concept_ranks = {}
+
         market_median = statistics.median(market_returns) if market_returns else 0.0
         breadth_up = sum(1 for value in market_returns if value > 0) / len(market_returns) if market_returns else 0.0
         sector_stats = {
@@ -364,6 +393,13 @@ class IntradaySignalEngine:
                 volume_score = 60.0
             else:
                 volume_score = 38.0 + activity_ratio * 10
+            # 绝对成交额已经排在全市场最前面的票，量能分不能只按「相对自己有没有放大」打。
+            # 中巨芯 20 日均额 24.4 亿，涨停当天量能倍数 1.03 —— 按相对口径只有 48 分，
+            # 把总分压到 80 以下，于是并列通道开了门它也进不来。这里给一个下限，
+            # 让「本来就是全市场成交最大的一批」这件事本身算作量能证据。
+            amount_rank_for_volume = amount_pctl.get(symbol, 0.0)
+            if amount_rank_for_volume >= 0.95:
+                volume_score = max(volume_score, 55.0 + (amount_rank_for_volume - 0.95) / 0.05 * 25.0)
 
             price_score = 48 + min(max(pct, -4), 8) * 4
             price_score += max(0.0, range_position - 0.5) * 28
@@ -414,11 +450,39 @@ class IntradaySignalEngine:
                 and projected_liquid
                 and price >= open_price * 0.995
             )
+            # —— 「主力票」并列通道（2026-08-05）——
+            # 现有通道要求量能相对自己放大 ≥1.5 倍，抓的是「突然被资金注意到」的票。
+            # 但当日实测：中巨芯 20 日均额 24.4 亿、今日涨 20%，量能倍数只有 1.03；
+            # 有研硅 26.2 亿 / 1.15 倍；神工股份 16.3 亿 / 1.11 倍 —— 它们本来就是全市场
+            # 成交最大的一批，天天这个量，涨停也放不出「相对大量」，于是全部未触发。
+            # 这条并列通道改用**绝对**证据：成交额进全市场前 X% + 涨幅居前 + 主题分位高。
+            # 注意是 or 不是放松：原通道的阈值一个没动，只是多开一扇门。
+            amount_rank = amount_pctl.get(symbol, 0.0)
+            # 主题取行业与概念的较强者，与智选同口径：正帆科技的行业是「专用设备」(0.72)，
+            # 但它今天的热点身份在概念「存储芯片」(0.98)。只看行业会漏掉这一类。
+            theme_rank = max(_f(sector.get("rank"), 0.5), _f(concept_ranks.get(symbol), 0.0))
+            heavyweight_setup = (
+                pct >= _env_num("LYNX_RADAR_HEAVY_MIN_PCT", 6.0)
+                and amount_rank >= _env_num("LYNX_RADAR_HEAVY_AMOUNT_PCTL", 0.97)
+                and theme_rank >= _env_num("LYNX_RADAR_HEAVY_THEME", 0.90)
+                and range_position >= 0.68        # 仍要求收在日内区间上部，冲高回落的不算
+                and price >= open_price * 0.995   # 仍要求没跌破开盘，走坏的不算
+                and projected_liquid
+            )
+            setup = basic_setup or heavyweight_setup
             momentum_trigger = breakout20 or speed_1m >= 0.25 or (
                 pct >= 2.0 and _f(sector["mean"]) >= 0.3
+            ) or heavyweight_setup
+            # 主力票走自己的分数线：它的证据种类不同（绝对成交额+主题地位，而不是相对放量），
+            # 而总分里的趋势分算的是昨天收盘的均线关系 —— 今天刚启动的票那一项天然低。
+            # 中巨芯当日实测总分 76.2，其中趋势分只有 48。这是并列通道自带的标准，
+            # 不是把原通道的 80 分放松了：原通道一个字没改。
+            score_gate = _env_num("LYNX_RADAR_HEAVY_MIN_SCORE", 74.0) if heavyweight_setup else 80.0
+            prealert = setup and score >= score_gate and momentum_trigger
+            # 主力票同样走不到 activity_ratio 1.75，正式触发对它们改看这条通道自身成立。
+            formal = continuous and prealert and score >= 84 and (
+                activity_ratio >= 1.75 or heavyweight_setup
             )
-            prealert = basic_setup and score >= 80 and momentum_trigger
-            formal = continuous and prealert and score >= 84 and activity_ratio >= 1.75
 
             prior_state = self.states.get(symbol, {})
             prior_status = str(prior_state.get("status") or "")
@@ -491,6 +555,10 @@ class IntradaySignalEngine:
                 reasons.append(f"{industry}板块共振 {_f(sector['mean']):+.2f}%")
             if range_position >= 0.8:
                 reasons.append("价格位于日内区间上部")
+            if heavyweight_setup and activity_ratio < 1.5:
+                # 说清楚它凭什么进来：不是放量进来的，是靠绝对成交额和主题地位。
+                reasons.insert(0, f"主力票通道：成交额全市场前 {(1 - amount_rank) * 100:.0f}%、"
+                                  f"{industry}主题分位 {_f(sector.get('rank'), 0.5) * 100:.0f}")
             if status == "unbuyable":
                 reasons.insert(0, "距离涨停过近或已经封板，不再建议追入")
             if status == "invalid":
@@ -512,6 +580,8 @@ class IntradaySignalEngine:
                 "invalidation_price": round(invalidation, 3),
                 "distance_to_limit": round(max(0.0, distance_to_limit), 2),
                 "activity_ratio": round(activity_ratio, 2),
+                "heavyweight": bool(heavyweight_setup),
+                "amount_percentile": round(amount_rank * 100, 1),
                 "feed_volume_ratio": round(feed_volume_ratio, 2),
                 "projected_amount_ratio": round(projected_ratio, 2),
                 "range_position": round(range_position, 3),

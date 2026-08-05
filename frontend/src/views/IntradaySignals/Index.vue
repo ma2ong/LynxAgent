@@ -403,4 +403,32 @@ onUnmounted(() => {
   .trade-box { grid-template-columns: 1fr; }
   .search { width: 100%; }
 }
+
+/* —— 紧凑版面 ——
+   页头 + 行情条 + 四张统计卡 + 小节标题占掉了首屏一半，卡片本身也偏大，
+   1080p 下只能看到 4 张信号卡。只压留白与字号，不删任何信息。 */
+.page-head h1 { font-size: 19px; }
+.page-head p { margin: 2px 0 0; font-size: 12px; }
+.market-strip { padding: 6px 12px; }
+.stat-grid { gap: 8px; }
+.stat-card { padding: 7px 12px; gap: 1px;
+  b { font-size: 19px; }
+  span { font-size: 12px; }
+  small { font-size: 11px; }
+}
+.section-head { margin-bottom: 8px;
+  h2 { font-size: 15px; }
+  p { margin: 2px 0 0; font-size: 11px; }
+}
+
+/* 卡片：数字块和留白是主因，一屏多放两三张 */
+.signal-grid { gap: 9px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.signal-card { gap: 7px; padding: 10px; border-top-width: 3px; }
+.price-row b { font-size: 19px; }
+.score strong { font-size: 16px; }
+.review-box, .archive-box { padding: 6px 9px; line-height: 1.5; }
+.metric-row span { padding: 4px 7px; }
+.reasons { gap: 3px;
+  li { line-height: 1.35; }
+}
 </style>

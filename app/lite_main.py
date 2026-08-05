@@ -323,6 +323,9 @@ SMART_POOL_INTRADAY_WEIGHT = 0.22
 # 才开始按日落 14:30 全市场快照，攒够样本前无法 A/B。所以默认保守、走环境变量可调，
 # 而不是焊死一个拍脑袋的数字。参考刻度：结构分满分 100，盘中强度权重 0.22。
 SMART_POOL_SECTOR_BONUS = max(0.0, min(15.0, float(os.getenv("LYNX_SMART_SECTOR_BONUS", "4.0"))))
+# 推荐名单里给「盘中爆发直通车」保留的席位数（见 _reserve_breakout_slots）。
+# 设 0 退回旧行为：纯按重排分截断，今天爆发的票一只都露不出来。
+SMART_POOL_BREAKOUT_SLOTS = max(0, int(float(os.getenv("LYNX_SMART_BREAKOUT_SLOTS", "6"))))
 
 SMART_POOL_RECOMMENDER = {
     "name": "全市场综合优选",
@@ -1128,6 +1131,38 @@ async def _apply_intraday_quality(data: dict[str, Any]) -> None:
     _merge_intraday_quality(data, overlay)
 
 
+def _reserve_breakout_slots(kept: list[dict[str, Any]], target: int) -> list[dict[str, Any]]:
+    """给「盘中爆发直通车」的票留出固定席位，再截断到 target。
+
+    为什么必须留席位：直通车挑的正是今天刚爆发的票，而它们的结构分算的是**昨天收盘**的
+    趋势/动量，天然很低（当日实测中巨芯 +20% 结构分位倒数 2.9%）。重排分里结构占 78%，
+    所以它们排完永远沉在名单尾部，照常截断的话一只都露不出来 —— 等于直通车白挑。
+
+    留席位是有代价的：挤掉的是结构分最高的那几只。所以席位数走环境变量，
+    LYNX_SMART_BREAKOUT_SLOTS=0 即可退回「纯按重排分截断」的旧行为。
+    """
+    if target <= 0 or not kept:
+        return kept[:max(0, target)]
+    slots = max(0, min(int(SMART_POOL_BREAKOUT_SLOTS), target - 1))
+    head = kept[:target]
+    if slots <= 0:
+        return head
+    already = sum(1 for item in head if item.get("intraday_breakout"))
+    need = slots - already
+    if need <= 0:
+        return head
+    waiting = [item for item in kept[target:] if item.get("intraday_breakout")][:need]
+    if not waiting:
+        return head
+    # 只挤掉尾部的非直通车票，结构榜前列不动
+    structural = [item for item in head if not item.get("intraday_breakout")]
+    breakouts = [item for item in head if item.get("intraday_breakout")] + waiting
+    structural = structural[:max(0, target - len(breakouts))]
+    merged = structural + breakouts
+    merged.sort(key=lambda item: -float(item.get("realtime_rank_score") or item.get("score") or 0))
+    return merged[:target]
+
+
 def _finalize_intraday_quality(data: dict[str, Any], target: int) -> None:
     items = list(data.get("items") or [])
     blocked = [item for item in items if item.get("timing_status") == "blocked"]
@@ -1136,7 +1171,7 @@ def _finalize_intraday_quality(data: dict[str, Any], target: int) -> None:
     previous_samples = list(data.get("timing_excluded_samples") or [])
     # 上限跟随端点的 safe_limit（现 20），不再写死 10——写死会让「推荐上限」控件失效。
     safe_target = max(1, min(int(target or SMART_POOL_MAX_ITEMS), SMART_POOL_MAX_ITEMS))
-    kept = kept[:safe_target]
+    kept = _reserve_breakout_slots(kept, safe_target)
     for rank, item in enumerate(kept, start=1):
         item["rank"] = rank
     data["items"] = kept

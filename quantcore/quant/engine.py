@@ -156,6 +156,19 @@ def _fetch_tencent_quotes(symbols: List[str]) -> Dict[str, Dict[str, object]]:
 
 # market_context 的全表窗口扫描冷查询可达 20s+，页面横幅等不起。按快照日期分槽缓存：
 # 盘中口径（横幅）与日线口径（池子留痕）各留一份，互不挤掉对方，否则两边会来回互相作废。
+def _env_float(name: str, default: float) -> float:
+    """读一个数值型环境变量。写错格式就用默认值，不让一个手滑的字符串把选股停掉。"""
+    import os
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("环境变量 %s=%r 不是数字，按默认值 %s 处理", name, raw, default)
+        return default
+
+
 def _live_theme_weight() -> float:
     """industry_heat 因子里「当日实时主题强度」占的比重，其余给昨收阶段分。
 
@@ -758,6 +771,7 @@ class QuantEngine:
         # 必须在**这里**混而不是只在盘中重排里混：重排只能对已入池的 40 只重新排序，
         # 而没进结构底池的票加多少分也进不来。要让今天爆发的板块真的被选进来，
         # 主题强度就得参与候选筛选。
+        live: Dict[str, tuple] = {}   # 先给定义：try 里失败时下游还要读它，否则 NameError
         try:
             from .concept_lookup import code_concept_map
             from .industry import live_theme_ranks
@@ -805,24 +819,56 @@ class QuantEngine:
         # —— 盘中爆发直通车 ——
         # 结构榜之外,今日盘中涨幅居前且实时成交额≥2亿的票直接进候选(带完整结构因子分),
         # 不等今晚日线落库。用户明确要求时效性:今天爆发的票今天就要能被推荐。
-        # 唯一约束是结构质量前10%——只涨得快但日K结构烂的不算爆发,算追高。
         # 涨停/近板照常补入:封板本身就是强势证据,买入难度由 lite 层标签提示。
+        #
+        # 准入逻辑 2026-08-05 重写：原来要求「结构分位前 10%」，而结构分算的是**截至昨天
+        # 收盘**的趋势/动量。一只票今天突然爆发 +20%，恰恰说明它昨天之前是安静的、弱的——
+        # 「今天爆发」与「昨天结构好」在数学上互斥。当日实测：中巨芯 +20.0% 结构分位倒数
+        # 2.9%、江化微 +10.0% 倒数 1.8%、神工股份 +15.0% 倒数 2.7%，全被那条门槛永久挡死。
+        #
+        # 改为用**当日**证据准入：所属主题在爆发 + 个股在爆发 + 有真实成交额。
+        # 结构分位降级成一条很松的兜底（默认不设限），不再当闸门。
+        #
+        # 代价必须写明：同口径 5 年日线回测里「强势板块 + 当日放量」T+5 超额 −2.08pp
+        # （t=−11.07，见 experiments/README.md）。这是**产品取向压过统计证据的自觉选择**
+        # （Allen 2026-08-05 三次明确要求跟上当日热点），不是没看见证据。五个阈值全部走
+        # 环境变量，随时可收紧或整条关掉（LYNX_BREAKOUT_SLOTS=0）。
         chosen_syms = {str(it.get("symbol")) for it in final_items}
-        movers = [
-            it for it in items
-            if str(it.get("symbol")) not in chosen_syms
-            and _safe_float(it.get("score_percentile"), 100) <= 10.0
-            and _safe_float(it.get("pct_chg"), 0) >= 4.0
-            and _safe_float(it.get("amount"), 0) >= 2e8
-        ]
-        movers.sort(key=lambda it: -_safe_float(it.get("pct_chg"), 0))
-        for it in movers[:10]:
+        min_pct = _env_float("LYNX_BREAKOUT_MIN_PCT", 5.0)
+        min_amt = _env_float("LYNX_BREAKOUT_MIN_AMOUNT", 3e8)
+        min_theme = _env_float("LYNX_BREAKOUT_MIN_THEME", 0.80)
+        max_pctl = _env_float("LYNX_BREAKOUT_MAX_STRUCT_PCTL", 100.0)
+        slots = max(0, int(_env_float("LYNX_BREAKOUT_SLOTS", 10.0)))
+        movers = []
+        for it in items:
+            symbol = str(it.get("symbol"))
+            if symbol in chosen_syms:
+                continue
+            theme = live.get(symbol)
+            theme_rank = float(theme[0]) if theme else 0.0
+            if (theme_rank < min_theme
+                    or _safe_float(it.get("pct_chg"), 0) < min_pct
+                    or _safe_float(it.get("amount"), 0) < min_amt
+                    or _safe_float(it.get("score_percentile"), 100) > max_pctl):
+                continue
+            it["breakout_theme"] = theme[1] if theme else ""
+            it["breakout_theme_rank"] = round(theme_rank * 100, 1)
+            movers.append(it)
+        # 排序按「当日证据」：主题分位为主、个股涨幅为辅 —— 只看涨幅会把孤立异动排在
+        # 主线龙头前面，而用户要的是主线。
+        movers.sort(key=lambda it: -(
+            _safe_float(it.get("breakout_theme_rank"), 0) + _safe_float(it.get("pct_chg"), 0) * 2
+        ))
+        for it in movers[:slots]:
             it["intraday_breakout"] = True
             it["reasons"] = (
-                [f"盘中爆发直通车:今日 {_safe_float(it.get('pct_chg'), 0):+.1f}%,实时成交 {_safe_float(it.get('amount'), 0) / 1e8:.1f}亿"]
+                [f"盘中爆发直通车：{it.get('breakout_theme') or '主题'}当日分位 "
+                 f"{_safe_float(it.get('breakout_theme_rank'), 0):.0f}，本股 "
+                 f"{_safe_float(it.get('pct_chg'), 0):+.1f}%，实时成交 "
+                 f"{_safe_float(it.get('amount'), 0) / 1e8:.1f}亿"]
                 + list(it.get("reasons") or [])
             )[:8]
-        final_items = final_items + movers[:10]
+        final_items = final_items + movers[:slots]
         for it in final_items:
             atr = 0.0
             try:

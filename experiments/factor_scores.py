@@ -114,6 +114,7 @@ def sample_symbols(payload: dict) -> list:
         closes = ff["close"].to_numpy(dtype=float)
         # 开盘价从归一化后的帧取，保证与 ff 逐行对齐（normalize_ohlcv 会丢弃脏行）
         opens = pd.to_numeric(nd["open"], errors="coerce").to_numpy(dtype=float)
+        vols = pd.to_numeric(nd["volume"], errors="coerce").to_numpy(dtype=float)
         amounts = pd.to_numeric(ff["amount"], errors="coerce").fillna(0).to_numpy(dtype=float)
         cols = {f: ff[f].to_numpy(dtype=float) for f in FACTORS}
         cols["composite"] = ff["composite"].to_numpy(dtype=float)
@@ -139,6 +140,11 @@ def sample_symbols(payload: dict) -> list:
             # 再持有 HORIZON 根。`next_day_move` 就是用户在页面上看到的那个「今日涨跌幅」。
             c_entry, c_exit = closes[i + 1], closes[i + 1 + HORIZON]
             vals["next_day_move"] = float(c_entry / c0 - 1.0) if c0 > 0 else 0.0
+            # 量能：当日量 / 前 20 日均量，以及当日量在前 60 日里的低分位（越大越缩量）。
+            # i >= MIN_BARS-1 = 79，往前取 60 根一定在界内。
+            vbase = float(np.nanmean(vols[i - 20:i]))
+            vals["vol_ratio20"] = float(vols[i] / vbase) if vbase > 0 else 1.0
+            vals["vol_pct60"] = float((vols[i - 60:i] > vols[i]).mean() * 100)
             vals["ret_entry_next_close"] = float(c_exit / c_entry - 1.0) if c_entry > 0 else 0.0
             rows_out.append((s, sym, vals, c1 / c0 - 1.0))
     conn.close()

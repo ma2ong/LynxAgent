@@ -1768,7 +1768,14 @@ async def _compute_lite_smart_pool_unlocked(
             items.append(item)
 
         items.sort(key=lambda item: float(item.get("smart_score") or 0), reverse=True)
-        items = await _enrich_smart_pool_industries(items[: safe_limit + 20])
+        # 直通车票必须绕开这次「按结构分截断」。它们的结构分算的是昨天收盘，天生就低
+        # （2026-08-05 实测：中巨芯 25.1、江化微 24.2，而全市场中位 59.4），按结构分排完
+        # 全部沉在尾部 —— 当日 10 只直通车票有 9 只正是死在这一行，engine 挑得再准也白搭。
+        breakout_items = [item for item in items if item.get("intraday_breakout")]
+        structural_items = [item for item in items if not item.get("intraday_breakout")]
+        items = await _enrich_smart_pool_industries(
+            structural_items[: safe_limit + 20] + breakout_items
+        )
         # 用可靠的 cninfo 行业模块再兜底一遍：把仍为「A股/行业待识别」等占位值的补成真实行业。
         try:
             from quantcore.quant import industry as _industry

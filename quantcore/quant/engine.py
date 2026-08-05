@@ -859,6 +859,12 @@ class QuantEngine:
         movers.sort(key=lambda it: -(
             _safe_float(it.get("breakout_theme_rank"), 0) + _safe_float(it.get("pct_chg"), 0) * 2
         ))
+        # 这条日志是运维用的，不是临时调试：直通车一旦不出票，得能立刻分清是「今天没有
+        # 够格的爆发票」还是「主题分位没算出来」，否则只能靠猜（2026-08-05 就猜错过两次）。
+        logger.warning(
+            "盘中爆发直通车：候选 %d 只（主题映射 %d 只，阈值 主题>=%.2f 涨>=%.1f%% 额>=%.1f亿），取 %d",
+            len(movers), len(live), min_theme, min_pct, min_amt / 1e8, min(len(movers), slots),
+        )
         for it in movers[:slots]:
             it["intraday_breakout"] = True
             it["reasons"] = (

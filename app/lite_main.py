@@ -323,9 +323,16 @@ SMART_POOL_INTRADAY_WEIGHT = 0.22
 # 才开始按日落 14:30 全市场快照，攒够样本前无法 A/B。所以默认保守、走环境变量可调，
 # 而不是焊死一个拍脑袋的数字。参考刻度：结构分满分 100，盘中强度权重 0.22。
 SMART_POOL_SECTOR_BONUS = max(0.0, min(15.0, float(os.getenv("LYNX_SMART_SECTOR_BONUS", "4.0"))))
-# 推荐名单里给「盘中爆发直通车」保留的席位数（见 _reserve_breakout_slots）。
-# 设 0 退回旧行为：纯按重排分截断，今天爆发的票一只都露不出来。
-SMART_POOL_BREAKOUT_SLOTS = max(0, int(float(os.getenv("LYNX_SMART_BREAKOUT_SLOTS", "6"))))
+# 推荐名单里给「盘中爆发直通车」**强制**保留的席位数（见 _reserve_breakout_slots）。
+#
+# 默认 0 = 不强制。2026-08-05 试过默认 6，被否掉：那样会把综合分 65~81 的票硬塞进
+# 一份 86 分起步的名单（中巨芯 65.9、有研硅 64.9），是硬凑不是选股。
+# 正确的分工是「进得来」和「选得上」分开：
+#   进得来 —— 直通车让当日热点票进入候选池（engine 侧，与结构分无关）；
+#   选得上 —— 仍由重排分决定，图形/指标/量能/均线一并说话。
+# 实测关掉强制席位后名单依旧是热门主线（贵金属、MLCC、光刻胶、液冷），
+# 只是换成了真正竞争得过的那些票。保留这个开关是为了以后还能试，不是给默认值用的。
+SMART_POOL_BREAKOUT_SLOTS = max(0, int(float(os.getenv("LYNX_SMART_BREAKOUT_SLOTS", "0"))))
 
 SMART_POOL_RECOMMENDER = {
     "name": "全市场综合优选",

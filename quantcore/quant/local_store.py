@@ -133,6 +133,26 @@ CREATE INDEX IF NOT EXISTS idx_intraday_signal_date_time
 ON intraday_signal_events(trade_date, triggered_at DESC);
 CREATE INDEX IF NOT EXISTS idx_intraday_signal_symbol_time
 ON intraday_signal_events(symbol, triggered_at DESC);
+-- 每个交易日固定时点（默认 14:30）的全市场行情快照。
+-- 用途：验证「盘中就生成名单」是否可行 —— 现在排序只吃最近完整日线（factors.py 的
+-- amount>0 过滤掉当日占位 bar），要判断盘中生成的名单好不好，必须先有 point-in-time
+-- 的盘中行情历史，而这个库里没有（intraday_signal_events 只覆盖爆发候选）。
+-- 注意量纲：volume 单位是「股」（与 daily_kline 的「手」差 100 倍），amount 是「元」，
+-- 与 daily_kline.amount 同单位可直接比。
+CREATE TABLE IF NOT EXISTS intraday_snapshots (
+    trade_date TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    captured_at TEXT NOT NULL,
+    price REAL,
+    open REAL,
+    high REAL,
+    low REAL,
+    prev_close REAL,
+    volume REAL,
+    amount REAL,
+    quote_source TEXT,
+    PRIMARY KEY (trade_date, symbol)
+);
 """
 
 _COLS = ["date", "open", "high", "low", "close", "volume", "amount"]
@@ -694,6 +714,48 @@ class LocalQuantStore:
         )
         conn.commit()
         return len(rows)
+
+    def record_intraday_snapshot(
+        self, trade_date: str, captured_at: str, snapshot: Dict[str, Dict]
+    ) -> int:
+        """把一份全市场实时快照按交易日落库。同一交易日重复调用不覆盖（INSERT OR IGNORE）。
+
+        不覆盖是刻意的：这份数据的价值就在于它是 point-in-time 的。一天只留第一次
+        写入的那一份，晚一点的循环再来也不会把 14:30 的样本改写成 15:00 的。
+        """
+        if not snapshot:
+            return 0
+        rows = []
+        for symbol, quote in snapshot.items():
+            sym = str(symbol or "").strip().zfill(6)
+            if not sym.isdigit() or not isinstance(quote, dict):
+                continue
+            price = _f(quote.get("price"))
+            if price <= 0:
+                continue
+            rows.append((
+                trade_date, sym, captured_at, price,
+                _f(quote.get("open")), _f(quote.get("high")), _f(quote.get("low")),
+                _f(quote.get("prev_close")), _f(quote.get("volume")), _f(quote.get("amount")),
+                str(quote.get("quote_source") or ""),
+            ))
+        if not rows:
+            return 0
+        conn = self._conn()
+        conn.executemany(
+            "INSERT OR IGNORE INTO intraday_snapshots("
+            "trade_date,symbol,captured_at,price,open,high,low,prev_close,volume,amount,quote_source"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            rows,
+        )
+        conn.commit()
+        return len(rows)
+
+    def intraday_snapshot_dates(self) -> List[str]:
+        """已落库的盘中快照交易日（升序）。用来判断今天是否已采、以及样本攒了多少。"""
+        return [str(r[0]) for r in self._conn().execute(
+            "SELECT DISTINCT trade_date FROM intraday_snapshots ORDER BY trade_date"
+        )]
 
     def load_intraday_signal_events(
         self,

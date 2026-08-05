@@ -25,7 +25,12 @@ logger = logging.getLogger("board_refresh")
 _task: asyncio.Task | None = None
 _smart_pool_warm_date: str | None = None
 _last_auto_sync_attempt: float = 0.0
+_snapshot_capture_date: str | None = None
 _TZ = ZoneInfo("Asia/Shanghai")
+
+# 盘中快照落库时点。选 14:30：全天成交额已走掉约九成，量能推算误差小；
+# 又留出 30 分钟，让「盘中生成名单」这条路真的还来得及下单。
+_SNAPSHOT_CAPTURE_HHMM = os.getenv("INTRADAY_SNAPSHOT_AT", "14:30")
 
 
 def _latest_bar_is_stale(store) -> bool:
@@ -130,6 +135,39 @@ async def _safe(name: str, coro) -> None:
         logger.warning("board refresh [%s] failed: %s", name, exc)
 
 
+def _capture_intraday_snapshot(snapshot: dict) -> None:
+    """交易日过了 14:30 就把这份全市场快照落一次库，每天只落第一份。
+
+    为什么要这份数据：排序现在只吃最近完整日线（`factors.py` 用 amount>0 滤掉当日
+    占位 bar），所以名单在两个收盘之间是冻结的。要判断「盘中就生成名单」是否更好，
+    必须有盘中的 point-in-time 行情历史 —— 库里没有，`intraday_signal_events` 只覆盖
+    爆发候选。先攒数据，够了再谈改排序。**本函数不参与任何排序，纯记录。**
+
+    时间与日期一律取快照自报的时间戳，不用本机时钟：节假日/休市时快照停在上一交易日，
+    按本机日期算会把上一交易日的收盘当成「今天 14:30」写进去，一条假样本毁一天。
+    """
+    global _snapshot_capture_date
+
+    from quantcore.quant.engine import _snapshot_stamp
+    from quantcore.quant.local_store import get_local_store
+
+    if not snapshot:
+        return
+    snap_date, snap_time = _snapshot_stamp(snapshot)
+    today = datetime.now(_TZ).strftime("%Y-%m-%d")
+    # 快照日期必须就是今天：不等于今天说明是休市日的陈旧快照，不采。
+    if not snap_date or snap_date != today or _snapshot_capture_date == snap_date:
+        return
+    if not snap_time or snap_time < _SNAPSHOT_CAPTURE_HHMM:
+        return
+
+    written = get_local_store().record_intraday_snapshot(
+        snap_date, f"{snap_date}T{snap_time}", snapshot
+    )
+    _snapshot_capture_date = snap_date
+    logger.info("intraday snapshot captured: %s %s, %d symbols", snap_date, snap_time, written)
+
+
 async def _refresh_cycle() -> None:
     """算好一轮所有板块，灌进各自缓存。顺序执行、彼此隔离。"""
     global _smart_pool_warm_date
@@ -149,6 +187,9 @@ async def _refresh_cycle() -> None:
         snapshot = await md._run_data_task(md._load_realtime_quotes_snapshot, 0, timeout=15.0) or {}
     except Exception as exc:  # noqa: BLE001
         logger.warning("board refresh [snapshot] failed: %s", exc)
+
+    # 1.5) 盘中快照落库：每交易日一次，为「盘中生成名单」攒 point-in-time 样本。
+    await _safe("intraday-snapshot", asyncio.to_thread(_capture_intraday_snapshot, snapshot))
 
     # 2) 风险扫描（breakdown 破位广度 + 全市场卖出信号）→ 暖 _RISK_SCAN_CACHE
     await _safe("risk-scan", asyncio.to_thread(q._risk_scan_cached, snapshot))

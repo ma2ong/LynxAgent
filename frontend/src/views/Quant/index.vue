@@ -28,19 +28,24 @@
           type="success"
           title="交易时段内每30秒按实时价格、涨跌幅、成交活跃度、量比和雷达时机自动重排"
         >盘中30秒更新</el-tag>
+        <!-- 数据状态并进标题行：它平时只有一句「今日已更新」，独占一整栏太浪费版面，
+             展开的明细仍然在下面那块，只是不展开就不占位。 -->
+        <el-tag
+          v-if="dataHealth"
+          class="health-chip"
+          effect="plain"
+          :type="healthChipType"
+          :title="dataHealth.message"
+        >{{ healthTitle }} {{ dataHealth.today_count }}/{{ dataHealth.meta_count }}</el-tag>
+        <a v-if="dataHealth" class="desc-toggle" @click="showHealthDetail = !showHealthDetail">
+          {{ showHealthDetail ? '收起' : '明细' }}
+        </a>
         <el-tag effect="plain" type="info">研究跟踪，不构成交易建议</el-tag>
       </div>
     </section>
 
-    <section v-if="dataHealth" class="data-health" :class="[`health-${dataHealth.status}`, { collapsed: !showHealthDetail }]">
-      <div class="health-title">
-        <b>{{ healthTitle }}</b>
-        <span>{{ dataHealth.message }}</span>
-        <a class="desc-toggle" @click="showHealthDetail = !showHealthDetail">
-          {{ showHealthDetail ? '收起' : '明细' }}
-        </a>
-      </div>
-      <div v-show="showHealthDetail" class="health-meta">
+    <section v-if="dataHealth && showHealthDetail" class="data-health" :class="`health-${dataHealth.status}`">
+      <div class="health-meta">
         <span>股票池 {{ dataHealth.meta_count }}</span>
         <span>K线 {{ dataHealth.kline_symbols }}</span>
         <span>最新完整 {{ dataHealth.latest_complete_date || '-' }}</span>
@@ -49,7 +54,7 @@
           缺口日 {{ dataHealth.gap_dates.join('、') }}（已触发自动补齐，统计自动排除）
         </span>
       </div>
-      <div v-show="showHealthDetail" class="health-actions">
+      <div class="health-actions">
         <el-tag v-if="dataHealth.sync_running || syncRunning" type="warning" effect="plain">
           同步中 {{ syncStatus.done || dataHealth.sync_done || 0 }}/{{ syncStatus.total || dataHealth.sync_total || 0 }}
         </el-tag>
@@ -1030,6 +1035,13 @@ const syncStatus = ref<any>({ running: false, phase: 'idle', done: 0, total: 0, 
 const syncRunning = computed(() => !!syncStatus.value.running)
 const syncPct = computed(() => syncStatus.value.total ? Math.floor(syncStatus.value.done / syncStatus.value.total * 100) : 0)
 const isIntradayHealth = computed(() => dataHealth.value?.status === 'intraday')
+const healthChipType = computed(() => {
+  const status = dataHealth.value?.status
+  if (status === 'fresh' || status === 'intraday') return 'success'
+  if (status === 'partial_today' || status === 'stale_today') return 'warning'
+  if (status === 'insufficient' || status === 'empty') return 'danger'
+  return 'info'
+})
 const healthTitle = computed(() => {
   const status = dataHealth.value?.status
   if (status === 'fresh') return '今日已更新'
@@ -2412,6 +2424,10 @@ const openChart = async (row: any) => {
 .basis-note { padding: 4px 10px; font-size: 12px; }
 .summary-meta { gap: 4px 8px; padding-top: 3px; }
 .pattern-cat-filter { margin: 2px 0 6px; }
+
+.health-chip { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.head-tags .desc-toggle { font-size: 12px; }
+.data-health { margin-bottom: 8px; }
 
 /* 单行高度：标签的外边距与行高是主因，表格纵向 padding 次之 */
 .capability-tag { margin: 0 4px 3px 0; }

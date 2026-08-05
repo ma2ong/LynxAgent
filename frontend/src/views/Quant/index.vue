@@ -306,7 +306,7 @@
               ref="smartTableRef"
               class="smart-pool-table"
               :data="smartDisplayItems"
-              max-height="520"
+              max-height="640"
               size="small"
               @selection-change="handleSmartSelectionChange"
             >
@@ -447,12 +447,18 @@
                     :title="`结构因子之上，形态/强度共振加成 +${row.confluence_bonus}（已计入排序，量化分保持结构分不动）`">
                     共振+{{ row.confluence_bonus }}
                   </el-tag>
-                  <el-tag v-for="pattern in row.patterns || []" :key="pattern.key || pattern.name"
+                  <el-tag v-for="pattern in (row.patterns || []).slice(0, MAX_PATTERN_TAGS)" :key="pattern.key || pattern.name"
                     class="capability-tag"
                     :type="pattern.category === '三不卖' ? 'success' : 'primary'"
                     :effect="pattern.category === '三不卖' ? 'dark' : 'plain'"
                     :title="pattern.reason">
                     <template v-if="pattern.category === '三不卖'">🔒 </template>{{ pattern.name }} {{ formatScore(pattern.strength) }}
+                  </el-tag>
+                  <!-- 超出的形态折进一个 +N：一行动辄十几个标签是行高失控的主因，
+                       而排序只看分数，标签是佐证，全部铺开反而让一屏看不到几只票。 -->
+                  <el-tag v-if="(row.patterns || []).length > MAX_PATTERN_TAGS" class="capability-tag more-tag" effect="plain"
+                    :title="(row.patterns || []).slice(MAX_PATTERN_TAGS).map(p => `${p.name} ${formatScore(p.strength)}`).join('\n')">
+                    +{{ (row.patterns || []).length - MAX_PATTERN_TAGS }}
                   </el-tag>
                   <el-tag v-if="row.strength && row.strength.ema_stack" class="capability-tag" type="success" effect="plain"
                     title="站上 EMA8 且 EMA21、且多头排列（强度确认）">EMA多头</el-tag>
@@ -470,8 +476,12 @@
                       ⚠ {{ f.name }}
                     </el-tag>
                   </el-tooltip>
-                  <el-tag v-for="reason in row.reasons" :key="reason" class="capability-tag" effect="plain">
+                  <el-tag v-for="reason in (row.reasons || []).slice(0, MAX_REASON_TAGS)" :key="reason" class="capability-tag" effect="plain">
                     {{ reason }}
+                  </el-tag>
+                  <el-tag v-if="(row.reasons || []).length > MAX_REASON_TAGS" class="capability-tag more-tag" effect="plain"
+                    :title="(row.reasons || []).slice(MAX_REASON_TAGS).join('\n')">
+                    +{{ (row.reasons || []).length - MAX_REASON_TAGS }}
                   </el-tag>
                 </template>
               </el-table-column>
@@ -1154,6 +1164,10 @@ const riskAlert = ref<RiskAlert | null>(null)
 const showPoolDesc = ref(false)
 const showHealthDetail = ref(false)
 const showBasketEvidence = ref(false)
+// 每行最多铺多少个标签，其余折进「+N」（悬停可看全）。目的是在一屏里多显示几只票 ——
+// 标签是佐证不是排序依据，全部铺开会把单行撑到 200px 以上，一屏只剩三四只。
+const MAX_PATTERN_TAGS = 4
+const MAX_REASON_TAGS = 3
 // 重合度高说明这就是上一份名单，标红提示——避免被当成「今天又选中了同一批」
 const basisOverlapHigh = computed(() => {
   const b = smartPoolResult.value?.list_basis
@@ -2388,4 +2402,20 @@ const openChart = async (row: any) => {
 }
 .compact-smart-hero h2 { font-size: 16px; margin-bottom: 0; white-space: nowrap; }
 .compact-smart-hero p { margin: 4px 0 0; font-size: 12px; line-height: 1.6; }
+
+/* —— 紧凑版面 ——
+   页头堆了六层（更新提示 / 标签页 / 工具条 / 推荐计数 / 环境仓位+结构底池 / 入场说明），
+   加上每行铺满标签，1080p 下一屏只能看到三只票。这里只压缩留白与行高，不删任何信息：
+   标签超出部分折进「+N」（见 MAX_PATTERN_TAGS / MAX_REASON_TAGS），悬停仍可看全。 */
+.decision-context { gap: 4px; margin-bottom: 4px; }
+.env-gate, .basket-note { padding: 4px 10px; font-size: 12px; }
+.basis-note { padding: 4px 10px; font-size: 12px; }
+.summary-meta { gap: 4px 8px; padding-top: 3px; }
+.pattern-cat-filter { margin: 2px 0 6px; }
+
+/* 单行高度：标签的外边距与行高是主因，表格纵向 padding 次之 */
+.capability-tag { margin: 0 4px 3px 0; }
+.more-tag { opacity: .7; cursor: help; }
+.smart-pool-table :deep(.el-table__cell) { padding: 6px 0; }
+.smart-pool-table :deep(.cell) { line-height: 1.45; }
 </style>

@@ -318,6 +318,11 @@ async def health():
 # structure_shadow 三处各写死 10，导致前端「推荐上限」控件调了也没用——改这里一处即可。
 SMART_POOL_MAX_ITEMS = 20
 SMART_POOL_INTRADAY_WEIGHT = 0.22
+# 当日板块强弱在盘中重排里的最大加/减分：分位 1.0 → +N，0.0 → −N，0.5 → 0。
+# 与雷达的板块权重同理，这个数**没有回测依据** —— 板块的盘中口径历史从 2026-08-05
+# 才开始按日落 14:30 全市场快照，攒够样本前无法 A/B。所以默认保守、走环境变量可调，
+# 而不是焊死一个拍脑袋的数字。参考刻度：结构分满分 100，盘中强度权重 0.22。
+SMART_POOL_SECTOR_BONUS = max(0.0, min(15.0, float(os.getenv("LYNX_SMART_SECTOR_BONUS", "4.0"))))
 
 SMART_POOL_RECOMMENDER = {
     "name": "全市场综合优选",
@@ -822,11 +827,73 @@ def _mark_countertrend_daytrade(items: list[dict[str, Any]]) -> int:
     return marked
 
 
+async def _live_theme_ranks() -> dict[str, tuple[float, str]]:
+    """{股票代码: (当日主题强度分位 0..1, 主题名)}。全市场快照聚合，45 秒缓存一份。
+
+    两个维度一起看，取**更强的那个**：
+    - 行业（申万 128 个）：覆盖全市场，粗粒度；
+    - 概念（东财 89 个热门板块）：只覆盖 4099 只，但粒度对得上真实主线 ——
+      2026-08-05 实测存储芯片 +6.34%(分位 99.4)、MLCC +6.03%(98.2)，而它们所属的
+      半导体行业只有 +5.78%、元件 +4.98%。用户嘴里的"热点"说的是前者。
+
+    只在**可排**的桶之间取 max：成分不足的桶 sector_rank 会给 0.5，若把它也纳入 max，
+    冷门行业的票会被一个中性概念凭空托到 0.5，等于把负信号抹平。所以先按成分数筛掉。
+
+    必须按全市场聚合而不是池内那几十只：池被截断时一个桶在池里可能只剩两三只，
+    均值噪声大到分位失去意义（同 engine 里 industry_heat 的口径说明）。
+    """
+    cached = _cache_get("live_theme_ranks", 45)
+    if cached is not None:
+        return cached
+    out: dict[str, tuple[float, str]] = {}
+    try:
+        snapshot = await _run_data_task(_load_realtime_quotes_snapshot, 30, timeout=8.0)
+        from quantcore.quant.concept_lookup import code_concept_map
+        from quantcore.quant.industry import (
+            SECTOR_MIN_MEMBERS,
+            industry_map as _industry_map,
+            sector_rank as _sector_rank,
+            sector_stats_from_quotes as _sector_stats,
+        )
+
+        for bucket_by_symbol in (_industry_map(), code_concept_map()):
+            if not bucket_by_symbol:
+                continue
+            stats = _sector_stats(snapshot or {}, bucket_by_symbol)
+            ranks = _sector_rank(stats)
+            for symbol, bucket in bucket_by_symbol.items():
+                if int(stats.get(bucket, {}).get("count") or 0) < SECTOR_MIN_MEMBERS:
+                    continue
+                rank = ranks.get(bucket)
+                if rank is None:
+                    continue
+                code = str(symbol).zfill(6)
+                if code not in out or rank > out[code][0]:
+                    out[code] = (float(rank), str(bucket))
+    except Exception as exc:  # noqa: BLE001
+        # 拿不到就退回「没有主题信息」，重排照跑，只是少一项；不能让它拖垮整个名单。
+        print(f"live theme ranks failed: {exc}")
+    _cache_set("live_theme_ranks", out)
+    return out
+
+
 def _rerank_smart_pool_intraday(
     items: list[dict[str, Any]],
     fresh_symbols: set[str] | None = None,
+    theme_ranks: dict[str, tuple[float, str]] | None = None,
 ) -> None:
-    """在强结构候选中叠加实时量价，盘中动态重排但不改写日 K 结构分。"""
+    """在强结构候选中叠加实时量价与**当日板块强弱**，盘中动态重排但不改写日 K 结构分。
+
+    为什么必须在这一层加板块：结构分里的 industry_heat 因子读的是 `stage_inputs`，
+    而它只取 amount>0 的真实 bar，跳过盘中占位 bar —— 也就是**永远落后一个交易日**。
+    2026-08-05 实测：当天半导体全市场 +4.55%，该因子给它的百分位是 4.8（因为"截至
+    昨天"它最弱）；软件开发百分位 96（因为"截至昨天"它最强）。用户看到的"总是慢半拍、
+    老推之前涨得好的软件股"就是这么来的，改日线因子的公式治不了，必须把今天的盘中
+    板块涨幅混进来。
+
+    theme_ranks 为 {代码: (0..1 分位, 主题名)}，行业与概念取更强者，由全市场实时快照
+    算出（见 _live_theme_ranks）。
+    """
     if not items:
         return
 
@@ -881,7 +948,18 @@ def _rerank_smart_pool_intraday(
             intraday_score if intraday_score is not None else 50.0,
             intraday_weight=SMART_POOL_INTRADAY_WEIGHT,
         )
+        # 当日主题（行业/概念取更强者）强弱：分位 0..1 映射到 ±SMART_POOL_SECTOR_BONUS 分。
+        # 只在拿到实时行情时生效——没有当日行情就谈不上"当日主题"。
+        theme = (theme_ranks or {}).get(symbol)
+        theme_pct, theme_name = (theme[0], theme[1]) if theme else (None, "")
+        sector_bonus = 0.0
+        if has_fresh_quote and theme_pct is not None:
+            sector_bonus = (float(theme_pct) - 0.5) * 2 * SMART_POOL_SECTOR_BONUS
+            realtime_rank_score = round(max(0.0, min(100.0, realtime_rank_score + sector_bonus)), 2)
         item["intraday_strength_score"] = intraday_score
+        item["theme_name"] = theme_name or None
+        item["theme_rank_percentile"] = round(float(theme_pct) * 100, 1) if theme_pct is not None else None
+        item["sector_bonus"] = round(sector_bonus, 2)
         item["realtime_rank_score"] = realtime_rank_score
         item["intraday_activity_percentile"] = round(activity, 1) if has_fresh_quote else None
         reasons = [
@@ -892,6 +970,11 @@ def _rerank_smart_pool_intraday(
             and not str(reason).startswith("盘中强度 ")
         ]
         if has_fresh_quote:
+            if abs(sector_bonus) >= 0.5 and theme_pct is not None:
+                reasons.insert(
+                    0,
+                    f"{theme_name}当日强度分位 {theme_pct * 100:.0f}（{sector_bonus:+.1f} 分）",
+                )
             reasons.insert(
                 0,
                 f"盘中动态分 {realtime_rank_score:.1f}（涨跌 {pct_chg:+.2f}%·量能活跃 {activity:.0f}）",
@@ -1220,7 +1303,9 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
             if isinstance(item.get("trade_plan"), dict):
                 item["trade_plan"]["env_position"] = gate.get("label")
                 item["trade_plan"]["env_note"] = gate.get("note")
-    _rerank_smart_pool_intraday(items, fresh_symbols=fresh_symbols)
+    _rerank_smart_pool_intraday(
+        items, fresh_symbols=fresh_symbols, theme_ranks=await _live_theme_ranks()
+    )
     data["items"] = items
     await _apply_intraday_quality(data)
     if float(gate.get("coefficient") or 0) <= 0:
@@ -1373,7 +1458,7 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
         # 全量刷新实时行情，再动态重排最终名单，而不是永远只能在昨天那批里换顺序。
         data["structure_candidates"] = deepcopy(kept)
         data["intraday_candidate_count"] = len(kept)
-        _rerank_smart_pool_intraday(kept)
+        _rerank_smart_pool_intraday(kept, theme_ranks=await _live_theme_ranks())
         data["items"] = kept
         data["excluded_severe_count"] = len(excluded)
         data["excluded_severe_samples"] = [
@@ -1527,7 +1612,9 @@ async def _compute_lite_smart_pool_unlocked(
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     cache_key = (
-        f"smart-pool:factor-v15-top20-hotlimit-ok:{daily_as_of}:"
+        # v16：industry_heat 由「昨收阶段分」改为「昨收阶段分 × 当日实时主题分位」融合
+        # （2026-08-05）。评分输入变了就必须换 key，否则旧公式算出的名单会继续被端上来。
+        f"smart-pool:factor-v16-live-theme:{daily_as_of}:"
         f"{strategy}:{safe_limit}:{safe_universe}"
     )
     _smart_pool_task_update(

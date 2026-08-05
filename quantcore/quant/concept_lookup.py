@@ -326,6 +326,19 @@ def get_concept(name: str) -> Optional[str]:
     return _SEED.get(nm)
 
 
+def code_concept_map() -> Dict[str, str]:
+    """返回 {股票代码: 真实概念板块名}，供「今日哪些概念在爆发」按板块聚合用。
+
+    与 name_concept_map 的区别有两处，都是刻意的：
+    - 按**代码**而不是名称——要和行情快照按代码 join，名称会因改名/同名而对不上；
+    - 取**真实板块名**（存储芯片、MLCC）而不是概念桶——桶是为涨停归因做的粗分类，
+      而板块轮动要的正是细粒度：存储芯片 +6.34% 与它所属的半导体 +5.78% 不是一回事。
+    """
+    _ensure_today()
+    with _lock:
+        return {code: hit[1] for code, hit in _by_code.items() if hit and hit[1]}
+
+
 def name_concept_map() -> Dict[str, str]:
     """返回 {股票名: 概念桶}，合并当日动态映射与静态种子，供受益股反查（serenity_resolve 用）。"""
     _ensure_today()

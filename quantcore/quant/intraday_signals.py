@@ -15,10 +15,23 @@ from typing import Any, Dict, Iterable, Optional
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from .industry import SECTOR_MIN_MEMBERS, SECTOR_MIN_RANKED, sector_rank
 from .local_store import LocalQuantStore, get_local_store
 
 
 _TZ = ZoneInfo("Asia/Shanghai")
+# 板块共振在雷达总分里的权重。0.20 是历史值；调高 = 更跟板块轮动、更少被单票量价带偏。
+# 走环境变量而不是改这里的默认值：这个数**没有回测依据**（雷达是盘中口径，而库里还没有
+# 盘中历史，2026-08-05 才开始按日落 14:30 全市场快照）。攒够样本前它只能靠盘面观察定，
+# 所以要能随时改、随时回退，而不是把一个拍脑袋的数字焊死在代码里。
+_SECTOR_WEIGHT_DEFAULT = 0.20
+
+
+def _sector_weight() -> float:
+    import os
+    return _clip(_f(os.getenv("LYNX_RADAR_SECTOR_WEIGHT"), _SECTOR_WEIGHT_DEFAULT), 0.0, 0.6)
+
+
 ACTIVE_STATUSES = {"watch", "entry", "unbuyable"}
 STATUS_LABELS = {
     "watch": "提前预警",
@@ -278,6 +291,19 @@ class IntradaySignalEngine:
             }
             for industry, values in sector_returns.items()
         }
+        # 板块强弱的**横截面分位**（0..1，只在成分 >=3 的板块之间排）。
+        # 原先直接用绝对涨幅 clip(mean*6, -18, 18)：板块涨到 3% 就封顶，于是 +6% 的贵金属
+        # 与任意 +3% 的板块同分，乘 0.20 权重后最终只差不到 1 分 —— 板块共振等于没进排序。
+        # 分位是无量纲的：不管今天全市场是普涨还是普跌，"最强的那批板块"总能被排出来。
+        # 板块强弱用横截面分位（与智选盘中重排共用 industry.sector_rank，同一套口径）。
+        # 可排板块太少就没有横截面可言（只会出现在单票/小样本扫描里，生产每轮扫全市场、
+        # 上百个板块）。这种退化场景退回绝对涨幅口径，而不是把所有板块压成中性。
+        ranks = sector_rank(sector_stats)
+        sector_rankable = sum(
+            1 for s in sector_stats.values() if s["count"] >= SECTOR_MIN_MEMBERS
+        ) >= SECTOR_MIN_RANKED
+        for name, stat in sector_stats.items():
+            stat["rank"] = ranks.get(name, 0.5)
 
         events: list[Dict[str, Any]] = []
         for symbol, quote in valid.items():
@@ -352,17 +378,24 @@ class IntradaySignalEngine:
             price_score = _clip(price_score)
 
             industry = str(base.get("industry") or "其他")
-            sector = sector_stats.get(industry, {"mean": 0.0, "breadth": 0.5, "count": 0})
-            context_score = 48 + _clip(_f(sector["mean"]) * 6, -18, 18)
+            sector = sector_stats.get(industry, {"mean": 0.0, "breadth": 0.5, "count": 0, "rank": 0.5})
+            if sector_rankable:
+                context_score = 48 + (_f(sector.get("rank"), 0.5) - 0.5) * 44
+            else:
+                context_score = 48 + _clip(_f(sector["mean"]) * 6, -18, 18)
             context_score += (_f(sector["breadth"], 0.5) - 0.5) * 20
             context_score += (breadth_up - 0.5) * 16
             context_score = _clip(context_score)
 
+            w_ctx = _sector_weight()
+            # 板块权重可调，其余三项按原比例（0.32:0.27:0.21）分摊剩下的份额，
+            # 这样调板块权重不会连带改变量价与趋势之间的相对关系。
+            rest = (1.0 - w_ctx) / 0.80
             score = (
-                price_score * 0.32
-                + volume_score * 0.27
-                + trend_score * 0.21
-                + context_score * 0.20
+                price_score * 0.32 * rest
+                + volume_score * 0.27 * rest
+                + trend_score * 0.21 * rest
+                + context_score * w_ctx
                 + (4 if breakout20 else 0)
             )
             score = round(_clip(score), 1)

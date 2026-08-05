@@ -156,6 +156,21 @@ def _fetch_tencent_quotes(symbols: List[str]) -> Dict[str, Dict[str, object]]:
 
 # market_context 的全表窗口扫描冷查询可达 20s+，页面横幅等不起。按快照日期分槽缓存：
 # 盘中口径（横幅）与日线口径（池子留痕）各留一份，互不挤掉对方，否则两边会来回互相作废。
+def _live_theme_weight() -> float:
+    """industry_heat 因子里「当日实时主题强度」占的比重，其余给昨收阶段分。
+
+    默认 0.5：两者各半。昨收阶段分刻画的是板块的量价位置（已经走到哪一阶段），
+    当日实时分位刻画的是今天资金往哪去，两个都要，缺一个就是要么慢半拍、要么纯追涨。
+    走环境变量可调：这个数**没有回测依据**（板块的盘中口径历史 2026-08-05 才开始按日
+    落 14:30 全市场快照），攒够样本前只能靠盘面观察定，必须能随时改、随时回退。
+    """
+    import os
+    try:
+        return max(0.0, min(1.0, float(os.getenv("LYNX_LIVE_THEME_WEIGHT", "0.5"))))
+    except ValueError:
+        return 0.5
+
+
 _MARKET_CTX_CACHE: Dict[str, Tuple[float, Dict[str, object]]] = {}
 _CTX_TTL_INTRADAY = 60.0   # 盘中要跟着刷新走
 _CTX_TTL_DAILY = 600.0     # 日线级数据 10 分钟足够
@@ -734,6 +749,28 @@ class QuantEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("smart_pool 板块阶段分计算失败，本因子按中性计: %s", exc)
             industry_heat = {}
+
+        # 混入**当日实时主题强度**。上面那份阶段分读 stage_inputs，而它只取 amount>0 的
+        # 真实 bar、跳过盘中占位 bar，所以永远落后一个交易日：2026-08-05 当天半导体全市场
+        # +5.78%，阶段分给它的百分位却是 4.8（"截至昨天"它最弱），软件开发 96（"截至昨天"
+        # 最强）。用户说的「总是慢半拍、老推之前涨得好的软件股」就是这一条。
+        #
+        # 必须在**这里**混而不是只在盘中重排里混：重排只能对已入池的 40 只重新排序，
+        # 而没进结构底池的票加多少分也进不来。要让今天爆发的板块真的被选进来，
+        # 主题强度就得参与候选筛选。
+        try:
+            from .concept_lookup import code_concept_map
+            from .industry import live_theme_ranks
+
+            live = live_theme_ranks(quote_map, [ind_by_symbol, code_concept_map()])
+            if live:
+                w = _live_theme_weight()
+                for sym, (rank, _name) in live.items():
+                    stale = industry_heat.get(sym, 50.0)
+                    industry_heat[sym] = stale * (1 - w) + rank * 100.0 * w
+                logger.info("smart_pool 主题强度已混入 %d 只（权重 %.2f）", len(live), w)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("smart_pool 当日主题强度混入失败，仅用昨收阶段分: %s", exc)
         workers = min(6, max(1, os.cpu_count() or 4))
         chunk_size = max(1, (len(gated_symbols) + workers - 1) // workers)
         payloads = [{

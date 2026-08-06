@@ -26,6 +26,7 @@ _task: asyncio.Task | None = None
 _smart_pool_warm_date: str | None = None
 _last_auto_sync_attempt: float = 0.0
 _snapshot_capture_date: str | None = None
+_panel_batch_date: str | None = None
 _TZ = ZoneInfo("Asia/Shanghai")
 
 # 盘中快照落库时点。选 14:30：全天成交额已走掉约九成，量能推算误差小；
@@ -168,6 +169,34 @@ def _capture_intraday_snapshot(snapshot: dict) -> None:
     logger.info("intraday snapshot captured: %s %s, %d symbols", snap_date, snap_time, written)
 
 
+def _run_daily_panel_batch() -> None:
+    """每交易日给当日留痕名单补一次五方判读，落进 panel_scores。
+
+    为什么必须后台跑：这份评分原本只在用户打开推荐页、前端调 /panel/batch 时才触发。
+    2026-08-06 把「五方判读」那一列从表格撤掉后就没人再触发它了，数据会当场断流 ——
+    而我们要的正是长期积累，好用 experiments/panel_eval.py 回答「共识分高的票后续是不是
+    真的更好」。有答案之前它不参与任何排序，只是记账。
+
+    每天只跑一次；LLM 单线程顺序打分，20 只要几分钟，所以丢线程里跑、不占刷新循环。
+    """
+    global _panel_batch_date
+
+    from quantcore.quant import llm
+    from quantcore.quant.investor_panel import run_panel_batch
+    from quantcore.quant.local_store import get_local_store
+
+    today = datetime.now(_TZ).strftime("%Y-%m-%d")
+    if _panel_batch_date == today or not llm.available():
+        return
+    store = get_local_store()
+    symbols = store.load_picks_symbols(today, "smart", 20)
+    if not symbols:
+        return  # 今天还没留痕，下一轮再来
+    _panel_batch_date = today
+    done = run_panel_batch(today, symbols)
+    logger.warning("五方判读留痕：%s 当日名单 %d 只，新打分 %d 只", today, len(symbols), done)
+
+
 async def _refresh_cycle() -> None:
     """算好一轮所有板块，灌进各自缓存。顺序执行、彼此隔离。"""
     global _smart_pool_warm_date
@@ -190,6 +219,9 @@ async def _refresh_cycle() -> None:
 
     # 1.5) 盘中快照落库：每交易日一次，为「盘中生成名单」攒 point-in-time 样本。
     await _safe("intraday-snapshot", asyncio.to_thread(_capture_intraday_snapshot, snapshot))
+
+    # 1.6) 五方判读留痕：每交易日给当日名单补一次分，供日后回答它有没有预测力。
+    await _safe("panel-batch", asyncio.to_thread(_run_daily_panel_batch))
 
     # 2) 风险扫描（breakdown 破位广度 + 全市场卖出信号）→ 暖 _RISK_SCAN_CACHE
     await _safe("risk-scan", asyncio.to_thread(q._risk_scan_cached, snapshot))

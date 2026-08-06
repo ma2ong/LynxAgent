@@ -354,17 +354,11 @@
                   <span v-else>-</span>
                 </template>
               </el-table-column>
-              <el-table-column label="五方判读" width="82">
-                <template #default="{ row }">
-                  <el-tooltip v-if="panelScores.smart[row.symbol]" :content="panelScores.smart[row.symbol].summary" placement="top">
-                    <el-button text size="small" @click.stop="openPanelDialog(row, 'smart')">
-                      <b>{{ panelScores.smart[row.symbol].consensus_score.toFixed(0) }}</b>
-                      <span class="panel-div">±{{ panelScores.smart[row.symbol].divergence.toFixed(0) }}</span>
-                    </el-button>
-                  </el-tooltip>
-                  <span v-else class="panel-pending">—</span>
-                </template>
-              </el-table-column>
+              <!-- 五方判读那一列已撤（2026-08-06）：它的输入就是本表已经展示过的那些
+                   本地指标，不带来新信息；又从未被验证过命中率；LLM 单线程补打导致大多数
+                   时候显示「—」，反而像数据出错。功能保留在个股深研，并转入留痕+复盘：
+                   后台每日给当日名单打分入库，攒够样本后用 experiments/panel_eval.py
+                   量它有没有预测力 —— 有就加权重，没有就删干净。 -->
               <el-table-column prop="symbol" label="代码" width="80" />
               <el-table-column label="名称" width="116">
                 <template #default="{ row }">

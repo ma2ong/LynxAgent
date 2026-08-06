@@ -52,10 +52,38 @@ def recommendation_limit() -> int:
     return max(5, min(value, 20))
 
 
+def payload_limit() -> int:
+    """回给前端的条数。比 recommendation_limit（默认 10）大，因为页面上有
+    入场触发/提前预警/不可追入 三个筛选标签，只回 10 条的话点开标签基本是空的 ——
+    而筛选是在这份 items 上做的，不会再向后端要数据。"""
+    value = int(os.getenv("INTRADAY_PAYLOAD_LIMIT", "60"))
+    return max(recommendation_limit(), min(value, 200))
+
+
 def _trim_recommendations(payload: dict[str, Any], limit: int | None = None) -> dict[str, Any]:
-    safe_limit = max(1, min(int(limit or recommendation_limit()), recommendation_limit()))
+    safe_limit = max(1, min(int(limit or payload_limit()), payload_limit()))
     current = dict(payload)
-    items = list(current.get("items") or [])[:safe_limit]
+    # 每个状态各留配额，再按分数排序。
+    # 只按总分一刀切会让某一状态吃掉全部名额 —— 2026-08-06 实测 60 个名额里 40 个是
+    # entry，提前预警只剩 2 条，用户点开「提前预警」标签几乎是空的。而筛选是在这份
+    # items 上做的，后端不给就永远没有。
+    by_status: dict[str, list] = {}
+    for item in current.get("items") or []:
+        by_status.setdefault(str(item.get("status") or ""), []).append(item)
+    # 配额是**保底**不是上限：某一档不够数时，空出来的名额由其余最强的条目回填，
+    # 否则「只有 entry 有货」的时段会被配额饿死，返回条数远少于上限。
+    quota = max(5, safe_limit // 3)
+    picked: list = []
+    for status in ("entry", "watch", "unbuyable"):
+        group = sorted(by_status.get(status) or [], key=lambda it: -float(it.get("score") or 0))
+        picked.extend(group[:quota])
+    taken = {id(item) for item in picked}
+    rest = sorted(
+        (item for item in current.get("items") or [] if id(item) not in taken),
+        key=lambda it: -float(it.get("score") or 0),
+    )
+    picked.extend(rest[: max(0, safe_limit - len(picked))])
+    items = sorted(picked, key=lambda it: -float(it.get("score") or 0))[:safe_limit]
     current.update({
         "items": items,
         "candidate_count": len(items),
@@ -115,8 +143,64 @@ def _scan_and_store(snapshot: dict[str, dict[str, Any]], now: datetime) -> dict[
         _restored_date = today
     result = engine.scan(snapshot, now)
     store.record_intraday_signal_events(result.get("events") or [])
+    result = _merge_today_archive(result, store, today, snapshot)
     _latest_full = result
     return _trim_recommendations(result)
+
+
+def _amount_percentiles(snapshot: dict[str, dict[str, Any]]) -> dict[str, float]:
+    """当日成交额的横截面分位（0..1）。"""
+    pairs = []
+    for symbol, quote in (snapshot or {}).items():
+        try:
+            amount = float(quote.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+        if amount > 0:
+            pairs.append((amount, str(symbol).zfill(6)))
+    pairs.sort()
+    return {sym: (i + 1) / len(pairs) for i, (_a, sym) in enumerate(pairs)} if pairs else {}
+
+
+def _merge_today_archive(
+    result: dict[str, Any], store, today: str,
+    snapshot: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """盘中也把今日已触发过、但入场区间已过期的信号并进列表。
+
+    信号的 valid_until 是「参考入场价还能不能用」——提前预警 10 分钟、入场触发 20 分钟，
+    到点转 invalid。但这个期限原先同时决定了「还要不要显示」，于是任何时刻列表里只剩最近
+    十分钟的信号，四个筛选标签（入场触发/提前预警/不可追入）大部分时间是空的，只有收盘后
+    的归档视图才有内容。
+
+    2026-08-06 实测：华正新材 09:48 提前预警于 126.33、当时正是机会，09:58 就从列表里
+    消失了，而它一路涨到 131 封板。用户看不到自己错过了什么，只能在收盘后复盘里看到。
+
+    并进来的条目标 `signal_mode=intraday_archive`，前端渲染成「盘中曾触发」卡片，
+    入场区间照常显示为失效 —— 不谎称还能按原价买，但保留在它自己的状态标签里。
+    """
+    live = {str(item.get("symbol") or "").zfill(6) for item in (result.get("items") or [])}
+    try:
+        history = store.load_intraday_signal_events(today, 1000)
+    except Exception:  # noqa: BLE001 — 取不到历史不影响当前信号
+        return result
+    # 归档也要过当日流动性底线。今日早盘的记录是在加这道门槛之前写的，直接并进来会把
+    # 「没人交易的小票」重新端回列表 —— 2026-08-06 实测归档里 60% 的条目成交额分位低于 85。
+    # 用**当下**的成交额重新判定，而不是信任事件里的旧字段。
+    floor = float(os.getenv("LYNX_RADAR_MIN_AMOUNT_PCTL", "0.85"))
+    pctl = _amount_percentiles(snapshot or {})
+    extra = [
+        item for item in _archive_items_from_events(history, 200)
+        if str(item.get("symbol") or "").zfill(6) not in live
+        and (not pctl or pctl.get(str(item.get("symbol") or "").zfill(6), 0.0) >= floor)
+    ]
+    if not extra:
+        return result
+    items = list(result.get("items") or []) + extra
+    merged = {**result, "items": items, "candidate_count": len(items)}
+    for status in ("entry", "watch", "unbuyable"):
+        merged[f"{status}_count"] = sum(1 for i in items if i.get("status") == status)
+    return merged
 
 
 def _archive_items_from_events(

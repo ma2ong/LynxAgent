@@ -171,18 +171,38 @@ def test_archive_keeps_real_entry_even_if_later_invalidated():
     assert items[0]["actionable"] is False
 
 
-def test_recommendations_are_limited_to_top_ten(monkeypatch):
+def test_payload_carries_each_status_so_the_filter_tabs_are_not_empty(monkeypatch):
+    """回给前端的条数与「展示 10 只」是两件事。
+
+    2026-08-06 改：页面上有 入场触发/提前预警/不可追入 三个筛选标签，筛选是在这份 items
+    上做的，后端只回 10 条的话点开标签基本是空的。所以 payload 按状态各留配额（默认
+    每档 20、合计 60），展示上限仍是 recommendation_limit，由前端切片。
+    """
     monkeypatch.setenv("INTRADAY_RECOMMENDATION_LIMIT", "10")
+    monkeypatch.setenv("INTRADAY_PAYLOAD_LIMIT", "60")
     payload = {
         "items": [
-            {"symbol": str(index).zfill(6), "status": "entry", "score": 100 - index}
-            for index in range(15)
+            {"symbol": str(i).zfill(6), "status": status, "score": 100 - i}
+            for status in ("entry", "watch", "unbuyable")
+            for i in range(30)
         ]
     }
     result = _trim_recommendations(payload)
     assert recommendation_limit() == 10
-    assert result["candidate_count"] == 10
-    assert len(result["items"]) == 10
+    # 每个状态都拿到配额，没有哪一档被另一档挤空
+    for status in ("entry", "watch", "unbuyable"):
+        assert result[f"{status}_count"] == 20, status
+    assert len(result["items"]) == 60
+    # 仍然按分数降序，前端切前 10 条展示的就是最强的
+    scores = [item["score"] for item in result["items"]]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_trim_respects_an_explicit_smaller_limit(monkeypatch):
+    monkeypatch.setenv("INTRADAY_RECOMMENDATION_LIMIT", "10")
+    payload = {"items": [{"symbol": str(i).zfill(6), "status": "entry", "score": 100 - i}
+                         for i in range(15)]}
+    assert len(_trim_recommendations(payload, limit=10)["items"]) == 10
 
 
 def test_smart_pool_overlay_can_read_full_signal_set_behind_public_top_ten(monkeypatch):

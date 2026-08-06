@@ -1,12 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="AStockPick">
-  <!-- AStockPick 标识：一组高低不一的柱代表全市场，被选中的那根用 A 股红并带顶部标记。
-       只用 5 个色块，16px 浏览器标签页里仍能分辨「一堆里有一根是红的」。 -->
-  <rect width="64" height="64" rx="14" fill="#0f172a"/>
-  <g fill="#64748b">
-    <rect x="13" y="34" width="7" height="14" rx="3.5"/>
-    <rect x="24" y="28" width="7" height="20" rx="3.5"/>
-    <rect x="46" y="31" width="7" height="17" rx="3.5"/>
-  </g>
-  <rect x="35" y="19" width="7" height="29" rx="3.5" fill="#ef4444"/>
-  <circle cx="38.5" cy="11" r="3.5" fill="#ef4444"/>
+  <!-- 字母 A 一身两用：既是 AStockPick 与「A股」的首字，其内三角天然是向上的箭头，
+       填成 A 股红即同时说了「A股」和「上涨」。深色底而非红底 —— 红底白 A 与 Angular
+       的标识过于接近。几何经 16/20/28/40/72px 实屏校对，最小尺寸下红三角仍可辨。 -->
+  <rect width="64" height="64" rx="15" fill="#0f172a"/>
+  <path d="M32 12 L52 52" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
+  <path d="M32 12 L12 52" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
+  <path d="M21.5 41 H42.5" stroke="#fff" stroke-width="6.5" stroke-linecap="round"/>
+  <path d="M32 21 L41 37.5 H23 Z" fill="#ef4444"/>
 </svg>

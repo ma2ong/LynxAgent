@@ -1,7 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="AStockPick">
-  <!-- 界面里用的是纯文字标（见 AppLayout 的 .wordmark）。浏览器标签页放不下一整个词，
-       所以这里只留首字母，不加任何装饰 —— 与文字标同一支强调色，保持一致。 -->
-  <rect width="64" height="64" rx="14" fill="#e11d2f"/>
-  <path d="M28.6 12 h6.8 l16.6 40 h-9.2 l-3.3-8.4 h-15 L21.2 52 H12 Z M32 24.4 l-4.6 12 h9.2 Z"
-        fill="#fff" fill-rule="evenodd"/>
+  <!-- 与 BrandLogo.vue 同一图形，改一处两处都要改。
+       折线的走法、端点位置、笔画粗细是定稿，别动；红色渐变从左上到右下压深，
+       目的是让红底有明暗层次而不是一块平色。渐变在 16px 下看不出来，只为大尺寸服务。 -->
+  <defs>
+    <linearGradient id="apGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f2404a"/>
+      <stop offset="1" stop-color="#c2101f"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#apGrad)"/>
+  <path d="M17 41 L27 31 L35 38 L47 23" fill="none" stroke="#fff" stroke-width="4.6"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="47" cy="23" r="3.8" fill="#fff"/>
 </svg>

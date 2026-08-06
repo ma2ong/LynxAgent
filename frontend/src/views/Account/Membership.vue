@@ -26,7 +26,7 @@
       <ul class="benefits">
         <li>每日 AI 深度分析 3 次提升到 30 次</li>
         <li>解锁催化剂深度报告和实验室功能</li>
-        <li>支持自选股价格预警与催化剂命中微信提醒</li>
+        <li>支持自选股价格预警与催化剂命中提醒</li>
       </ul>
       <el-alert type="info" :closable="false" :title="upgrade?.instructions || defaultUpgradeText" />
       <div class="upgrade-info">
@@ -35,17 +35,31 @@
           <b>{{ upgrade?.price_text || '内测会员：人工确认后开通' }}</b>
         </div>
         <div>
-          <span>开通方式</span>
-          <b>{{ upgrade?.wechat_id || '联系管理员开通' }}</b>
+          <span>支付宝账号</span>
+          <b>{{ upgrade?.alipay_id || '扫下方二维码付款' }}</b>
         </div>
       </div>
-      <img v-if="upgrade?.qr_url" class="pay-qr" :src="upgrade.qr_url" alt="会员开通二维码" />
+      <img v-if="upgrade?.qr_url" class="pay-qr" :src="upgrade.qr_url" alt="支付宝收款码" />
       <el-alert
         v-if="upgrade && !upgrade.configured"
         type="warning"
         :closable="false"
-        title="当前环境未配置运营微信或收款二维码。部署时设置 LYNX_MEMBERSHIP_WECHAT / LYNX_MEMBERSHIP_QR_URL 即可展示真实开通信息。"
+        title="当前环境未配置支付宝账号或收款二维码。部署时设置 LYNX_MEMBERSHIP_ALIPAY / LYNX_MEMBERSHIP_QR_URL 即可展示真实开通信息。"
       />
+
+      <!-- 付款后自助提交，管理员在后台看到申请单再开通。
+           以前要加运营微信、报用户名、等对方翻聊天记录，双方都在等对方。 -->
+      <div class="req-box">
+        <div class="req-title">付款后提交开通申请</div>
+        <el-input v-model="orderNo" placeholder="支付宝订单号（在支付宝账单详情里复制）" clearable />
+        <el-input v-model="reqNote" placeholder="备注（可选）" clearable class="req-note" />
+        <el-button type="primary" :loading="submitting" @click="submitRequest">提交申请</el-button>
+        <div v-if="myRequest" class="req-status">
+          当前申请：<b>{{ reqStatusText(myRequest.status) }}</b>
+          <span v-if="myRequest.order_no"> · 订单号 {{ myRequest.order_no }}</span>
+          <span v-if="myRequest.created_at"> · 提交于 {{ myRequest.created_at.slice(0, 16).replace('T', ' ') }}</span>
+        </div>
+      </div>
     </el-card>
 
     <el-card v-if="runtime" class="card">
@@ -68,7 +82,9 @@
       </div>
     </el-card>
 
-    <el-card class="card">
+    <!-- 微信推送整块暂时隐藏（2026-08-06）：产品要去掉对微信的依赖，但推送渠道换成什么
+         还没定，代码先留着不删，免得将来重做。想放回来把 v-if 去掉即可。 -->
+    <el-card v-if="false" class="card">
       <div class="card-title">
         <h3>微信推送</h3>
         <el-tag size="small" :type="wechatStatus?.bound ? 'success' : 'info'">
@@ -118,6 +134,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { ApiClient } from '@/api/request'
 import {
   fetchBillingMe,
   fetchRuntimeValidation,
@@ -140,7 +157,42 @@ const runtime = ref<RuntimeConfigValidation | null>(null)
 const wechatStatus = ref<WechatPushStatus | null>(null)
 const savingPush = ref(false)
 const testingPush = ref(false)
-const defaultUpgradeText = '添加运营微信并备注注册用户名，付款确认后由管理员开通会员。'
+const defaultUpgradeText = '支付宝扫码付款后，在下方填写订单号提交开通申请；管理员核对后开通。'
+
+// 开通申请：付款仍是人工确认，但申请单有留痕，用户能自查进度，管理员能一键批准。
+const orderNo = ref('')
+const reqNote = ref('')
+const submitting = ref(false)
+const myRequest = ref<any>(null)
+const reqStatusText = (s: string) =>
+  s === 'pending' ? '待管理员核对' : s === 'approved' ? '已开通' : s === 'rejected' ? '已驳回' : s
+
+async function loadMyRequest() {
+  try {
+    const res = await ApiClient.get<any>('/api/billing/upgrade-request')
+    myRequest.value = res?.data ?? null
+    if (myRequest.value?.order_no && !orderNo.value) orderNo.value = myRequest.value.order_no
+  } catch { /* 查不到申请不影响页面主流程 */ }
+}
+
+async function submitRequest() {
+  if (!orderNo.value.trim()) {
+    ElMessage.warning('请填写支付宝订单号，管理员据此核对')
+    return
+  }
+  submitting.value = true
+  try {
+    await ApiClient.post('/api/billing/upgrade-request', {
+      plan: 'member', order_no: orderNo.value.trim(), note: reqNote.value.trim(),
+    })
+    ElMessage.success('已提交，管理员核对后开通')
+    await loadMyRequest()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '提交失败')
+  } finally {
+    submitting.value = false
+  }
+}
 const pushForm = reactive({
   serverchan_key: '',
   pushplus_token: '',
@@ -212,7 +264,7 @@ async function unbindWechat() {
   }
 }
 
-onMounted(loadPage)
+onMounted(() => { loadPage(); loadMyRequest() })
 </script>
 
 <style scoped lang="scss">

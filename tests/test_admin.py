@@ -64,3 +64,53 @@ def test_set_active_protects_admin(stores):
         admin.set_active("root", False)
     # 重新启用不受限
     admin.set_active("root", True)
+
+
+def _submit(auth, username: str, plan: str = "member", order_no: str = "20260806001") -> int:
+    """直接写申请单，等价于用户在会员页点「提交申请」。"""
+    from app.lite_auth import utc_now
+    with auth.connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO upgrade_requests(username, plan, order_no, note, status, created_at)"
+            " VALUES(?,?,?,'','pending',?)",
+            (username, plan, order_no, utc_now()),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def test_approving_a_request_opens_the_plan_and_marks_it_handled(stores):
+    """付款仍是人工核对，但开通动作要落在申请单上，不能只存在于聊天记录里。"""
+    auth, billing = stores
+    from app.lite_admin import AdminStore
+    admin = AdminStore(auth, billing)
+    auth.create_user("bob", "bob@x.com", "secret123")
+    rid = _submit(auth, "bob")
+
+    with auth.connect() as conn:
+        row = conn.execute("SELECT status, order_no FROM upgrade_requests WHERE id=?", (rid,)).fetchone()
+    assert row["status"] == "pending" and row["order_no"] == "20260806001"
+
+    admin.set_plan("bob", "member", "2099-12-31")
+    with auth.connect() as conn:
+        conn.execute(
+            "UPDATE upgrade_requests SET status='approved', handled_by='admin' WHERE id=?", (rid,)
+        )
+        conn.commit()
+        row = conn.execute("SELECT status, handled_by FROM upgrade_requests WHERE id=?", (rid,)).fetchone()
+    assert row["status"] == "approved" and row["handled_by"] == "admin"
+    assert next(u for u in admin.list_users() if u["username"] == "bob")["plan"] == "member"
+
+
+def test_pending_requests_are_listed_newest_first(stores):
+    auth, _billing = stores
+    auth.create_user("bob", "bob@x.com", "secret123")
+    auth.create_user("amy", "amy@x.com", "secret123")
+    first = _submit(auth, "bob", order_no="A1")
+    second = _submit(auth, "amy", order_no="A2")
+    with auth.connect() as conn:
+        rows = conn.execute(
+            "SELECT id, username FROM upgrade_requests WHERE status='pending' ORDER BY id DESC"
+        ).fetchall()
+    assert [r["id"] for r in rows] == [second, first]
+    assert rows[0]["username"] == "amy"

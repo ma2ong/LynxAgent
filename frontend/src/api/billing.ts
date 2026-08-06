@@ -16,7 +16,7 @@ export function fetchBillingMe() {
 
 export interface UpgradeInfo {
   price_text: string
-  wechat_id: string
+  alipay_id: string
   qr_url: string
   configured: boolean
   instructions: string

@@ -107,6 +107,28 @@ class LiteAuthStore:
                 )
                 """
             )
+            # 开通申请：用户付款后自助提交，管理员一键批准。
+            # 支付走人工（支付宝收款码），但「谁付了、付了多少、开通没开通」必须留痕 ——
+            # 原先靠加微信口头确认，账记在人脑子里，用户催一次就要翻一次聊天记录。
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS upgrade_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    plan TEXT NOT NULL,
+                    order_no TEXT,
+                    note TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TEXT NOT NULL,
+                    handled_at TEXT,
+                    handled_by TEXT
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_upgrade_requests_status "
+                "ON upgrade_requests(status, created_at DESC)"
+            )
             # 迁移：老库补 plan 字段（幂等，列已存在则跳过）
             for ddl in (
                 "ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'",

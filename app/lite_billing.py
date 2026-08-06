@@ -93,7 +93,9 @@ class BillingStore:
 # ---- FastAPI 集成 ----
 from fastapi import APIRouter, Depends, HTTPException  # noqa: E402
 
-from app.lite_auth import get_current_lite_user  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
+
+from app.lite_auth import get_current_lite_user, store as auth_store, utc_now  # noqa: E402
 
 billing = BillingStore()
 
@@ -151,18 +153,67 @@ async def billing_me(user: dict = Depends(get_current_lite_user)):
 
 @router.get("/upgrade-info")
 async def upgrade_info():
-    """Manual membership opening info. Values come from env, never hard-coded secrets."""
-    wechat_id = os.getenv("LYNX_MEMBERSHIP_WECHAT", "").strip()
+    """开通信息。收款方式为支付宝，值全部来自环境变量，不硬编码。
+
+    2026-08-06 从微信改成支付宝：微信支付的网站产品签约要求域名已备案，而本站跑在
+    Cloudflare Tunnel / Oracle 上，本来就不解析到境内服务器。支付仍是人工确认 ——
+    这一版只把口头对账换成有留痕的申请单，接口化留到以后决定服务商时再说。
+    """
+    alipay_id = os.getenv("LYNX_MEMBERSHIP_ALIPAY", "").strip()
     qr_url = os.getenv("LYNX_MEMBERSHIP_QR_URL", "").strip()
     price_text = os.getenv("LYNX_MEMBERSHIP_PRICE_TEXT", "内测会员：人工确认后开通").strip()
     return {
         "success": True,
         "data": {
             "price_text": price_text,
-            "wechat_id": wechat_id,
+            "alipay_id": alipay_id,
             "qr_url": qr_url,
-            "configured": bool(wechat_id or qr_url),
-            "instructions": "添加运营微信并备注注册用户名，付款确认后由管理员在后台开通会员。",
+            "configured": bool(alipay_id or qr_url),
+            "instructions": "支付宝扫码付款后，在下方填写订单号提交开通申请；管理员核对后开通，无需添加好友。",
         },
         "message": "ok",
     }
+
+
+class UpgradeRequestBody(BaseModel):
+    plan: str = "member"
+    order_no: str = ""
+    note: str = ""
+
+
+@router.post("/upgrade-request")
+async def submit_upgrade_request(body: UpgradeRequestBody, user: dict = Depends(get_current_lite_user)):
+    """用户付款后自助提交开通申请。同一用户只保留一条待处理申请，重复提交即更新。"""
+    if body.plan not in PLANS:
+        raise HTTPException(status_code=400, detail=f"未知套餐: {body.plan}")
+    username = str(user.get("username") or "")
+    now = utc_now()
+    with auth_store.connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM upgrade_requests WHERE username=? AND status='pending'", (username,)
+        ).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE upgrade_requests SET plan=?, order_no=?, note=?, created_at=? WHERE id=?",
+                (body.plan, body.order_no.strip()[:64], body.note.strip()[:200], now, row["id"]),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO upgrade_requests(username, plan, order_no, note, status, created_at)"
+                " VALUES(?,?,?,?,'pending',?)",
+                (username, body.plan, body.order_no.strip()[:64], body.note.strip()[:200], now),
+            )
+        conn.commit()
+    return {"success": True, "data": None, "message": "已提交，管理员核对后开通"}
+
+
+@router.get("/upgrade-request")
+async def my_upgrade_request(user: dict = Depends(get_current_lite_user)):
+    """自己最近一条申请的状态，让用户能自查进度而不是来回追问。"""
+    with auth_store.connect() as conn:
+        row = conn.execute(
+            "SELECT plan, order_no, status, created_at, handled_at FROM upgrade_requests"
+            " WHERE username=? ORDER BY id DESC LIMIT 1",
+            (str(user.get("username") or ""),),
+        ).fetchone()
+    return {"success": True, "data": dict(row) if row else None, "message": "ok"}

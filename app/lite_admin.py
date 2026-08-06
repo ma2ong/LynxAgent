@@ -95,6 +95,48 @@ async def admin_set_plan(username: str, req: SetPlanRequest):
     return {"success": True, "data": None, "message": f"{username} → {PLANS[req.plan]['label']}"}
 
 
+@router.get("/upgrade-requests")
+async def admin_list_upgrade_requests(status: str = "pending"):
+    """开通申请列表。付款是人工的，但对账不该靠翻聊天记录。"""
+    with auth_store.connect() as conn:
+        rows = conn.execute(
+            "SELECT id, username, plan, order_no, note, status, created_at, handled_at, handled_by"
+            " FROM upgrade_requests WHERE status=? ORDER BY id DESC LIMIT 200",
+            (status,),
+        ).fetchall()
+    return {"success": True, "data": [dict(r) for r in rows], "message": "ok"}
+
+
+class HandleUpgradeRequest(BaseModel):
+    approve: bool = True
+    plan_expires_at: Optional[str] = None  # YYYY-MM-DD，None = 长期
+
+
+@router.post("/upgrade-requests/{request_id}")
+async def admin_handle_upgrade_request(
+    request_id: int, req: HandleUpgradeRequest, admin: dict = Depends(get_current_lite_user)
+):
+    """批准即开通套餐并标记已处理；驳回只标记，不动套餐。"""
+    with auth_store.connect() as conn:
+        row = conn.execute(
+            "SELECT username, plan, status FROM upgrade_requests WHERE id=?", (request_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="申请不存在")
+        if row["status"] != "pending":
+            raise HTTPException(status_code=400, detail=f"该申请已处理：{row['status']}")
+        conn.execute(
+            "UPDATE upgrade_requests SET status=?, handled_at=?, handled_by=? WHERE id=?",
+            ("approved" if req.approve else "rejected", utc_now(),
+             str(admin.get("username") or ""), request_id),
+        )
+        conn.commit()
+    if req.approve:
+        admin_store.set_plan(row["username"], row["plan"], req.plan_expires_at)
+    action = "已开通" if req.approve else "已驳回"
+    return {"success": True, "data": None, "message": f"{row['username']} {action}"}
+
+
 @router.put("/users/{username}/active")
 async def admin_set_active(username: str, req: SetActiveRequest):
     admin_store.set_active(username, req.is_active)

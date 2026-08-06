@@ -1170,6 +1170,40 @@ def _reserve_breakout_slots(kept: list[dict[str, Any]], target: int) -> list[dic
     return merged[:target]
 
 
+def _drop_far_below_best(kept: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    """把明显够不上当日头部的票剔出名单，弱市宁可少给几只，也不为凑满 20 只硬塞。
+
+    起因（2026-08-06）：那天全市场综合排序 ≥90 的只有 4 只，第 7 名就掉到 83.7，
+    而推荐上限是 20，于是名单尾部塞进一串 79~81 分的票 —— 用户看到的是「你怎么把
+    80 分的也推给我」，而真相是「今天就没有 20 只好票」。
+
+    用**相对**门槛而不是绝对分数线：绝对阈值一换评分公式就失效（v3 那次 <80 的过滤
+    直接把整池清空，见 lite_main 里的历史注释）。相对口径按当日头部自适应 ——
+    强势日头部 99 分，门槛就高；弱市头部 93 分，门槛跟着降。**永远不会清空**：
+    最高分那只必然留下。
+    """
+    if not kept:
+        return kept, ""
+
+    def score(item: dict[str, Any]) -> float:
+        try:
+            return float(item.get("quality_score") or item.get("score") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    gap = max(0.0, float(os.getenv("LYNX_SMART_QUALITY_GAP", "8")))
+    if gap <= 0:
+        return kept, ""
+    best = max(score(item) for item in kept)
+    floor = best - gap
+    survivors = [item for item in kept if score(item) >= floor]
+    if len(survivors) >= len(kept):
+        return kept, ""
+    note = (f"今日达标 {len(survivors)} 只（最高 {best:.1f} 分，"
+            f"低于 {floor:.1f} 分的未列出）——弱市不凑数")
+    return survivors, note
+
+
 def _finalize_intraday_quality(data: dict[str, Any], target: int) -> None:
     items = list(data.get("items") or [])
     blocked = [item for item in items if item.get("timing_status") == "blocked"]
@@ -1179,6 +1213,9 @@ def _finalize_intraday_quality(data: dict[str, Any], target: int) -> None:
     # 上限跟随端点的 safe_limit（现 20），不再写死 10——写死会让「推荐上限」控件失效。
     safe_target = max(1, min(int(target or SMART_POOL_MAX_ITEMS), SMART_POOL_MAX_ITEMS))
     kept = _reserve_breakout_slots(kept, safe_target)
+    kept, thin_reason = _drop_far_below_best(kept)
+    if thin_reason:
+        data["quality_thin_note"] = thin_reason
     for rank, item in enumerate(kept, start=1):
         item["rank"] = rank
     data["items"] = kept

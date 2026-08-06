@@ -66,7 +66,11 @@ def test_v3_score_scale_does_not_empty_the_pool():
     assert sorted(round(float(i["quant_score"]), 1) for i in items) == sorted(scores)
 
 
-def test_pool_ranked_by_intraday_composite_without_overwriting_structure_score():
+def test_pool_ranked_by_intraday_composite_without_overwriting_structure_score(monkeypatch):
+    # 这条考的不是「名单必须凑满」，而是另一个不变量；本用例的假分数跨度很大，
+    # 会被 2026-08-06 加的质量线（LYNX_SMART_QUALITY_GAP，弱市不凑数）截断。
+    # 显式关掉它，隔离被测对象。质量线本身由 test_quality_gap_* 覆盖。
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
     data = _compute([70.0, 90.0, 50.0])
     items = data["items"]
     live_scores = [float(item["realtime_rank_score"]) for item in items]
@@ -142,7 +146,11 @@ def test_partial_realtime_coverage_does_not_rank_missing_quotes_as_fresh():
     assert items[0]["symbol"] == "600001"
 
 
-def test_realtime_enrichment_reranks_full_structure_candidate_pool():
+def test_realtime_enrichment_reranks_full_structure_candidate_pool(monkeypatch):
+    # 这条考的不是「名单必须凑满」，而是另一个不变量；本用例的假分数跨度很大，
+    # 会被 2026-08-06 加的质量线（LYNX_SMART_QUALITY_GAP，弱市不凑数）截断。
+    # 显式关掉它，隔离被测对象。质量线本身由 test_quality_gap_* 覆盖。
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
     candidates = [
         {
             "symbol": f"6000{i:02d}",
@@ -372,7 +380,11 @@ def test_near_limit_stays_on_list_and_star_market_is_not_misclassified():
     assert data["timing_excluded_count"] == 0
 
 
-def test_one_click_recommendations_are_hard_capped_at_pool_max():
+def test_one_click_recommendations_are_hard_capped_at_pool_max(monkeypatch):
+    # 这条考的不是「名单必须凑满」，而是另一个不变量；本用例的假分数跨度很大，
+    # 会被 2026-08-06 加的质量线（LYNX_SMART_QUALITY_GAP，弱市不凑数）截断。
+    # 显式关掉它，隔离被测对象。质量线本身由 test_quality_gap_* 覆盖。
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
     data = {
         "items": [
             {
@@ -399,7 +411,11 @@ def test_one_click_recommendations_are_hard_capped_at_pool_max():
     )
 
 
-def test_final_list_reports_industry_concentration_without_hiding_candidates():
+def test_final_list_reports_industry_concentration_without_hiding_candidates(monkeypatch):
+    # 这条考的不是「名单必须凑满」，而是另一个不变量；本用例的假分数跨度很大，
+    # 会被 2026-08-06 加的质量线（LYNX_SMART_QUALITY_GAP，弱市不凑数）截断。
+    # 显式关掉它，隔离被测对象。质量线本身由 test_quality_gap_* 覆盖。
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
     data = {
         "items": [
             {
@@ -431,3 +447,45 @@ def _async_passthrough():
     async def _f(value, *_args, **_kwargs):
         return value
     return _f
+
+
+def _pick(symbol: str, score: float) -> dict:
+    return {"symbol": symbol, "code": symbol, "name": f"票{symbol}",
+            "quality_score": score, "score": score, "timing_status": "confirmed"}
+
+
+def test_quality_gap_drops_the_tail_instead_of_padding_to_the_limit(monkeypatch):
+    """弱市宁可少给几只，也不为凑满上限硬塞。
+
+    起因（2026-08-06）：当日综合排序 ≥90 的只有 4 只，第 7 名就掉到 83.7，而推荐上限
+    是 20，于是尾部塞进一串 79~81 分的票。用户看到的是「你怎么把 80 分的也推给我」。
+    """
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "8")
+    kept = [_pick("60000%d" % i, s) for i, s in enumerate([92.0, 89.0, 85.0, 84.5, 83.0, 79.0])]
+    survivors, note = lite_main._drop_far_below_best(kept)
+    # 门槛 = 92 − 8 = 84，低于它的 83.0 / 79.0 落榜
+    assert [s["quality_score"] for s in survivors] == [92.0, 89.0, 85.0, 84.5]
+    assert "弱市不凑数" in note
+
+
+def test_quality_gap_never_empties_the_list(monkeypatch):
+    """无论分数多低、跨度多大，最高分那只必然留下 —— 相对门槛不会清空名单。"""
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "8")
+    survivors, _ = lite_main._drop_far_below_best([_pick("600001", 40.0), _pick("600002", 10.0)])
+    assert [s["quality_score"] for s in survivors] == [40.0]
+    assert lite_main._drop_far_below_best([]) == ([], "")
+
+
+def test_quality_gap_can_be_switched_off(monkeypatch):
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
+    kept = [_pick("600001", 92.0), _pick("600002", 50.0)]
+    survivors, note = lite_main._drop_far_below_best(kept)
+    assert len(survivors) == 2 and note == ""
+
+
+def test_strong_day_keeps_everything(monkeypatch):
+    """分数密集的强势日不该被误伤：跨度小于门槛时一只都不剔。"""
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "8")
+    kept = [_pick("60000%d" % i, s) for i, s in enumerate([95.0, 94.0, 92.5, 90.0, 88.5])]
+    survivors, note = lite_main._drop_far_below_best(kept)
+    assert len(survivors) == 5 and note == ""

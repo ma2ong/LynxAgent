@@ -90,26 +90,9 @@
         </div>
       </div>
 
-      <el-table v-if="diagnostics.items?.length" :data="diagnostics.items" size="small" class="diagnostic-table">
-        <el-table-column prop="symbol" label="代码" width="90" />
-        <el-table-column prop="name" label="名称" width="110" />
-        <el-table-column prop="industry" label="行业" min-width="120" show-overflow-tooltip />
-        <el-table-column label="关注权重" width="100">
-          <template #default="{ row }"><b>{{ pct(row.suggested_weight) }}</b></template>
-        </el-table-column>
-        <el-table-column label="量化分" width="90">
-          <template #default="{ row }">{{ row.quant_score.toFixed(1) }}</template>
-        </el-table-column>
-        <el-table-column label="风控" width="90">
-          <template #default="{ row }">{{ row.risk_control.toFixed(1) }}</template>
-        </el-table-column>
-        <el-table-column label="风险标签" min-width="180">
-          <template #default="{ row }">
-            <el-tag v-for="tag in row.risk_tags" :key="tag" size="small" type="warning" effect="plain" class="tag">{{ tag }}</el-tag>
-            <span v-if="!row.risk_tags?.length">-</span>
-          </template>
-        </el-table-column>
-      </el-table>
+      <!-- 原来这里还有一张「体检明细」表，列的是同一批自选股（代码/名称/行业/权重/
+           量化分/风控/风险标签）。同一批股票渲染两遍，看清一只票要在两张表之间人肉对照，
+           这就是「乱」的来源。个股级的三列已并入下面唯一那张明细表，这里只留组合级结论。 -->
     </section>
 
     <section class="panel" v-loading="loading">
@@ -135,8 +118,10 @@
               <th class="r">涨跌幅</th>
               <th class="r">加入后</th>
               <th>持仓指引</th>
+              <th class="r">量化分</th>
+              <th class="r">风控</th>
               <th class="r">预警 低/高</th>
-              <th>标签</th>
+              <th>标签 · 风险</th>
               <th class="r">操作</th>
             </tr>
           </thead>
@@ -180,10 +165,20 @@
                 <span v-else-if="adviceLoading" class="muted">…</span>
                 <span v-else class="muted advice-ok">未触发破位</span>
               </td>
+              <!-- 量化分/风控/风险标签来自组合体检，原先另开一张表列同一批股票。 -->
+              <td class="r num">
+                <span v-if="diagnosticOf(row)">{{ diagnosticOf(row)!.quant_score.toFixed(1) }}</span>
+                <span v-else class="muted">-</span>
+              </td>
+              <td class="r num">
+                <span v-if="diagnosticOf(row)">{{ diagnosticOf(row)!.risk_control.toFixed(1) }}</span>
+                <span v-else class="muted">-</span>
+              </td>
               <td class="r num muted">{{ row.alert_price_low ?? '-' }} / {{ row.alert_price_high ?? '-' }}</td>
               <td>
                 <span v-for="t in row.tags || []" :key="t" class="chip-tag">{{ t }}</span>
-                <span v-if="!(row.tags || []).length" class="muted">-</span>
+                <span v-for="t in diagnosticOf(row)?.risk_tags || []" :key="t" class="chip-tag risk">{{ t }}</span>
+                <span v-if="!(row.tags || []).length && !(diagnosticOf(row)?.risk_tags || []).length" class="muted">-</span>
               </td>
               <td class="r ops">
                 <button class="op" @click="goResearch(row.symbol || row.stock_code)">深研</button>
@@ -262,6 +257,16 @@ const adviceMap = ref<Record<string, any>>({})
 const adviceLoading = ref(false)
 
 const adviceOf = (row: any) => adviceMap.value[String(row.symbol || row.stock_code || '').padStart(6, '0')]
+
+// 体检结果按代码并进主列表。原先它自己另开一张表，同一批股票被渲染两遍，
+// 要看清一只票得在两张表之间用代码人肉对照 —— 组合级的结论（集中度/行业暴露/相关性）
+// 留在上面的面板，个股级的（量化分/风控/风险标签）归位到唯一一张明细表里。
+const diagnosticOf = (row: any) => {
+  const code = String(row.symbol || row.stock_code || '').padStart(6, '0')
+  return (diagnostics.value?.items || []).find(
+    (it: any) => String(it.symbol || '').padStart(6, '0') === code,
+  )
+}
 
 const adviceClass = (rec: string) =>
   rec === '退出/止损' ? 'a-exit' : rec === '减仓防守' ? 'a-reduce'
@@ -612,6 +617,7 @@ onMounted(load)
 .advice.a-watch { background: rgba(144,147,153,.14); color: #6b7280; }
 .advice-why { display: block; margin-top: 2px; font-size: 11px; color: #9aa3b0; line-height: 1.4; }
 .advice-ok { font-size: 12px; }
+.chip-tag.risk { background: rgba(230,162,60,.14); color: #b88230; }
 .code-cell { display: flex; flex-direction: column; line-height: 1.35; }
 .code-cell .nm { font-weight: 700; font-size: 13px; }
 .code-cell .cd { font-size: 11.5px; color: #9aa3b0; font-family: ui-monospace, Menlo, monospace; }

@@ -146,28 +146,27 @@
         </div>
       </article>
 
-      <!-- 风险预警 -->
-      <article class="card" :class="riskCardClass">
-        <header @click="go('/risk-alert')">
-          <span class="c-ico">⚠️</span><h3>风险预警</h3>
-          <span v-if="risk" class="pill" :class="riskToneClass">{{ risk.level }} {{ risk.score }}</span>
+      <!-- 盘中机会雷达 -->
+      <article class="card">
+        <header @click="go('/intraday-signals')">
+          <span class="c-ico">📡</span><h3>盘中机会雷达</h3>
+          <span v-if="radar?.phase" class="c-badge">{{ radar.phase }}</span>
           <span class="c-more">进入 →</span>
         </header>
         <div class="c-body">
-          <template v-if="riskScan">
-            <div class="kpi-mini kpi-link">
-              <div @click="go('/risk-alert?sig=exit')"><b class="down2">{{ riskScan.recommendation_counts?.exit || 0 }}</b><span>退出/止损</span></div>
-              <div @click="go('/risk-alert?sig=reduce')"><b class="warn">{{ riskScan.recommendation_counts?.reduce || 0 }}</b><span>减仓防守</span></div>
-              <div @click="go('/risk-alert?sig=rebound')"><b class="up2">{{ riskScan.recommendation_counts?.rebound || 0 }}</b><span>反包观察</span></div>
-            </div>
-            <div v-if="topSell.length" class="rank-list">
-              <div v-for="s in topSell" :key="s.symbol" class="rank-row" @click="goStock(s.symbol)">
-                <el-tag size="small" type="danger" effect="dark">{{ s.signal }}</el-tag>
+          <template v-if="radar?.items?.length">
+            <div class="rank-list">
+              <div v-for="s in radar.items" :key="s.symbol" class="rank-row" @click="goStock(s.symbol)">
+                <el-tag size="small" :type="s.status === 'entry' ? 'success' : s.status === 'watch' ? 'warning' : 'info'"
+                  effect="dark">{{ RADAR_STATUS[s.status] || s.status }}</el-tag>
                 <span class="rk-name">{{ s.name }}<small>{{ s.symbol }}</small></span>
+                <span v-if="s.pct != null" :class="(s.pct ?? 0) >= 0 ? 'up' : 'down'">{{ pct(s.pct ?? 0) }}</span>
+                <span v-else class="rk-score">{{ s.score }}分</span>
               </div>
             </div>
+            <small class="c-note">状态化入场信号 · 信号价即触发时价格</small>
           </template>
-          <p v-else class="c-cta">大盘仓位红绿灯 + 全市场卖出信号扫描</p>
+          <p v-else class="c-cta">交易时段实时扫描量价异动，状态化提示提前预警 / 入场触发</p>
         </div>
       </article>
 
@@ -195,27 +194,28 @@
         </div>
       </article>
 
-      <!-- 盘中机会雷达 -->
-      <article class="card">
-        <header @click="go('/intraday-signals')">
-          <span class="c-ico">📡</span><h3>盘中机会雷达</h3>
-          <span v-if="radar?.phase" class="c-badge">{{ radar.phase }}</span>
+      <!-- 风险预警 -->
+      <article class="card" :class="riskCardClass">
+        <header @click="go('/risk-alert')">
+          <span class="c-ico">⚠️</span><h3>风险预警</h3>
+          <span v-if="risk" class="pill" :class="riskToneClass">{{ risk.level }} {{ risk.score }}</span>
           <span class="c-more">进入 →</span>
         </header>
         <div class="c-body">
-          <template v-if="radar?.items?.length">
-            <div class="rank-list">
-              <div v-for="s in radar.items" :key="s.symbol" class="rank-row" @click="goStock(s.symbol)">
-                <el-tag size="small" :type="s.status === 'entry' ? 'success' : s.status === 'watch' ? 'warning' : 'info'"
-                  effect="dark">{{ RADAR_STATUS[s.status] || s.status }}</el-tag>
+          <template v-if="riskScan">
+            <div class="kpi-mini kpi-link">
+              <div @click="go('/risk-alert?sig=exit')"><b class="down2">{{ riskScan.recommendation_counts?.exit || 0 }}</b><span>退出/止损</span></div>
+              <div @click="go('/risk-alert?sig=reduce')"><b class="warn">{{ riskScan.recommendation_counts?.reduce || 0 }}</b><span>减仓防守</span></div>
+              <div @click="go('/risk-alert?sig=rebound')"><b class="up2">{{ riskScan.recommendation_counts?.rebound || 0 }}</b><span>反包观察</span></div>
+            </div>
+            <div v-if="topSell.length" class="rank-list">
+              <div v-for="s in topSell" :key="s.symbol" class="rank-row" @click="goStock(s.symbol)">
+                <el-tag size="small" type="danger" effect="dark">{{ s.signal }}</el-tag>
                 <span class="rk-name">{{ s.name }}<small>{{ s.symbol }}</small></span>
-                <span v-if="s.pct != null" :class="(s.pct ?? 0) >= 0 ? 'up' : 'down'">{{ pct(s.pct ?? 0) }}</span>
-                <span v-else class="rk-score">{{ s.score }}分</span>
               </div>
             </div>
-            <small class="c-note">状态化入场信号 · 信号价即触发时价格</small>
           </template>
-          <p v-else class="c-cta">交易时段实时扫描量价异动，状态化提示提前预警 / 入场触发</p>
+          <p v-else class="c-cta">大盘仓位红绿灯 + 全市场卖出信号扫描</p>
         </div>
       </article>
 

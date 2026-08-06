@@ -704,7 +704,9 @@ async def lite_macro_bar():
 
 @router.get("/api/lite/heatmap")
 async def lite_heatmap(level: str = "industry", industry: str = ""):
-    """行业/个股热力图：面积=总市值（亿，成交额兜底），颜色=当日涨跌幅。60s 缓存。
+    """行业/个股热力图：面积=A股市值（亿，成交额兜底），颜色=当日涨跌幅。60s 缓存。
+
+    市值口径见 quantcore/quant/heatmap.py：只计 A 股股本，A+H 公司会被低估。
 
     快照不可用（收盘后/断网）时退回本地日线最新 bar（同收盘快照教训：不读未同步的当日）。
     """

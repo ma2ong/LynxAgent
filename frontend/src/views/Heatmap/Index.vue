@@ -4,7 +4,7 @@
       <div>
         <h2>行业热力图</h2>
         <p class="sub">
-          面积=总市值 · 颜色=当日涨跌幅（红涨绿跌）
+          面积=A股市值 · 颜色=当日涨跌幅（红涨绿跌）
           <template v-if="data"> · {{ data.source === 'realtime' ? '实时行情' : '本地日线' }} · {{ data.updated_at }}</template>
           <template v-if="!currentIndustry && data?.coverage?.classified">
             · 已归类 {{ data.coverage.classified }} 只<span
@@ -67,7 +67,10 @@ const render = () => {
         const it = p?.data as HeatmapItem
         if (!it) return ''
         const head = it.symbol ? `${it.name} ${it.symbol}` : `${it.name}（${it.count} 只）`
-        return `${head}<br/>涨跌幅 ${it.pct > 0 ? '+' : ''}${it.pct}%<br/>市值/面积 ${it.value} 亿`
+        // 口径必须写清楚：行情源给的是 A股股本×现价，不含 H 股。建设银行 96% 的股本在
+        // 港股，这里只有 949 亿而真实总市值约 2.5 万亿，不标注会被当成数据错误。
+        return `${head}<br/>涨跌幅 ${it.pct > 0 ? '+' : ''}${it.pct}%<br/>A股市值 ${it.value} 亿<br/>` +
+          `<span style="opacity:.65">A+H 公司只计 A 股部分</span>`
       },
     },
     series: [{

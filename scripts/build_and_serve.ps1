@@ -69,6 +69,14 @@ if ($buildExit -ne 0) {
     throw "Frontend build failed (npm run build exit code $buildExit)"
 }
 
+# vite deliberately does not empty dist (see vite.config.ts): old hashed assets stay so a
+# page opened moments before a deploy can still lazy-load its chunks. The cost is unbounded
+# growth - by 2026-08-06 that was 1637 files / 23 MB including 70 copies of AppLayout,
+# enough noise to make a healthy deploy look broken while debugging. Prune by age, never
+# touching anything the current build still reaches.
+# Keep this file ASCII: it has no BOM, and PS 5.1 decodes BOM-less files as system ANSI.
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "prune_dist.ps1")
+
 $signatureFile = Join-Path $root "runtime\backend.deploy.signature"
 $currentSignature = Get-BackendSignature
 $deployedSignature = if (Test-Path $signatureFile) {

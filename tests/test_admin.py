@@ -114,3 +114,18 @@ def test_pending_requests_are_listed_newest_first(stores):
         ).fetchall()
     assert [r["id"] for r in rows] == [second, first]
     assert rows[0]["username"] == "amy"
+
+
+@pytest.mark.parametrize("value, ok", [
+    ("allen@example.com", True),
+    ("13800138000", True),      # 中国大陆手机号
+    ("19912345678", True),
+    ("12345678901", False),     # 1 后面不是 3-9
+    ("138001380", False),       # 位数不足
+    ("a@b", False),             # 缺顶级域
+    ("", False),
+])
+def test_registration_accepts_email_or_mainland_mobile(value, ok):
+    """注册标识改为「邮箱或手机号」二选一，前后端同一口径。"""
+    from app.lite_auth import is_valid_contact
+    assert is_valid_contact(value) is ok

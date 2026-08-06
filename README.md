@@ -86,7 +86,7 @@ npm run build    # 生产构建
 ## 📁 目录结构
 
 ```
-lynxagent/
+astockpick/
 ├─ app/                 FastAPI 后端（认证、量化路由）
 ├─ frontend/            Vue 3 前端
 ├─ quantcore/       量化核心（quant 引擎、多智能体分析、数据管道）
@@ -96,4 +96,4 @@ lynxagent/
 
 ## 📄 许可
 
-专有软件，版权归 Allen Ma / 深圳迈彩视觉有限公司所有。许可条款见 [`LICENSE`](./LICENSE)，版权声明见 [`NOTICE`](./NOTICE)。
+专有软件，版权归 Allen Ma 所有。许可条款见 [`LICENSE`](./LICENSE)，版权声明见 [`NOTICE`](./NOTICE)。

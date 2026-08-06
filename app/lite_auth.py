@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import os
 import secrets
 import sqlite3
@@ -52,9 +53,20 @@ class LoginRequest(BaseModel):
     remember_me: bool = False
 
 
+# 邮箱或中国大陆手机号，二选一。手机号仍存进 email 列 —— 那一列只是「唯一登录标识」，
+# 为它单开一列会牵动注册/登录/找回/管理员列表四条链路，收益只是名字更贴切。
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
+
+
+def is_valid_contact(value: str) -> bool:
+    v = (value or "").strip()
+    return bool(_EMAIL_RE.match(v) or _PHONE_RE.match(v))
+
+
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
-    email: str
+    email: str  # 邮箱或手机号，见 is_valid_contact
     password: str = Field(min_length=6)
     confirm_password: Optional[str] = None
 
@@ -182,7 +194,7 @@ class LiteAuthStore:
                 )
                 conn.commit()
         except sqlite3.IntegrityError as exc:
-            raise HTTPException(status_code=409, detail="用户名或邮箱已存在") from exc
+            raise HTTPException(status_code=409, detail="用户名或邮箱/手机号已存在") from exc
 
         user = self.get_by_username(username)
         if not user:
@@ -412,7 +424,10 @@ async def register(data: RegisterRequest):
         raise HTTPException(status_code=403, detail="本站为邀请制，暂不开放注册。请联系管理员开通账号。")
     if data.confirm_password and data.confirm_password != data.password:
         raise HTTPException(status_code=400, detail="两次输入的密码不一致")
-    user = store.create_user(data.username, str(data.email), data.password, is_admin=False)
+    contact = str(data.email).strip()
+    if not is_valid_contact(contact):
+        raise HTTPException(status_code=400, detail="请填写有效的邮箱或手机号")
+    user = store.create_user(data.username, contact, data.password, is_admin=False)
     return {"success": True, "data": user, "message": "注册成功"}
 
 

@@ -20,7 +20,7 @@
           <el-input v-model="regForm.username" placeholder="用户名" :prefix-icon="User" />
         </el-form-item>
         <el-form-item>
-          <el-input v-model="regForm.email" placeholder="邮箱" :prefix-icon="Message" />
+          <el-input v-model="regForm.email" placeholder="邮箱或手机号" :prefix-icon="Message" />
         </el-form-item>
         <el-form-item>
           <el-input v-model="regForm.password" type="password" placeholder="密码" :prefix-icon="Lock" show-password />
@@ -103,8 +103,10 @@ async function doRegister() {
     ElMessage.warning('用户名至少 3 个字符')
     return
   }
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(regForm.value.email)) {
-    ElMessage.warning('请输入有效邮箱')
+  // 邮箱或中国大陆手机号，与后端 is_valid_contact 同一口径
+  const contact = regForm.value.email.trim()
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(contact) && !/^1[3-9]\d{9}$/.test(contact)) {
+    ElMessage.warning('请输入有效的邮箱或手机号')
     return
   }
   if (regForm.value.password.length < 6) {

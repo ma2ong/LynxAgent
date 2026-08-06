@@ -1,4 +1,4 @@
-# LynxAgent Commercial Runtime
+# AStockPick Commercial Runtime
 
 This note records the runtime switches needed by the commercial build. Do not
 commit real tokens, QR images, passwords, or payment credentials.

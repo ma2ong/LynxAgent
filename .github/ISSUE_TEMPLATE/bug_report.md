@@ -1,6 +1,6 @@
 ---
 name: Bug 报告
-about: 报告一个问题，帮助改进 LynxAgent
+about: 报告一个问题，帮助改进 AStockPick
 title: "[Bug] "
 labels: bug
 ---

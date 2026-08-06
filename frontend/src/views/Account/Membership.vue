@@ -62,7 +62,9 @@
       </div>
     </el-card>
 
-    <el-card v-if="runtime" class="card">
+    <!-- 只在「还有必填项没配」时出现。全绿的清单是噪音，天天占着版面提醒你一切正常。
+         2026-08-06 同时删掉了三条过时检查（运营微信 / ICP备案 / 微信推送 token）。 -->
+    <el-card v-if="runtime && !runtime.valid" class="card">
       <div class="card-title">
         <h3>上线配置检查</h3>
         <el-tag size="small" :type="runtime.valid ? 'success' : 'warning'">

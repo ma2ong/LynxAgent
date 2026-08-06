@@ -2377,43 +2377,32 @@ async def lite_pattern_pool_task_status(task_id: str):
 
 @app.get("/api/system/config/validate")
 async def validate_config():
-    membership_ready = bool(os.getenv("LYNX_MEMBERSHIP_WECHAT", "").strip() or os.getenv("LYNX_MEMBERSHIP_QR_URL", "").strip())
-    icp_ready = bool(os.getenv("LYNX_ICP_BEIAN", "").strip())
-    payment_ready = bool(os.getenv("LYNX_PAYMENT_PROVIDER", "").strip())
-    wechat_push_ready = bool(
-        os.getenv("SERVERCHAN_SENDKEY", "").strip()
-        or os.getenv("SERVERCHAN_KEY", "").strip()
-        or os.getenv("PUSHPLUS_TOKEN", "").strip()
+    # 2026-08-06 精简：删掉三条已经不成立的检查。
+    # - 运营微信：收款改支付宝，这个环境变量已不存在；
+    # - ICP备案：站点跑在 Cloudflare Tunnel / Oracle 上，不解析到境内服务器，备案不适用
+    #   （真正的约束是支付服务商自己的签约条款，等选定服务商再说，不是部署前置项）；
+    # - 微信推送 token：推送整块已下线，渠道未定。
+    # 留下的都是「没配就真的会出事」的：收款信息缺了会员页是空的，JWT 缺了重启即掉登录。
+    membership_ready = bool(
+        os.getenv("LYNX_MEMBERSHIP_ALIPAY", "").strip()
+        or os.getenv("LYNX_MEMBERSHIP_QR_URL", "").strip()
     )
+    payment_ready = bool(os.getenv("LYNX_PAYMENT_PROVIDER", "").strip())
     jwt_ready = bool(os.getenv("JWT_SECRET", "").strip())
     checks = [
         {
             "key": "membership_upgrade",
-            "label": "会员收款码/运营微信",
+            "label": "支付宝收款信息",
             "ok": membership_ready,
             "required": True,
-            "message": "配置 LYNX_MEMBERSHIP_WECHAT 或 LYNX_MEMBERSHIP_QR_URL 后，会员页会展示真实开通信息。",
-        },
-        {
-            "key": "icp",
-            "label": "ICP备案",
-            "ok": icp_ready,
-            "required": True,
-            "message": "公开部署前配置 LYNX_ICP_BEIAN，并在页面页脚展示备案号。",
+            "message": "配置 LYNX_MEMBERSHIP_ALIPAY 或 LYNX_MEMBERSHIP_QR_URL 后，会员页才会展示真实收款方式。",
         },
         {
             "key": "payment_provider",
-            "label": "正式支付",
+            "label": "自动收款（可选）",
             "ok": payment_ready,
             "required": False,
-            "message": "M1 可人工开通；正式收款前配置 LYNX_PAYMENT_PROVIDER 并接入支付回调。",
-        },
-        {
-            "key": "wechat_push",
-            "label": "微信推送全局 token",
-            "ok": wechat_push_ready,
-            "required": False,
-            "message": "可用用户自绑定；如需后台统一推送，配置 SERVERCHAN_SENDKEY 或 PUSHPLUS_TOKEN。",
+            "message": "当前为人工开通：用户提交支付宝订单号，管理员在后台批准。接入自动收款后配置 LYNX_PAYMENT_PROVIDER。",
         },
         {
             "key": "jwt_secret",

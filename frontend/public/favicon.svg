@@ -1,10 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="AStockPick">
-  <!-- 字母 A 一身两用：既是 AStockPick 与「A股」的首字，其内三角天然是向上的箭头，
-       填成 A 股红即同时说了「A股」和「上涨」。深色底而非红底 —— 红底白 A 与 Angular
-       的标识过于接近。几何经 16/20/28/40/72px 实屏校对，最小尺寸下红三角仍可辨。 -->
-  <rect width="64" height="64" rx="15" fill="#0f172a"/>
-  <path d="M32 12 L52 52" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
-  <path d="M32 12 L12 52" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
-  <path d="M21.5 41 H42.5" stroke="#fff" stroke-width="6.5" stroke-linecap="round"/>
-  <path d="M32 21 L41 37.5 H23 Z" fill="#ef4444"/>
+  <!-- 界面里用的是纯文字标（见 AppLayout 的 .wordmark）。浏览器标签页放不下一整个词，
+       所以这里只留首字母，不加任何装饰 —— 与文字标同一支强调色，保持一致。 -->
+  <rect width="64" height="64" rx="14" fill="#e11d2f"/>
+  <path d="M28.6 12 h6.8 l16.6 40 h-9.2 l-3.3-8.4 h-15 L21.2 52 H12 Z M32 24.4 l-4.6 12 h9.2 Z"
+        fill="#fff" fill-rule="evenodd"/>
 </svg>

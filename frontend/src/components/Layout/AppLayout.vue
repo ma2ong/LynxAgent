@@ -5,8 +5,7 @@
         <el-icon><Menu /></el-icon>
       </el-button>
       <div class="mobile-brand">
-        <BrandLogo :size="22" />
-        <span>AStockPick</span>
+        <span class="wordmark"><i>A</i>StockPick</span>
       </div>
       <div v-if="billingInfo" class="mobile-quota">
         剩余 {{ billingInfo.remaining_today }}/{{ billingInfo.daily_limit }}
@@ -15,8 +14,7 @@
     <div v-if="mobileMenuOpen" class="mobile-mask" @click="mobileMenuOpen = false" />
     <el-aside width="216px" class="sidebar" :class="{ 'sidebar-open': mobileMenuOpen }">
       <div class="brand">
-        <BrandLogo :size="26" />
-        <span class="name">AStockPick</span>
+        <span class="wordmark name"><i>A</i>StockPick</span>
       </div>
       <el-menu
         :default-active="route.path"
@@ -69,7 +67,6 @@ import {
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'
-import BrandLogo from './BrandLogo.vue'
 import MacroBar from '@/components/MacroBar.vue'
 
 const route = useRoute()
@@ -114,12 +111,23 @@ const logout = () => {
   background: var(--el-bg-color);
 }
 
+.wordmark {
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  color: var(--el-text-color-primary);
+
+  i {
+    font-style: normal;
+    color: #e11d2f;
+  }
+}
+
 .brand {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 16px 18px;
-  font-size: 18px;
+  font-size: 19px;
   font-weight: 700;
 
   svg { display: block; flex: none; }

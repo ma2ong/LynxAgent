@@ -1181,6 +1181,11 @@ def _drop_far_below_best(kept: list[dict[str, Any]]) -> tuple[list[dict[str, Any
     直接把整池清空，见 lite_main 里的历史注释）。相对口径按当日头部自适应 ——
     强势日头部 99 分，门槛就高；弱市头部 93 分，门槛跟着降。**永远不会清空**：
     最高分那只必然留下。
+
+    **默认关闭（gap=0）**：2026-08-06 试过默认 8，当天名单从 20 只砍到 7 只，Allen 认为
+    给得太少、宁可自己在 20 只里挑。所以这条改成按需开启 —— 质量不够时少给几只是一种
+    产品取向，"给满再让用户自己筛"是另一种，选哪个是产品决定，不是技术问题。
+    要收紧就设 LYNX_SMART_QUALITY_GAP（8 约等于当日只留头部 1/3，10 留一半）。
     """
     if not kept:
         return kept, ""
@@ -1191,7 +1196,7 @@ def _drop_far_below_best(kept: list[dict[str, Any]]) -> tuple[list[dict[str, Any
         except (TypeError, ValueError):
             return 0.0
 
-    gap = max(0.0, float(os.getenv("LYNX_SMART_QUALITY_GAP", "8")))
+    gap = max(0.0, float(os.getenv("LYNX_SMART_QUALITY_GAP", "0")))
     if gap <= 0:
         return kept, ""
     best = max(score(item) for item in kept)

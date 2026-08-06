@@ -192,7 +192,11 @@ class IntradaySignalEngine:
         self,
         baselines: Optional[Dict[str, Dict[str, Any]]] = None,
         store: Optional[LocalQuantStore] = None,
-        min_daily_amount: float = 30_000_000,
+        # 20 日均额下限，与一键智选的第一层筛选（screening.DEFAULT_MIN_AMOUNT）统一到
+        # 5000 万。它与「当日成交额进前 15%」那道是两回事：当日分位拦不住「平时没人交易、
+        # 某天突然放一次量」的票，而那种票正是买得进卖不出的。2026-08-06 实测从 3000 万
+        # 提到 5000 万只少 2 个信号（21→19），入选票 20 日均额最低值从 0.45 亿升到 0.92 亿。
+        min_daily_amount: float = 50_000_000,
         industry_map: Optional[Dict[str, str]] = None,
     ) -> None:
         self.store = store

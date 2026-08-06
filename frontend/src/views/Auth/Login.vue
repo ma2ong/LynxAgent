@@ -54,13 +54,12 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock, Message } from '@element-plus/icons-vue'
 import { ApiClient } from '@/api/request'
 
 const router = useRouter()
-const route = useRoute()
 const mode = ref<'login' | 'register'>('login')
 const username = ref('')
 const password = ref('')
@@ -84,7 +83,10 @@ const onSubmit = async () => {
     if (!token) throw new Error(res?.message || '登录失败')
     localStorage.setItem('auth-token', token)
     ElMessage.success('登录成功')
-    router.push((route.query.redirect as string) || '/dashboard')
+    // 登录后一律回盘面总览。之前是回 query 里的 redirect，而那个值是鉴权守卫在
+    // 拦截时按「你当时停在哪一页」写进去的 —— 浏览器重开还在选股页，登录后又被送回选股页，
+    // 于是首页形同虚设。深链接分享因此不再自动跳转，这是刻意取舍（Allen 2026-08-06 要求）。
+    router.push('/dashboard')
   } catch (e: any) {
     ElMessage.error(e?.message || '登录失败')
   } finally {

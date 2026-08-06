@@ -469,7 +469,14 @@ class IntradaySignalEngine:
                 and price >= open_price * 0.995   # 仍要求没跌破开盘，走坏的不算
                 and projected_liquid
             )
-            setup = basic_setup or heavyweight_setup
+            # 绝对流动性底线：不管走哪条通道，当日成交额必须进全市场前 X%。
+            # 「量能倍数」是今日量 ÷ 自身 20 日均量，分母小的票天生容易出高倍数 ——
+            # 2026-08-06 实测雷达推的 10 只里，大丰实业日均额 0.36 亿、今日 0.87 亿就算
+            # 「放量 6.2 倍」拿满分量能分，而通富微电日均 142 亿、今日 61 亿只有 1.12 倍。
+            # 于是雷达系统性地推没人交易的小票，用户根本不敢买。原来的门槛是日均 3000 万，
+            # 形同虚设。这里改用当日成交额的**横截面分位**，随市场活跃度自适应。
+            liquid_enough = amount_rank >= _env_num("LYNX_RADAR_MIN_AMOUNT_PCTL", 0.85)
+            setup = (basic_setup or heavyweight_setup) and liquid_enough
             momentum_trigger = breakout20 or speed_1m >= 0.25 or (
                 pct >= 2.0 and _f(sector["mean"]) >= 0.3
             ) or heavyweight_setup

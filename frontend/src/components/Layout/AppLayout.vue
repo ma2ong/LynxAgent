@@ -5,7 +5,7 @@
         <el-icon><Menu /></el-icon>
       </el-button>
       <div class="mobile-brand">
-        <span class="logo">📈</span>
+        <BrandLogo :size="22" />
         <span>AStockPick</span>
       </div>
       <div v-if="billingInfo" class="mobile-quota">
@@ -15,7 +15,7 @@
     <div v-if="mobileMenuOpen" class="mobile-mask" @click="mobileMenuOpen = false" />
     <el-aside width="216px" class="sidebar" :class="{ 'sidebar-open': mobileMenuOpen }">
       <div class="brand">
-        <span class="logo">📈</span>
+        <BrandLogo :size="26" />
         <span class="name">AStockPick</span>
       </div>
       <el-menu
@@ -69,6 +69,7 @@ import {
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'
+import BrandLogo from './BrandLogo.vue'
 import MacroBar from '@/components/MacroBar.vue'
 
 const route = useRoute()
@@ -121,9 +122,7 @@ const logout = () => {
   font-size: 18px;
   font-weight: 700;
 
-  .logo {
-    font-size: 22px;
-  }
+  svg { display: block; flex: none; }
 }
 
 .menu {
@@ -184,9 +183,7 @@ const logout = () => {
     gap: 7px;
     font-weight: 700;
 
-    .logo {
-      font-size: 18px;
-    }
+    svg { display: block; flex: none; }
   }
 
   .mobile-quota {

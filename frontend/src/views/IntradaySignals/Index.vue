@@ -201,17 +201,19 @@ let timer: ReturnType<typeof setInterval> | null = null
 
 const filteredItems = computed(() => {
   const text = keyword.value.trim().toLowerCase()
-  return (data.value?.items || []).filter((item) => {
+  const matched = (data.value?.items || []).filter((item) => {
     const statusMatch = filter.value === 'all' || item.status === filter.value
     const textMatch = !text
       || item.name.toLowerCase().includes(text)
       || item.symbol.includes(text)
       || item.industry.toLowerCase().includes(text)
     return statusMatch && textMatch
-  }).slice(0, data.value?.recommendation_limit || 10)
-  // 后端现在回 60 条（每个状态各 20），是为了让「入场触发/提前预警/不可追入」三个标签
-  // 点开都有内容 —— 筛选是在这份 items 上做的，后端不给就永远是空的。展示仍然只放
-  // recommendation_limit 条，所以默认视图的观感不变，切标签才看到那一档的前 N 名。
+  })
+  // 后端回 60 条（每个状态各 20），是为了让「入场触发/提前预警/不可追入」三个标签点开
+  // 都有内容 —— 筛选是在这份 items 上做的，后端不给就永远是空的。
+  // 默认视图仍然只放 recommendation_limit 条（后端已把还能操作的排在前面，不可追的沉底）；
+  // 点开某一档则整档展开，条数与上面那个统计卡的数字对得上。
+  return filter.value === 'all' ? matched.slice(0, data.value?.recommendation_limit || 10) : matched
 })
 
 const historyRows = computed(() => (data.value?.recent_events || []).slice(0, 100))

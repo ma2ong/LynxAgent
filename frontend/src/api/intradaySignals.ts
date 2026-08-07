@@ -82,7 +82,9 @@ export interface IntradaySignalPayload {
 export async function fetchIntradaySignals(refresh = false) {
   const raw = await ApiClient.get<any>(
     '/api/lite/intraday-signals',
-    { limit: 10, history_limit: 100, refresh, _ts: Date.now() },
+    // 要 60 条而不是 10 条：三个筛选标签是在这份 items 上切的，只拿 10 条的话点开
+    // 「不可追入」只有挤进默认视图的那几只。默认视图仍然只渲染 recommendation_limit 条。
+    { limit: 60, history_limit: 100, refresh, _ts: Date.now() },
     { timeout: refresh ? 30000 : 15000 },
   )
   return (raw?.data || raw) as IntradaySignalPayload

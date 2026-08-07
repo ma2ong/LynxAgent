@@ -193,9 +193,69 @@ def test_payload_carries_each_status_so_the_filter_tabs_are_not_empty(monkeypatc
     for status in ("entry", "watch", "unbuyable"):
         assert result[f"{status}_count"] == 20, status
     assert len(result["items"]) == 60
-    # 仍然按分数降序，前端切前 10 条展示的就是最强的
-    scores = [item["score"] for item in result["items"]]
-    assert scores == sorted(scores, reverse=True)
+    # 2026-08-07 改：不再是全局按分数降序。默认视图（前 recommendation_limit 条）只放
+    # 还能操作的，已涨停/空间不足的 unbuyable 沉到后面，它们仍在自己的标签里。
+    statuses = [item["status"] for item in result["items"]]
+    head = statuses[:recommendation_limit()]
+    assert "unbuyable" not in head
+    assert statuses.index("unbuyable") >= statuses.count("entry") + statuses.count("watch")
+    actionable_scores = [
+        item["score"] for item in result["items"] if item["status"] in {"entry", "watch"}
+    ]
+    assert actionable_scores == sorted(actionable_scores, reverse=True)
+
+
+def test_recent_triggers_keep_reserved_slots_in_the_default_view(monkeypatch):
+    """午后的新信号必须挤得进默认视图。
+
+    列表是「当日触发过的票按分数取前 N」，而早盘的分数天然更高（短时涨速在开盘最猛、
+    量比的分母是时段进度、板块共振也在开盘最强）。2026-08-06 实测第 10 名 90.9 分，
+    全天下午首次触发的票里最高只有 86.2 —— 数学上永远进不来。
+    """
+    monkeypatch.setenv("INTRADAY_RECOMMENDATION_LIMIT", "10")
+    monkeypatch.setenv("INTRADAY_PAYLOAD_LIMIT", "60")
+    monkeypatch.setenv("LYNX_RADAR_FRESH_SLOTS", "3")
+    monkeypatch.setenv("LYNX_RADAR_FRESH_WINDOW_MIN", "30")
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    stale = (now - timedelta(hours=2)).isoformat(timespec="seconds")
+    recent = (now - timedelta(minutes=5)).isoformat(timespec="seconds")
+    payload = {
+        "items": [
+            {"symbol": str(i).zfill(6), "status": "entry", "score": 95 - i * 0.1,
+             "triggered_at": stale, "signal_mode": "intraday_archive"}
+            for i in range(20)
+        ] + [
+            {"symbol": f"9000{i}0", "status": "entry", "score": 82 - i,
+             "triggered_at": recent, "signal_mode": "intraday_archive"}
+            for i in range(5)
+        ],
+    }
+    head = _trim_recommendations(payload)["items"][:recommendation_limit()]
+    fresh_in_head = [item for item in head if item["symbol"].startswith("9000")]
+    assert len(fresh_in_head) == 3
+
+
+def test_old_signals_lose_rank_but_keep_their_displayed_score(monkeypatch):
+    monkeypatch.setenv("INTRADAY_RECOMMENDATION_LIMIT", "10")
+    monkeypatch.setenv("LYNX_RADAR_SCORE_DECAY_PER_HOUR", "2")
+    monkeypatch.setenv("LYNX_RADAR_SCORE_DECAY_CAP", "8")
+    monkeypatch.setenv("LYNX_RADAR_FRESH_SLOTS", "0")
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    payload = {
+        "items": [
+            {"symbol": "000001", "status": "entry", "score": 90.0,
+             "triggered_at": (now - timedelta(hours=4)).isoformat(timespec="seconds"),
+             "signal_mode": "intraday_archive"},
+            {"symbol": "000002", "status": "entry", "score": 85.0,
+             "triggered_at": (now - timedelta(minutes=2)).isoformat(timespec="seconds"),
+             "signal_mode": "intraday_archive"},
+        ],
+    }
+    items = _trim_recommendations(payload)["items"]
+    # 90 分的旧信号被 4 小时折价 8 分（封顶）后排在 85 分的新信号之后
+    assert [item["symbol"] for item in items] == ["000002", "000001"]
+    # 展示的分数一分不动：留痕和复盘要对得上
+    assert {item["symbol"]: item["score"] for item in items} == {"000001": 90.0, "000002": 85.0}
 
 
 def test_trim_respects_an_explicit_smaller_limit(monkeypatch):

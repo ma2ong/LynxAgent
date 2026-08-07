@@ -1,5 +1,8 @@
 <template>
-  <div class="quant-page">
+  <div
+    class="quant-page"
+    :style="{ '--tabs-head-h': tabsHeadHeight + 'px', '--sticky-head-h': stickyHeadHeight + 'px' }"
+  >
     <el-alert
       v-if="riskLocked && riskAlert"
       type="error"
@@ -1246,7 +1249,30 @@ const refreshSmartPoolLive = async () => {
   }
 }
 
+// 吸顶三层（标签页 / 工具条 / 表头）逐层往下叠，表头要停在前两层的正下方。前两层的高度
+// 会随窗口宽度换行而变，写死会露缝或盖住一行，所以量出来喂给 CSS 变量。
+const tabsHeadHeight = ref(39)
+const stickyHeadHeight = ref(87)
+let stickyHeadObserver: ResizeObserver | undefined
+
+const observeStickyHead = () => {
+  const tabsHead = document.querySelector('.quant-tabs > .el-tabs__header')
+  if (!(tabsHead instanceof HTMLElement)) return
+  const measure = () => {
+    const hero = document.querySelector('.smart-hero')
+    tabsHeadHeight.value = tabsHead.getBoundingClientRect().height
+    stickyHeadHeight.value = tabsHeadHeight.value
+      + (hero instanceof HTMLElement ? hero.getBoundingClientRect().height : 0)
+  }
+  measure()
+  stickyHeadObserver = new ResizeObserver(measure)
+  stickyHeadObserver.observe(tabsHead)
+  const hero = document.querySelector('.smart-hero')
+  if (hero instanceof HTMLElement) stickyHeadObserver.observe(hero)
+}
+
 onMounted(async () => {
+  observeStickyHead()
   // 结构底池每天生成一次；页面打开后和停留期间每 30 秒按实时量价静默换榜。
   refreshSmartPoolLive()
   smartLiveTimer = window.setInterval(refreshSmartPoolLive, 30_000)
@@ -1269,6 +1295,7 @@ onMounted(async () => {
   }
 })
 onUnmounted(() => {
+  stickyHeadObserver?.disconnect()
   if (syncTimer) window.clearTimeout(syncTimer)
   if (smartLiveTimer) window.clearInterval(smartLiveTimer)
   stopSmartTaskPolling()
@@ -2436,8 +2463,26 @@ const openChart = async (row: any) => {
 /* top:0 会把表头钉在 .el-main 的内容框上沿，而它的 padding-top 那一段仍属于可滚动区，
    表格行会从表头上方漏出一条。窄屏那段被固定顶栏盖住，看不见；宽屏必须把这 18px
    （AppLayout 里 .content 的 padding-top）顶掉，让表头贴到滚动区裁切边上。
-   断点跟 AppLayout 的 760px 保持一致，改那边记得同步。 */
+   断点跟 AppLayout 的 760px 保持一致，改那边记得同步。
+
+   宽屏再叠两层：标签页贴裁切边，工具条（一键智能推荐按钮所在）贴标签页下沿，表头贴工具条
+   下沿——滚到第 20 只时仍能直接换参数重跑。中间的推荐计数、环境仓位、入场说明看一遍就够，
+   不占常驻空间，随行滚走。三层背景都必须不透明，否则行会从底下透出来。
+   窄屏不叠：一屏就那么高，钉三层等于没地方看票。 */
 @media (min-width: 761px) {
-  .smart-pool-table :deep(.el-table__header-wrapper) { top: -18px; }
+  .quant-tabs :deep(.el-tabs__header) {
+    position: sticky;
+    top: -18px;
+    z-index: 8;
+    background: var(--el-fill-color-lighter);
+  }
+  .smart-hero {
+    position: sticky;
+    top: calc(-18px + var(--tabs-head-h, 39px));
+    z-index: 7;
+  }
+  .smart-pool-table :deep(.el-table__header-wrapper) {
+    top: calc(-18px + var(--sticky-head-h, 87px));
+  }
 }
 </style>

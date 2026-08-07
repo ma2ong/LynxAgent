@@ -311,7 +311,6 @@
               ref="smartTableRef"
               class="smart-pool-table"
               :data="smartDisplayItems"
-              max-height="640"
               size="small"
               @selection-change="handleSmartSelectionChange"
             >
@@ -494,37 +493,6 @@
             </el-table>
             <el-empty v-else-if="!smartPoolLoading" description="点击一键智能推荐后生成量化股票池" />
           </section>
-
-          <el-collapse class="advanced-tools">
-            <el-collapse-item title="高级手动选股工具" name="manual-screen">
-              <div class="tool-layout">
-                <el-form class="control-panel" label-position="top" @submit.prevent>
-                  <el-form-item label="股票池">
-                    <el-input v-model="screenSymbolsText" type="textarea" :rows="8" placeholder="每行一个代码，或用逗号分隔" />
-                  </el-form-item>
-                  <el-form-item label="返回数量">
-                    <el-input-number v-model="screenForm.limit" :min="1" :max="200" style="width: 100%" />
-                  </el-form-item>
-                  <el-button type="primary" native-type="button" :loading="screenLoading" @click="runScreen">
-                    <el-icon><Search /></el-icon>
-                    手动选股
-                  </el-button>
-                </el-form>
-                <section class="result-panel">
-                  <el-table v-if="screenResult?.items.length" :data="screenResult.items" height="420">
-                    <el-table-column prop="symbol" label="代码" min-width="110" fixed />
-                    <el-table-column label="综合分" min-width="110"><template #default="{ row }"><b>{{ row.score.toFixed(1) }}</b></template></el-table-column>
-                    <el-table-column label="信号" min-width="110"><template #default="{ row }"><el-tag :type="signalTagType(row.signal)">{{ signalText(row.signal) }}</el-tag></template></el-table-column>
-                    <el-table-column label="趋势" min-width="90"><template #default="{ row }">{{ row.factors.trend.toFixed(1) }}</template></el-table-column>
-                    <el-table-column label="动量" min-width="90"><template #default="{ row }">{{ row.factors.momentum.toFixed(1) }}</template></el-table-column>
-                    <el-table-column label="风控" min-width="90"><template #default="{ row }">{{ row.factors.risk_control.toFixed(1) }}</template></el-table-column>
-                    <el-table-column label="回撤" min-width="100"><template #default="{ row }">{{ percent(row.risk.max_drawdown) }}</template></el-table-column>
-                  </el-table>
-                  <el-empty v-else description="输入股票池后可手动选股" />
-                </section>
-              </div>
-            </el-collapse-item>
-          </el-collapse>
         </div>
       </el-tab-pane>
 
@@ -821,6 +789,35 @@
               <el-table-column prop="hypothesis" label="假设" min-width="320" />
             </el-table>
             <el-empty v-else description="运行后显示候选因子排名" />
+          </section>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="手动选股" name="manual-screen">
+        <div class="tool-layout">
+          <el-form class="control-panel" label-position="top" @submit.prevent>
+            <el-form-item label="股票池">
+              <el-input v-model="screenSymbolsText" type="textarea" :rows="8" placeholder="每行一个代码，或用逗号分隔" />
+            </el-form-item>
+            <el-form-item label="返回数量">
+              <el-input-number v-model="screenForm.limit" :min="1" :max="200" style="width: 100%" />
+            </el-form-item>
+            <el-button type="primary" native-type="button" :loading="screenLoading" @click="runScreen">
+              <el-icon><Search /></el-icon>
+              手动选股
+            </el-button>
+          </el-form>
+          <section class="result-panel">
+            <el-table v-if="screenResult?.items.length" :data="screenResult.items">
+              <el-table-column prop="symbol" label="代码" min-width="110" fixed />
+              <el-table-column label="综合分" min-width="110"><template #default="{ row }"><b>{{ row.score.toFixed(1) }}</b></template></el-table-column>
+              <el-table-column label="信号" min-width="110"><template #default="{ row }"><el-tag :type="signalTagType(row.signal)">{{ signalText(row.signal) }}</el-tag></template></el-table-column>
+              <el-table-column label="趋势" min-width="90"><template #default="{ row }">{{ row.factors.trend.toFixed(1) }}</template></el-table-column>
+              <el-table-column label="动量" min-width="90"><template #default="{ row }">{{ row.factors.momentum.toFixed(1) }}</template></el-table-column>
+              <el-table-column label="风控" min-width="90"><template #default="{ row }">{{ row.factors.risk_control.toFixed(1) }}</template></el-table-column>
+              <el-table-column label="回撤" min-width="100"><template #default="{ row }">{{ percent(row.risk.max_drawdown) }}</template></el-table-column>
+            </el-table>
+            <el-empty v-else description="输入股票池后可手动选股" />
           </section>
         </div>
       </el-tab-pane>
@@ -1915,12 +1912,6 @@ const openChart = async (row: any) => {
     background: #67c23a;
     color: #fff;
   }
-}
-
-.advanced-tools {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  padding: 0 14px;
 }
 
 .result-panel {

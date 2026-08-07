@@ -2673,8 +2673,11 @@ _FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 # 隧道回源的每一跳都要跨公网（实测本机 12ms、经边缘 800ms+），静态资源必须让
 # Cloudflare 边缘缓存住。vite 产物文件名带内容哈希，改了内容就换名字，可以放心长缓存；
 # index.html 绝不能缓存，否则发版后用户一直拿到旧壳子、引用已不存在的旧 JS。
+# dist 根目录的文件（favicon.svg 等）来自 public/，vite 原样拷贝、不带哈希，同名换内容，
+# 长缓存会让老访客的标签页图标永远停在旧 logo 上——按可重验证缓存处理。
 _ASSET_CACHE = "public, max-age=31536000, immutable"
 _HTML_CACHE = "no-cache"
+_UNHASHED_CACHE = "no-cache"
 
 if _FRONTEND_DIST.is_dir():
     class _CachedAssets(StaticFiles):
@@ -2693,6 +2696,6 @@ if _FRONTEND_DIST.is_dir():
             raise HTTPException(status_code=404, detail="Not Found")
         candidate = _FRONTEND_DIST / full_path
         if full_path and candidate.is_file():
-            return FileResponse(str(candidate), headers={"Cache-Control": _ASSET_CACHE})
+            return FileResponse(str(candidate), headers={"Cache-Control": _UNHASHED_CACHE})
         return FileResponse(str(_FRONTEND_DIST / "index.html"),
                             headers={"Cache-Control": _HTML_CACHE})

@@ -2419,4 +2419,25 @@ const openChart = async (row: any) => {
 .more-tag { opacity: .7; cursor: help; }
 .smart-pool-table :deep(.el-table__cell) { padding: 6px 0; }
 .smart-pool-table :deep(.cell) { line-height: 1.45; }
+
+/* 表头吸顶。表格不再限高（20 只全排在页面里，只留一条页面滚动条），滚到第 15 只时列名
+   必须还在。el-table 和 el-tabs__content 默认 overflow:hidden，会把 sticky 锁死在各自
+   盒子里，必须放开这两层，滚动容器才轮得到 .el-main。 */
+.quant-tabs :deep(.el-tabs__content) { overflow: visible; }
+.smart-pool-table,
+.smart-pool-table :deep(.el-table__inner-wrapper) { overflow: visible; }
+.smart-pool-table :deep(.el-table__header-wrapper) {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--el-bg-color);
+}
+
+/* top:0 会把表头钉在 .el-main 的内容框上沿，而它的 padding-top 那一段仍属于可滚动区，
+   表格行会从表头上方漏出一条。窄屏那段被固定顶栏盖住，看不见；宽屏必须把这 18px
+   （AppLayout 里 .content 的 padding-top）顶掉，让表头贴到滚动区裁切边上。
+   断点跟 AppLayout 的 760px 保持一致，改那边记得同步。 */
+@media (min-width: 761px) {
+  .smart-pool-table :deep(.el-table__header-wrapper) { top: -18px; }
+}
 </style>

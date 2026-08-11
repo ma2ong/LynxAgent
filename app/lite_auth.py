@@ -398,9 +398,15 @@ def _record_login_fail(client_ip: str) -> None:
     _LOGIN_FAILS.setdefault(client_ip, []).append(time.time())
 
 
+def _client_ip(request: Request) -> str:
+    # 站点走 Cloudflare Tunnel，request.client.host 永远是隧道本地地址，
+    # 真实来源只在 cf-connecting-ip 里。
+    return request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "-")
+
+
 @router.post("/login")
 async def login(data: LoginRequest, request: Request):
-    client_ip = request.headers.get("cf-connecting-ip") or (request.client.host if request.client else "-")
+    client_ip = _client_ip(request)
     if _login_blocked(client_ip):
         raise HTTPException(status_code=429, detail="登录失败次数过多，请 15 分钟后再试")
     user = store.authenticate(data.username, data.password)
@@ -417,11 +423,29 @@ async def login(data: LoginRequest, request: Request):
 # 账号由管理员在「用户管理」里开——公开注册意味着任何人都能拿到全市场扫描算力。
 ALLOW_REGISTRATION = os.getenv("ALLOW_REGISTRATION", "false").lower() in ("1", "true", "yes")
 
+# 注册限流：开放自助注册后没有验证码/短信验证，未限流的注册端点既能被脚本刷号灌垃圾账号，
+# 也能被拿来烧 CPU（每次建号跑 12 万轮 pbkdf2）。同一 IP 每小时最多 5 次请求，
+# 成败都计数——真人注册一次就够，反复失败本身就是脚本特征。
+_REGISTER_HITS: dict[str, list[float]] = {}
+_REGISTER_MAX_PER_HOUR = 5
+_REGISTER_WINDOW_SEC = 3600
+
+
+def _register_throttled(client_ip: str) -> bool:
+    import time
+    now = time.time()
+    hits = [t for t in _REGISTER_HITS.get(client_ip, []) if now - t < _REGISTER_WINDOW_SEC]
+    hits.append(now)
+    _REGISTER_HITS[client_ip] = hits
+    return len(hits) > _REGISTER_MAX_PER_HOUR
+
 
 @router.post("/register")
-async def register(data: RegisterRequest):
+async def register(data: RegisterRequest, request: Request):
     if not ALLOW_REGISTRATION:
         raise HTTPException(status_code=403, detail="本站为邀请制，暂不开放注册。请联系管理员开通账号。")
+    if _register_throttled(_client_ip(request)):
+        raise HTTPException(status_code=429, detail="注册过于频繁，请 1 小时后再试")
     if data.confirm_password and data.confirm_password != data.password:
         raise HTTPException(status_code=400, detail="两次输入的密码不一致")
     contact = str(data.email).strip()

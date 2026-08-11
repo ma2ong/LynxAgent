@@ -69,7 +69,9 @@ http.interceptors.response.use(
       }
       return Promise.reject(new Error(msg))
     }
-    const reason = error?.response?.data?.detail?.message
+    // detail 可能是字符串（FastAPI 默认）或 {code,message} 对象，两种都要能取到中文原因。
+    const detail = error?.response?.data?.detail
+    const reason = (typeof detail === 'string' ? detail : detail?.message)
       || error?.response?.data?.message || error?.message || '请求失败'
     return Promise.reject(new Error(reason))
   },

@@ -6,7 +6,7 @@ import app.core.intraday_monitor as intraday_monitor
 from app.core.intraday_monitor import (
     _archive_items_from_events,
     _trim_recommendations,
-    recommendation_limit,
+    score_floor,
 )
 from quantcore.quant.intraday_signals import IntradaySignalEngine, build_close_review, trading_phase
 from quantcore.quant.local_store import LocalQuantStore
@@ -171,49 +171,44 @@ def test_archive_keeps_real_entry_even_if_later_invalidated():
     assert items[0]["actionable"] is False
 
 
-def test_payload_carries_each_status_so_the_filter_tabs_are_not_empty(monkeypatch):
-    """回给前端的条数与「展示 10 只」是两件事。
+def test_payload_keeps_every_signal_above_the_score_floor(monkeypatch):
+    """2026-08-12 改：不再「取前 N 名」，改成「强度到线就上榜」。
 
-    2026-08-06 改：页面上有 入场触发/提前预警/不可追入 三个筛选标签，筛选是在这份 items
-    上做的，后端只回 10 条的话点开标签基本是空的。所以 payload 按状态各留配额（默认
-    每档 20、合计 60），展示上限仍是 recommendation_limit，由前端切片。
+    名次不等于质量：弱时段硬凑满 10 条，强时段又把 89.9 分的挡在门外只因为排第 11。
+    现在门槛以上的全给，条数随行情浮动。
     """
-    monkeypatch.setenv("INTRADAY_RECOMMENDATION_LIMIT", "10")
-    monkeypatch.setenv("INTRADAY_PAYLOAD_LIMIT", "60")
+    monkeypatch.setenv("LYNX_RADAR_SCORE_FLOOR", "90")
+    monkeypatch.setenv("LYNX_RADAR_FRESH_SLOTS", "0")
     payload = {
         "items": [
-            {"symbol": str(i).zfill(6), "status": status, "score": 100 - i}
+            {"symbol": f"{status[0]}{i:05d}", "status": status, "score": 100 - i}
             for status in ("entry", "watch", "unbuyable")
             for i in range(30)
         ]
     }
     result = _trim_recommendations(payload)
-    assert recommendation_limit() == 10
-    # 每个状态都拿到配额，没有哪一档被另一档挤空
+    assert score_floor() == 90
+    # 每档 100..90 共 11 条到线，89 及以下一条不留
     for status in ("entry", "watch", "unbuyable"):
-        assert result[f"{status}_count"] == 20, status
-    assert len(result["items"]) == 60
-    # 2026-08-07 改：不再是全局按分数降序。默认视图（前 recommendation_limit 条）只放
-    # 还能操作的，已涨停/空间不足的 unbuyable 沉到后面，它们仍在自己的标签里。
+        assert result[f"{status}_count"] == 11, status
+    assert len(result["items"]) == 33
+    assert min(item["score"] for item in result["items"]) == 90
+    # 还能操作的排前面，已涨停/空间不足的 unbuyable 沉到后面（仍在自己的标签里）
     statuses = [item["status"] for item in result["items"]]
-    head = statuses[:recommendation_limit()]
-    assert "unbuyable" not in head
-    assert statuses.index("unbuyable") >= statuses.count("entry") + statuses.count("watch")
+    assert statuses.index("unbuyable") == statuses.count("entry") + statuses.count("watch")
     actionable_scores = [
         item["score"] for item in result["items"] if item["status"] in {"entry", "watch"}
     ]
     assert actionable_scores == sorted(actionable_scores, reverse=True)
 
 
-def test_recent_triggers_keep_reserved_slots_in_the_default_view(monkeypatch):
-    """午后的新信号必须挤得进默认视图。
+def test_recent_triggers_keep_reserved_slots_at_the_top(monkeypatch):
+    """午后的新信号必须排得到最上面。
 
-    列表是「当日触发过的票按分数取前 N」，而早盘的分数天然更高（短时涨速在开盘最猛、
-    量比的分母是时段进度、板块共振也在开盘最强）。2026-08-06 实测第 10 名 90.9 分，
-    全天下午首次触发的票里最高只有 86.2 —— 数学上永远进不来。
+    早盘的分数天然更高（短时涨速在开盘最猛、量比的分母是时段进度、板块共振也在开盘
+    最强），纯按分数排的话下午刚触发的票会被早盘存量一路压到榜尾。
     """
-    monkeypatch.setenv("INTRADAY_RECOMMENDATION_LIMIT", "10")
-    monkeypatch.setenv("INTRADAY_PAYLOAD_LIMIT", "60")
+    monkeypatch.setenv("LYNX_RADAR_SCORE_FLOOR", "90")
     monkeypatch.setenv("LYNX_RADAR_FRESH_SLOTS", "3")
     monkeypatch.setenv("LYNX_RADAR_FRESH_WINDOW_MIN", "30")
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
@@ -221,46 +216,53 @@ def test_recent_triggers_keep_reserved_slots_in_the_default_view(monkeypatch):
     recent = (now - timedelta(minutes=5)).isoformat(timespec="seconds")
     payload = {
         "items": [
-            {"symbol": str(i).zfill(6), "status": "entry", "score": 95 - i * 0.1,
+            {"symbol": str(i).zfill(6), "status": "entry", "score": 99 - i * 0.1,
              "triggered_at": stale, "signal_mode": "intraday_archive"}
             for i in range(20)
         ] + [
-            {"symbol": f"9000{i}0", "status": "entry", "score": 82 - i,
+            {"symbol": f"9000{i}0", "status": "entry", "score": 91 - i * 0.1,
              "triggered_at": recent, "signal_mode": "intraday_archive"}
             for i in range(5)
         ],
     }
-    head = _trim_recommendations(payload)["items"][:recommendation_limit()]
-    fresh_in_head = [item for item in head if item["symbol"].startswith("9000")]
-    assert len(fresh_in_head) == 3
+    head = _trim_recommendations(payload)["items"][:3]
+    assert [item["symbol"] for item in head] == ["900000", "900010", "900020"]
 
 
 def test_old_signals_lose_rank_but_keep_their_displayed_score(monkeypatch):
-    monkeypatch.setenv("INTRADAY_RECOMMENDATION_LIMIT", "10")
+    monkeypatch.setenv("LYNX_RADAR_SCORE_FLOOR", "90")
     monkeypatch.setenv("LYNX_RADAR_SCORE_DECAY_PER_HOUR", "2")
     monkeypatch.setenv("LYNX_RADAR_SCORE_DECAY_CAP", "8")
     monkeypatch.setenv("LYNX_RADAR_FRESH_SLOTS", "0")
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
     payload = {
         "items": [
-            {"symbol": "000001", "status": "entry", "score": 90.0,
+            {"symbol": "000001", "status": "entry", "score": 99.0,
              "triggered_at": (now - timedelta(hours=4)).isoformat(timespec="seconds"),
              "signal_mode": "intraday_archive"},
-            {"symbol": "000002", "status": "entry", "score": 85.0,
+            {"symbol": "000002", "status": "entry", "score": 92.0,
              "triggered_at": (now - timedelta(minutes=2)).isoformat(timespec="seconds"),
              "signal_mode": "intraday_archive"},
         ],
     }
     items = _trim_recommendations(payload)["items"]
-    # 90 分的旧信号被 4 小时折价 8 分（封顶）后排在 85 分的新信号之后
+    # 99 分的旧信号被 4 小时折价 8 分（封顶）后排在 92 分的新信号之后
     assert [item["symbol"] for item in items] == ["000002", "000001"]
-    # 展示的分数一分不动：留痕和复盘要对得上
-    assert {item["symbol"]: item["score"] for item in items} == {"000001": 90.0, "000002": 85.0}
+    # 展示的分数一分不动：留痕和复盘要对得上，折价只影响排序
+    assert {item["symbol"]: item["score"] for item in items} == {"000001": 99.0, "000002": 92.0}
 
 
-def test_trim_respects_an_explicit_smaller_limit(monkeypatch):
-    monkeypatch.setenv("INTRADAY_RECOMMENDATION_LIMIT", "10")
+def test_score_floor_drops_everything_below_the_line(monkeypatch):
+    monkeypatch.setenv("LYNX_RADAR_SCORE_FLOOR", "90")
     payload = {"items": [{"symbol": str(i).zfill(6), "status": "entry", "score": 100 - i}
+                         for i in range(15)]}
+    result = _trim_recommendations(payload)
+    # 100..90 共 11 条到线，89 及以下（89.9 也一样）一条不留
+    assert [item["score"] for item in result["items"]] == list(range(100, 89, -1))
+
+
+def test_trim_respects_an_explicit_smaller_limit():
+    payload = {"items": [{"symbol": str(i).zfill(6), "status": "entry", "score": 100 - i * 0.1}
                          for i in range(15)]}
     assert len(_trim_recommendations(payload, limit=10)["items"]) == 10
 

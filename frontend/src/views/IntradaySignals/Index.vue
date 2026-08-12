@@ -209,11 +209,8 @@ const filteredItems = computed(() => {
       || item.industry.toLowerCase().includes(text)
     return statusMatch && textMatch
   })
-  // 后端回 60 条（每个状态各 20），是为了让「入场触发/提前预警/不可追入」三个标签点开
-  // 都有内容 —— 筛选是在这份 items 上做的，后端不给就永远是空的。
-  // 默认视图仍然只放 recommendation_limit 条（后端已把还能操作的排在前面，不可追的沉底）；
-  // 点开某一档则整档展开，条数与上面那个统计卡的数字对得上。
-  return filter.value === 'all' ? matched.slice(0, data.value?.recommendation_limit || 10) : matched
+  // 不再截前 N 条：后端已按信号强度门槛过滤过，到线的全部展示，条数与统计卡对得上。
+  return matched
 })
 
 const historyRows = computed(() => (data.value?.recent_events || []).slice(0, 100))
@@ -235,7 +232,8 @@ const scanNote = computed(() =>
 const emptyText = computed(() => {
   if (data.value?.status === 'closed') return '今天没有满足条件的盘中记录或收盘复盘候选'
   if (filter.value !== 'all') return '当前没有这个状态的信号'
-  return '当前没有满足量价、结构和可成交条件的机会'
+  // 空榜是正常结果不是故障：门槛是绝对分数，行情弱就该一条都没有
+  return `当前没有信号强度 ${data.value?.score_floor ?? 90} 分以上的机会，扫描仍在继续`
 })
 const toneClass = computed(() =>
   data.value?.market?.tone === '偏暖' ? 'warm' : data.value?.market?.tone === '偏冷' ? 'cold' : 'neutral')

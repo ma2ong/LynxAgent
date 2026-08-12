@@ -47,17 +47,14 @@ def scan_interval_seconds() -> float:
     return max(5.0, min(value, 60.0))
 
 
-def recommendation_limit() -> int:
-    value = int(os.getenv("INTRADAY_RECOMMENDATION_LIMIT", "10"))
-    return max(5, min(value, 20))
+def score_floor() -> float:
+    """展示门槛：只有强度到线的机会才进榜，够几条给几条。
 
-
-def payload_limit() -> int:
-    """回给前端的条数。比 recommendation_limit（默认 10）大，因为页面上有
-    入场触发/提前预警/不可追入 三个筛选标签，只回 10 条的话点开标签基本是空的 ——
-    而筛选是在这份 items 上做的，不会再向后端要数据。"""
-    value = int(os.getenv("INTRADAY_PAYLOAD_LIMIT", "60"))
-    return max(recommendation_limit(), min(value, 200))
+    以前是「全市场排名取前 10」，名次不等于质量 —— 弱时段硬凑满 10 条，强时段又把
+    89.9 分的挡在门外只因为它排第 11。换成绝对门槛后，行情强就多几条，行情弱就没有。
+    """
+    value = float(os.getenv("LYNX_RADAR_SCORE_FLOOR", "90"))
+    return max(0.0, min(value, 100.0))
 
 
 def fresh_window_minutes() -> float:
@@ -67,7 +64,7 @@ def fresh_window_minutes() -> float:
 
 def fresh_slots() -> int:
     value = int(os.getenv("LYNX_RADAR_FRESH_SLOTS", "3"))
-    return max(0, min(value, recommendation_limit()))
+    return max(0, min(value, 20))
 
 
 def _decay_per_hour() -> float:
@@ -108,13 +105,11 @@ def _rank_score(item: dict[str, Any], now: datetime) -> float:
 
 
 def _order_for_display(items: list, now: datetime) -> list:
-    """默认视图（前 recommendation_limit 条）只放还能操作的，不可追的沉到后面。
+    """还能操作的排前面，不可追的沉到后面。
 
-    三个筛选标签是在这份 items 上切的，所以这里的顺序就等于默认视图的内容：
-    * entry / watch 排前面 —— 已涨停或空间不足的 unbuyable 曾占掉默认视图一半的位置，
-      而它们本来就买不进去；现在它们仍然在「不可追入」标签里，只是不再挤占默认视图。
-    * 空出来的位置自动由后面触发的票补上（顺序即回填，不需要额外逻辑）。
-    * 再给「最近 N 分钟内触发」留几个保底席位，否则午后的新信号排不过早盘的高分存量。
+    * entry / watch 排前面 —— 已涨停或空间不足的 unbuyable 本来就买不进去；它们仍然
+      在「不可追入」标签里，只是不占据最上面的位置。
+    * 再给「最近 N 分钟内触发」留几个置顶席位，否则午后的新信号排不过早盘的高分存量。
     """
     actionable = sorted(
         (item for item in items if item.get("status") in {"entry", "watch"}),
@@ -135,48 +130,32 @@ def _order_for_display(items: list, now: datetime) -> list:
         if _age_minutes(item, now) <= window:
             head.append(item)
             seen.add(id(item))
-    for item in actionable:
-        if len(head) >= recommendation_limit():
-            break
-        if id(item) not in seen:
-            head.append(item)
-            seen.add(id(item))
     return head + [item for item in actionable if id(item) not in seen] + blocked + others
 
 
 def _trim_recommendations(payload: dict[str, Any], limit: int | None = None) -> dict[str, Any]:
-    safe_limit = max(1, min(int(limit or payload_limit()), payload_limit()))
-    current = dict(payload)
+    """按信号强度过滤，不再按名次截断 —— 到线的全给，没到线的一条都不给。
+
+    limit 只是接口层的安全上限（防 payload 在极端行情下无限大），正常不会触发。
+    """
+    floor = score_floor()
     now = datetime.now(_TZ)
-    # 每个状态各留配额，再按分数排序。
-    # 只按总分一刀切会让某一状态吃掉全部名额 —— 2026-08-06 实测 60 个名额里 40 个是
-    # entry，提前预警只剩 2 条，用户点开「提前预警」标签几乎是空的。而筛选是在这份
-    # items 上做的，后端不给就永远没有。
-    by_status: dict[str, list] = {}
-    for item in current.get("items") or []:
-        by_status.setdefault(str(item.get("status") or ""), []).append(item)
-    # 配额是**保底**不是上限：某一档不够数时，空出来的名额由其余最强的条目回填，
-    # 否则「只有 entry 有货」的时段会被配额饿死，返回条数远少于上限。
-    quota = max(5, safe_limit // 3)
-    picked: list = []
-    for status in ("entry", "watch", "unbuyable"):
-        group = sorted(by_status.get(status) or [], key=lambda it: -_rank_score(it, now))
-        picked.extend(group[:quota])
-    taken = {id(item) for item in picked}
-    rest = sorted(
-        (item for item in current.get("items") or [] if id(item) not in taken),
-        key=lambda it: -_rank_score(it, now),
-    )
-    picked.extend(rest[: max(0, safe_limit - len(picked))])
-    items = _order_for_display(picked, now)[:safe_limit]
+    current = dict(payload)
+    kept = [
+        item for item in current.get("items") or []
+        if float(item.get("score") or 0) >= floor
+    ]
+    items = _order_for_display(kept, now)
+    if limit:
+        items = items[: max(1, int(limit))]
     current.update({
         "items": items,
         "candidate_count": len(items),
         "entry_count": sum(1 for item in items if item.get("status") == "entry"),
         "watch_count": sum(1 for item in items if item.get("status") == "watch"),
         "unbuyable_count": sum(1 for item in items if item.get("status") == "unbuyable"),
-        "recommendation_limit": recommendation_limit(),
-        "selection_note": f"\u4ec5\u5c55\u793a\u5168\u5e02\u573a\u91cf\u4ef7\u3001\u7ed3\u6784\u548c\u677f\u5757\u5171\u632f\u7efc\u5408\u6392\u540d\u6700\u9ad8\u7684 {recommendation_limit()} \u53ea\u3002",
+        "score_floor": floor,
+        "selection_note": f"\u4ec5\u5c55\u793a\u4fe1\u53f7\u5f3a\u5ea6 {floor:g} \u5206\u4ee5\u4e0a\u7684\u673a\u4f1a\uff0c\u4e0d\u9650\u6570\u91cf\u3002",
     })
     return current
 
@@ -326,7 +305,7 @@ def _archive_items_from_events(
         priority.get(str(item.get("status")), 9),
         -float(item.get("score") or 0),
     ))
-    safe_limit = max(1, min(int(limit or recommendation_limit()), 200))
+    safe_limit = max(1, min(int(limit or 200), 200))
     return items[:safe_limit]
 
 
@@ -476,19 +455,14 @@ async def scan_once(force: bool = False) -> dict[str, Any]:
 
 
 async def payload(
-    limit: int = 50,
+    limit: int = 200,
     history_limit: int = 100,
     refresh: bool = False,
 ) -> dict[str, Any]:
     if refresh:
         await scan_once(force=True)
-    # 上限按 payload_limit 收，不是 recommendation_limit：三个筛选标签是在这份 items 上
-    # 切的，只回 10 条的话「不可追入」标签里就只有挤进前 10 的那几只，看不到当日全貌。
-    # 默认视图仍然只显示 recommendation_limit 条（前端切片），观感不变。
-    current = _trim_recommendations(
-        dict(_latest),
-        max(1, min(limit, payload_limit())),
-    )
+    # limit 只是安全上限：条数由信号强度门槛决定，不再按名次截断。
+    current = _trim_recommendations(dict(_latest), max(1, min(limit, 200)))
     history = await asyncio.to_thread(
         get_local_store().load_intraday_signal_events,
         None,

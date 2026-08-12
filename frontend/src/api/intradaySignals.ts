@@ -64,7 +64,7 @@ export interface IntradaySignalPayload {
   watch_count: number
   unbuyable_count: number
   scan_interval_sec: number
-  recommendation_limit?: number
+  score_floor?: number
   selection_note?: string
   market?: {
     tone: string
@@ -82,9 +82,8 @@ export interface IntradaySignalPayload {
 export async function fetchIntradaySignals(refresh = false) {
   const raw = await ApiClient.get<any>(
     '/api/lite/intraday-signals',
-    // 要 60 条而不是 10 条：三个筛选标签是在这份 items 上切的，只拿 10 条的话点开
-    // 「不可追入」只有挤进默认视图的那几只。默认视图仍然只渲染 recommendation_limit 条。
-    { limit: 60, history_limit: 100, refresh, _ts: Date.now() },
+    // limit 只是安全上限：展示条数由后端的信号强度门槛决定，不按名次截断。
+    { limit: 200, history_limit: 100, refresh, _ts: Date.now() },
     { timeout: refresh ? 30000 : 15000 },
   )
   return (raw?.data || raw) as IntradaySignalPayload

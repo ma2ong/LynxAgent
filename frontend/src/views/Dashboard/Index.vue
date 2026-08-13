@@ -490,7 +490,9 @@ const loadCards = async (retries = 1) => {
     }).catch(() => { failed = true }),
     // 智能选股读后台保温器暖好的缓存（cache_only，绝不在首页触发同步重算）。
     // 留痕只是「最近记过的一批」，可能是昨天的；这里拿到的是当下名单，且带基准时点。
-    quantApi.smartPool(10, 5000, true).then((res: any) => {
+    // 参数必须与保温器/一键智选页一致（20/10000）：后端 cache_key 含 limit 与 universe，
+    // 换一组参数就是另一把 key，cache_only 永远落空 → 卡片会一直卡在昨天的留痕上。
+    quantApi.smartPool(20, 10000, true).then((res: any) => {
       const items = res?.items || []
       if (!items.length) return                       // warming：保留留痕兜底，不清空
       smartLive.value = true

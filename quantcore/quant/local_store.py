@@ -761,8 +761,14 @@ class LocalQuantStore:
         self,
         trade_date: Optional[str] = None,
         limit: int = 200,
+        min_score: float = 0.0,
     ) -> List[Dict[str, object]]:
-        """Load newest transitions for UI history and restart recovery."""
+        """Load newest transitions for UI history and restart recovery.
+
+        `min_score` 只给留痕用：一天有两三千条状态变化，绝大多数是没上过榜的低分票在
+        watch/invalid 之间来回。按展示门槛筛一次，剩下的就是当天真正上过榜的信号。
+        引擎重启恢复和归档合并要看全量，走默认值 0。
+        """
         import json as _json
         from datetime import date as _date
 
@@ -770,9 +776,9 @@ class LocalQuantStore:
         safe_limit = max(1, min(int(limit), 1000))
         rows = self._conn().execute(
             "SELECT event_id,trade_date,symbol,name,status,triggered_at,signal_price,score,payload_json "
-            "FROM intraday_signal_events WHERE trade_date=? "
+            "FROM intraday_signal_events WHERE trade_date=? AND score>=? "
             "ORDER BY triggered_at DESC LIMIT ?",
-            (target_date, safe_limit),
+            (target_date, float(min_score or 0.0), safe_limit),
         ).fetchall()
         output: List[Dict[str, object]] = []
         for event_id, day, symbol, name, status, triggered_at, signal_price, score, payload in rows:

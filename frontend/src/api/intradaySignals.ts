@@ -83,7 +83,8 @@ export async function fetchIntradaySignals(refresh = false) {
   const raw = await ApiClient.get<any>(
     '/api/lite/intraday-signals',
     // limit 只是安全上限：展示条数由后端的信号强度门槛决定，不按名次截断。
-    { limit: 200, history_limit: 100, refresh, _ts: Date.now() },
+    // history_limit 取满：留痕要把当天上过榜的信号从早到晚全留住，截断只会砍掉早盘那一批。
+    { limit: 200, history_limit: 500, refresh, _ts: Date.now() },
     { timeout: refresh ? 30000 : 15000 },
   )
   return (raw?.data || raw) as IntradaySignalPayload

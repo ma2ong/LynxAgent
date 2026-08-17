@@ -97,8 +97,12 @@
               收盘快照满足量价与结构条件，仅列入下一交易日观察池；开盘后仍需等待实时确认。
             </template>
           </div>
+          <!-- 只说「入场区间过期」这一件事，不声明市场状态：归档卡片盘中也会出现（信号
+               触发过但价格区间已失效），原文案写死「当前已经收盘」在交易时段就是假话；
+               而 trading_phase 对午休和收盘后都返回 closed，加分支也分不出来。时段由
+               页面顶部的 phase_label 统一报，卡片不重复。 -->
           <div v-else-if="item.signal_mode === 'intraday_archive'" class="archive-box">
-            今日 {{ timeOnly(item.triggered_at) }} 曾出现{{ item.status_label }}，当前已经收盘，原入场区间不再有效。
+            今日 {{ timeOnly(item.triggered_at) }} {{ item.status_label }}，入场区间已过期，不再按原价追入。
           </div>
           <div v-else-if="item.status === 'entry'" class="trade-box">
             <div><span>参考入场</span><b>{{ price(item.entry_low) }}—{{ price(item.entry_high) }}</b></div>
@@ -141,7 +145,10 @@
       <div class="section-head">
         <div>
           <h2>今日状态留痕</h2>
-          <p>只记录状态变化，不会因每轮扫描重复写入同一信号。</p>
+          <p>
+            今天上过榜的信号全部留在这里，早盘触发、现在已经掉出榜单的也看得到。
+            只记录状态变化，不会因每轮扫描重复写入同一信号。
+          </p>
         </div>
       </div>
       <el-table v-if="historyRows.length" :data="historyRows" size="small" stripe max-height="360">
@@ -168,7 +175,7 @@
       </el-table>
       <el-empty
         v-else
-        description="当天没有盘中实时留痕；上方股票来自收盘快照复盘，不会伪造盘中触发时间"
+        :description="`今天还没有信号强度 ${data?.score_floor ?? 90} 分以上的盘中触发；上方股票若来自收盘快照复盘，不会伪造盘中触发时间`"
         :image-size="72"
       />
     </section>
@@ -213,7 +220,8 @@ const filteredItems = computed(() => {
   return matched
 })
 
-const historyRows = computed(() => (data.value?.recent_events || []).slice(0, 100))
+// 当天上过榜的信号全部留住，不按当前榜单过滤、也不截断早盘那一批。
+const historyRows = computed(() => data.value?.recent_events || [])
 const isClosed = computed(() => data.value?.status === 'closed')
 const isCloseReview = computed(() => data.value?.review_mode === 'close_review')
 const signalSectionTitle = computed(() => {

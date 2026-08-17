@@ -463,16 +463,16 @@ async def payload(
         await scan_once(force=True)
     # limit 只是安全上限：条数由信号强度门槛决定，不再按名次截断。
     current = _trim_recommendations(dict(_latest), max(1, min(limit, 200)))
-    history = await asyncio.to_thread(
+    # 留痕 = 今天上过榜的每一次状态变化，与「此刻榜上有谁」无关。
+    # 原来的写法是「最新 N 条事件 ∩ 当前榜单」，两头都错：一天两三千条状态变化，最新
+    # 100 条全是低分票的 watch/invalid 抖动；再与当前榜单取交集，上午触发、现在已经掉
+    # 出榜单的票就一条不剩 —— 而那恰恰是用户回头最想看的。改成按展示门槛取当日全量。
+    current["recent_events"] = await asyncio.to_thread(
         get_local_store().load_intraday_signal_events,
         None,
         max(1, min(history_limit, 500)),
+        score_floor(),
     )
-    visible_symbols = {str(item.get("symbol") or "") for item in current.get("items") or []}
-    current["recent_events"] = [
-        event for event in history
-        if not visible_symbols or str(event.get("symbol") or "") in visible_symbols
-    ]
     current["scan_interval_sec"] = int(scan_interval_seconds())
     return current
 

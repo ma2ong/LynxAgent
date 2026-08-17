@@ -171,6 +171,32 @@ def test_archive_keeps_real_entry_even_if_later_invalidated():
     assert items[0]["actionable"] is False
 
 
+def test_history_keeps_morning_signals_that_left_the_board(monkeypatch, tmp_path):
+    """留痕留的是「今天上过榜的」，不是「此刻还在榜上的」。
+
+    2026-08-17 现场：当天有 2818 条状态变化，留痕表却是空的。原实现取最新 N 条事件再
+    与当前榜单取交集 —— 最新 N 条全是低分票的 watch/invalid 抖动，交集自然为空；上午
+    触发、现在已经掉出榜单的票也被一并抹掉，而那正是用户回头最想看的。
+    """
+    monkeypatch.setenv("LYNX_RADAR_SCORE_FLOOR", "90")
+    store = LocalQuantStore(str(tmp_path / "quant.sqlite"))
+    today = datetime.now(TZ).strftime("%Y-%m-%d")
+    store.record_intraday_signal_events([
+        {"event_id": "morning", "trade_date": today, "symbol": "000001", "name": "早盘触发",
+         "status": "entry", "triggered_at": f"{today}T09:45:00+08:00", "signal_price": 10.5,
+         "score": 93.0, "item": {"symbol": "000001", "reasons": ["价格突破20日压力位"]}},
+        {"event_id": "noise", "trade_date": today, "symbol": "000002", "name": "没上过榜",
+         "status": "watch", "triggered_at": f"{today}T14:30:00+08:00", "signal_price": 8.0,
+         "score": 81.0, "item": {"symbol": "000002"}},
+    ])
+    monkeypatch.setattr(intraday_monitor, "get_local_store", lambda: store)
+    # 当前榜单里一条都没有这两只票，留痕仍然要留住早盘那条
+    monkeypatch.setattr(intraday_monitor, "_latest", {"items": [], "status": "live"})
+
+    events = asyncio.run(intraday_monitor.payload())["recent_events"]
+    assert [event["event_id"] for event in events] == ["morning"]
+
+
 def test_payload_keeps_every_signal_above_the_score_floor(monkeypatch):
     """2026-08-12 改：不再「取前 N 名」，改成「强度到线就上榜」。
 

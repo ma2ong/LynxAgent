@@ -114,6 +114,25 @@
         <span>最近增量：{{ health.sync?.last_incremental_sync || '-' }}</span>
       </div>
     </section>
+
+    <!-- 本地股票池：原来挂在「智能选股 → 数据同步」页里，那页整体并入数据中心。
+         同步按钮和健康状态这边本来就有，只有这张明细表是独有的。 -->
+    <section class="panel">
+      <div class="panel-title">
+        本地股票池
+        <div class="pool-actions">
+          <el-input-number v-model="poolLimit" :min="1" :max="5000" size="small" controls-position="right" />
+          <el-button size="small" :loading="poolLoading" @click="loadPool">读取股票池</el-button>
+        </div>
+      </div>
+      <el-table v-if="poolResult?.items.length" :data="poolResult.items" size="small" stripe max-height="420">
+        <el-table-column prop="symbol" label="代码" min-width="110" fixed />
+        <el-table-column prop="name" label="名称" min-width="140" />
+        <el-table-column prop="market" label="市场" min-width="100" />
+        <el-table-column prop="source" label="来源" min-width="120" />
+      </el-table>
+      <el-empty v-else description="点「读取股票池」查看本地已入库的标的明细" :image-size="72" />
+    </section>
   </div>
 </template>
 
@@ -121,11 +140,14 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { quantApi, type QuantSourceHealth } from '@/api/quant'
+import { quantApi, type QuantSourceHealth, type QuantStockPoolResult } from '@/api/quant'
 
 const loading = ref(false)
 const syncing = ref(false)
 const health = ref<QuantSourceHealth | null>(null)
+const poolLimit = ref(200)
+const poolLoading = ref(false)
+const poolResult = ref<QuantStockPoolResult | null>(null)
 let timer: number | undefined
 
 const localStatus = computed(() => health.value?.local?.status || '')
@@ -136,6 +158,20 @@ const progress = computed(() => {
   const total = Number(health.value?.sync?.total || 0)
   return total > 0 ? Math.min(100, Math.round(done / total * 100)) : 0
 })
+
+async function loadPool() {
+  poolLoading.value = true
+  try {
+    poolResult.value = await quantApi.pool(poolLimit.value)
+    const n = poolResult.value?.items?.length || 0
+    if (n) ElMessage.success(`已读取股票池 ${n} 只`)
+    else ElMessage.warning('股票池为空，请检查数据源或稍后重试')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '读取股票池失败')
+  } finally {
+    poolLoading.value = false
+  }
+}
 
 async function load() {
   loading.value = true
@@ -202,7 +238,11 @@ onUnmounted(() => { if (timer) window.clearTimeout(timer) })
 .policy-item b { width: 24px; height: 24px; line-height: 24px; border-radius: 50%; background: var(--el-color-primary-light-9); color: var(--el-color-primary); text-align: center; flex: 0 0 auto; }
 .policy-item strong { font-size: 14px; }
 .policy-item p { margin: 3px 0 0; color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.6; }
-.sync-row, .sync-meta { display: flex; flex-wrap: wrap; gap: 14px; color: var(--el-text-color-secondary); font-size: 13px; margin-bottom: 10px; }
+.sync-row, .panel-title .pool-actions { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+.panel-title { display: flex; align-items: center; gap: 10px; }
+.sync-meta { display: flex; flex-wrap: wrap; gap: 14px; color: var(--el-text-color-secondary); font-size: 13px; margin-bottom: 10px; }
+.panel-title .pool-actions { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+.panel-title { display: flex; align-items: center; gap: 10px; }
 .sync-meta { margin: 10px 0 0; }
 @media (max-width: 1000px) {
   .page-head, .actions { align-items: stretch; flex-direction: column; }

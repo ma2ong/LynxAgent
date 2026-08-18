@@ -32,7 +32,7 @@
         <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
         <el-menu-item index="/review"><el-icon><DataAnalysis /></el-icon><span>选股复盘</span></el-menu-item>
         <el-menu-item index="/favorites"><el-icon><Star /></el-icon><span>我的自选股</span></el-menu-item>
-        <el-menu-item index="/account/membership"><el-icon><Medal /></el-icon><span>会员与用量</span></el-menu-item>
+        <el-menu-item index="/account/membership"><el-icon><Medal /></el-icon><span>用量</span></el-menu-item>
         <el-menu-item v-if="currentUser?.is_admin" index="/admin/users"><el-icon><Setting /></el-icon><span>用户管理</span></el-menu-item>
         <el-menu-item index="/data-center"><el-icon><DataLine /></el-icon><span>数据中心</span></el-menu-item>
       </el-menu>

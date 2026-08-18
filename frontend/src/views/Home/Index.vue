@@ -46,7 +46,8 @@
             <a class="btn btn-ghost btn-lg" href="#features">看看产品</a>
           </div>
           <p class="hero-note">
-            量化研究工具，不具备证券投资咨询资质，<strong>不构成投资建议</strong>，不承诺收益。
+            量化研究工具，不具备证券投资咨询资质。页面上的一切都是算法对公开数据的处理结果，
+            <strong>不构成投资建议</strong>，不替你做买卖决定，也不承诺收益。
           </p>
         </div>
 
@@ -239,21 +240,29 @@
       </div>
     </section>
 
-    <!-- 定价 -->
+    <!-- 定价：整站免费，没有付费档。
+         这不是"暂时免费"的营销话术 —— 本产品无证券投资咨询资质，一旦收费，
+         「给个股名单」这件事的性质就会变。所以不设付费档是合规决定，不是定价策略。 -->
     <section id="pricing" class="band" data-reveal>
       <div class="wrap">
-        <h2 class="sec-title">定价</h2>
-        <p class="sec-sub">选股池、名单、回放数据、复盘战绩全部免费，没有付费墙。会员买的只有一样东西：更多的 AI 分析额度。</p>
-        <div class="plans">
-          <article v-for="p in plans" :key="p.name" class="plan" :class="{ 'plan-pro': p.highlight }">
-            <h3>{{ p.name }}</h3>
-            <p class="plan-price">{{ p.price }}</p>
-            <ul>
-              <li v-for="item in p.items" :key="item">{{ item }}</li>
-            </ul>
-            <router-link class="btn" :class="p.highlight ? 'btn-primary' : 'btn-ghost'"
-                         :to="loggedIn ? p.to : '/login?register=1'">{{ p.cta }}</router-link>
-          </article>
+        <h2 class="sec-title">不收费</h2>
+        <div class="free-note">
+          <p class="free-lead">全部功能免费，没有付费档，也没有「高级版」。</p>
+          <p>
+            这不是限时活动。本产品<strong>不具备证券投资咨询资质</strong>，
+            而收费会改变「提供个股名单」这件事的性质。所以不收费是一个合规决定，不是定价策略，
+            也不会在攒够用户之后变卦。
+          </p>
+          <p>
+            它是一个公开的个人研究项目：作者自己每天在用，把方法、数据和被否决的结论一并公开。
+            没有推销，没有客服追单，也不会有人加你微信喊你开会员。
+          </p>
+          <ul class="free-list">
+            <li v-for="item in freeItems" :key="item">{{ item }}</li>
+          </ul>
+          <router-link class="btn btn-primary btn-lg" :to="loggedIn ? '/dashboard' : '/login?register=1'">
+            {{ loggedIn ? '进入应用' : '免费开始' }}
+          </router-link>
         </div>
       </div>
     </section>
@@ -443,7 +452,7 @@ const pillars = [
     lead: '盘中持续扫全市场，机会出现的当下就提示，不用守着盘面手动刷新。',
     points: [
       '状态分开标：能进的、只是预警的、已经追不进去的，一眼分得清',
-      '每条信号给出可执行的价格区间，而不是只喊一个名字',
+      '每条信号一并标出触发价与结构失效位，而不是只显示一个代码',
       '当天上过榜的信号全部留痕，早盘触发、现在已掉出榜单的也查得到',
     ],
   },
@@ -451,9 +460,9 @@ const pillars = [
     name: '一键智选',
     metric: '每日 1 份',
     shot: '/shots/f-smart.png',
-    lead: '点一次，全市场跑一遍，给出当日可执行的名单。条数固定，行情差也不注水凑数。',
+    lead: '点一次，全市场跑一遍，输出当日的评分结果。条数固定，行情差也不注水凑数。',
     points: [
-      '每只票带结构分、时机确认、行业与买卖计划，不是只丢给你一个代码',
+      '每只票列出结构分、时机确认状态、行业归属与相关价位，不是只丢给你一个代码',
       '入选理由可展开，看得到它凭什么进这份名单',
       '名单当场留痕，事后能查它到底走成了什么样',
     ],
@@ -464,7 +473,7 @@ const pillars = [
     shot: '/shots/f-auction.png',
     lead: '开盘前就把当日情绪定性，而不是等冲高回落之后再来复盘。',
     points: [
-      '竞价撮合一结束就给出情绪档位，并配一句明确动作',
+      '竞价撮合一结束就给出当日情绪档位，并说明这个档位的历史含义',
       '全市场高开幅度分布同屏，是普涨还是分化看得出来',
       '热门板块按竞价强度排序，资金在哪个方向合力一目了然',
     ],
@@ -484,9 +493,9 @@ const pillars = [
     name: '风险预警',
     metric: '四档红绿灯',
     shot: '/shots/f-risk.png',
-    lead: '仓位动作写到具体数字。「控制仓位」等于没说，这里会告诉你降到几成。',
+    lead: '风险分不是一个模糊的形容词。分数怎么来的、每一档历史上对应什么状况，都写出来。',
     points: [
-      '市场风险分四档红绿灯，每一档配一个明确的仓位动作',
+      '市场风险分四档红绿灯，每一档写明它在历史上对应的市场状况',
       '风险分拆成几项分别显示，看得到它为什么给出这个结论',
       '同时给历史依据，不是凭一句话让你减仓',
     ],
@@ -533,38 +542,23 @@ const alsoIncluded = [
   { title: '我的自选股', body: '收藏个股，实时跟踪涨跌与触发的预警。' },
 ]
 
-const plans = [
-  // 只写当前真的能用到的东西。serenity deep 和因子模型/回测/研究实验室的后端接口还在，
-  // 但前端已经没有任何入口调用它们；微信推送 2026-08-06 起隐藏。会员版目前**实质上
-  // 只卖 AI 额度**，卡片就照实写，不靠列已经点不到的功能撑场面。
-  {
-    name: '免费版',
-    price: '¥0',
-    items: [
-      '全部选股池与每日名单',
-      '盘中机会雷达 / 集合竞价 / 涨停热点',
-      '历史回放数据与复盘战绩',
-      '行业热力图 / 风险预警 / 个股深研 / 自选股',
-      'AI 深度分析 3 次 / 天',
-    ],
-    cta: '免费开始',
-    to: '/dashboard',
-    highlight: false,
-  },
-  {
-    name: '会员版',
-    price: '见站内会员页',
-    items: [
-      '免费版全部功能，一项不少',
-      'AI 深度分析 30 次 / 天（免费版 3 次）',
-    ],
-    cta: '查看开通方式',
-    to: '/account/membership',
-    highlight: true,
-  },
+// 整站免费，不再有套餐对比。只列「你能拿到什么」。
+const freeItems = [
+  '全部选股池与每日名单，条数不因免费而缩水',
+  '盘中机会雷达 / 集合竞价 / 涨停热点 / 风险预警',
+  '行业热力图 / 个股深研 / 选股复盘 / 自选股',
+  '历史回放数据与全部复盘战绩，含为负的那部分',
+  'AI 深度分析每日有额度上限（成本所限，不是付费墙）',
 ]
 
 const faqs = [
+  {
+    q: '为什么完全不收费？会不会以后再收？',
+    a:
+      '因为本产品不具备证券投资咨询资质，而收费会改变「提供个股名单」这件事的性质。'
+      + '这是合规决定，不是先免费后收割的套路。如果哪天要商业化，会先把产品形态改成不主动推名单的工具，'
+      + '而不是给现在这个形态挂个价格。',
+  },
   {
     q: '这是荐股服务吗？',
     a:
@@ -890,17 +884,24 @@ const faqs = [
 .fit-yes { border-color: var(--down); color: #0b7c3a; }
 .fit-no { border-color: var(--line); color: var(--ink-3); }
 
-/* 定价 */
-.plans { display: grid; grid-template-columns: repeat(2, 1fr); gap: 22px; max-width: 820px; }
-.plan { border: 1px solid var(--line); border-radius: var(--r); padding: 28px; background: var(--surface); display: flex; flex-direction: column; }
-.plan-pro { border-color: var(--brand-line); background: linear-gradient(160deg, var(--brand-wash), #fff 54%); }
-.plan-pro .plan-price { color: var(--brand-ink); }
-.plan h3 { font-size: 17px; margin: 0 0 6px; }
-.plan-price { font: 700 26px/1.3 var(--mono); margin: 0 0 18px; }
-.plan ul { list-style: none; padding: 0; margin: 0 0 24px; font-size: 14px; color: var(--ink-2); flex: 1; }
-.plan li { padding: 7px 0 7px 20px; position: relative; border-bottom: 1px dashed var(--line); }
-.plan li::before { content: '·'; position: absolute; left: 6px; color: var(--ink-3); }
-.plan .btn { text-align: center; }
+/* 定价：没有套餐对比，就一段声明 + 一份清单。 */
+.free-note {
+  border: 1px solid var(--brand-line); border-radius: var(--r);
+  background: linear-gradient(150deg, var(--brand-wash), var(--surface) 58%);
+  padding: 30px 32px; max-width: 800px;
+}
+.free-lead { font-size: 19px; font-weight: 700; margin: 0 0 14px; letter-spacing: -0.3px; }
+.free-note p { color: var(--ink-2); margin: 0 0 12px; font-size: 14.5px; }
+.free-note p strong { color: var(--brand-ink); }
+.free-list { list-style: none; padding: 0; margin: 20px 0 24px; border-top: 1px solid var(--brand-line); }
+.free-list li {
+  font-size: 14px; color: var(--ink-2); padding: 10px 0 10px 20px;
+  position: relative; border-bottom: 1px solid var(--line-soft);
+}
+.free-list li::before {
+  content: ''; position: absolute; left: 3px; top: 19px;
+  width: 5px; height: 5px; border-radius: 50%; background: var(--brand); opacity: .6;
+}
 
 /* FAQ */
 .faq { max-width: 820px; border-top: 1px solid var(--line); }
@@ -927,7 +928,7 @@ const faqs = [
 
 @media (max-width: 860px) {
   .links { display: none; }
-  .steps, .plans, .fit { grid-template-columns: 1fr; }
+  .steps, .fit { grid-template-columns: 1fr; }
   .pillars, .reject-list, .also { grid-template-columns: 1fr; }
   .pillar-metric { margin-left: 0; }
   .stats { grid-template-columns: repeat(2, 1fr); row-gap: 14px; }

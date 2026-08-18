@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 const routes: RouteRecordRaw[] = [
+  { path: '/home', name: 'home', component: () => import('@/views/Home/Index.vue') },
   { path: '/login', name: 'login', component: () => import('@/views/Auth/Login.vue') },
   { path: '/legal/terms', name: 'terms', component: () => import('@/views/Legal/Terms.vue') },
   { path: '/legal/privacy', name: 'privacy', component: () => import('@/views/Legal/Privacy.vue') },
@@ -9,7 +10,9 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/components/Layout/AppLayout.vue'),
     meta: { requiresAuth: true },
     children: [
-      { path: '', redirect: '/dashboard' },
+      // 根路径分流：登录了进应用，没登录进官网。不能靠鉴权守卫兜底 —— 守卫看到的
+      // `to` 已经是重定向后的 /dashboard，分不出访客原本敲的是 / 还是深链接。
+      { path: '', redirect: () => (localStorage.getItem('auth-token') ? '/dashboard' : '/home') },
       { path: 'dashboard', name: 'dashboard', component: () => import('@/views/Dashboard/Index.vue') },
       { path: 'intraday-signals', name: 'intraday-signals', component: () => import('@/views/IntradaySignals/Index.vue') },
       { path: 'limit-up', name: 'limit-up', component: () => import('@/views/LimitUp/Index.vue') },

@@ -5,6 +5,33 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>AStockPick · A股智能选股</title>
+    <meta
+      name="description"
+      content="AStockPick：A 股全市场结构因子选股。线上选股与历史回放调用同一个评分函数，12 个月与 60 个月两个样本的结果同屏展示，包括为负的那个。量化研究工具，不构成投资建议。"
+    />
+    <meta name="keywords" content="A股,量化选股,结构因子,历史回放,选股复盘,行业热力图" />
+    <meta name="robots" content="index,follow" />
+
+    <!-- 分享卡片。og:title/description 不依赖域名，先生效；带绝对地址的两条等域名定下来
+         再启用 —— 微信和搜索引擎的爬虫不跑 JS，填一个不存在的域名会让它去抓一张 404 的图，
+         比没有 og:image 更糟，所以宁可先空着。
+         域名定了之后：取消下面两行注释，把 https://你的域名 换成真实域名，就这一处。 -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="AStockPick" />
+    <meta property="og:title" content="AStockPick · 每一次选股都经得起历史验证" />
+    <meta
+      property="og:description"
+      content="线上选股与历史回放调用同一个评分函数。12 个月 +1.99pp 与 60 个月 −0.62pp 同屏展示，不挑窗口当业绩承诺。"
+    />
+    <meta property="og:locale" content="zh_CN" />
+    <!-- <meta property="og:url" content="https://你的域名/home" /> -->
+    <!-- <meta property="og:image" content="https://你的域名/og-cover.png" /> -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="AStockPick · 每一次选股都经得起历史验证" />
+    <meta
+      name="twitter:description"
+      content="线上选股与历史回放调用同一个评分函数。12 个月与 60 个月两个样本的结果同屏展示，包括为负的那个。"
+    />
   </head>
   <body>
     <div id="app"></div>

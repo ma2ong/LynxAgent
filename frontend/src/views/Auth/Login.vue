@@ -54,13 +54,14 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock, Message } from '@element-plus/icons-vue'
 import { ApiClient } from '@/api/request'
 
 const router = useRouter()
-const mode = ref<'login' | 'register'>('login')
+// 官网的「免费开始」直接落到注册表单，别让访客到了页面还要先找一下注册在哪。
+const mode = ref<'login' | 'register'>(useRoute().query.register ? 'register' : 'login')
 const username = ref('')
 const password = ref('')
 const loading = ref(false)

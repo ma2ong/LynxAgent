@@ -243,7 +243,7 @@
     <section id="pricing" class="band" data-reveal>
       <div class="wrap">
         <h2 class="sec-title">定价</h2>
-        <p class="sec-sub">选股池、回放数据、复盘战绩全部免费开放。数据不该藏在付费墙后面，付费买的是 AI 算力额度与研究工具。</p>
+        <p class="sec-sub">选股池、名单、回放数据、复盘战绩全部免费，没有付费墙。会员买的只有一样东西：更多的 AI 分析额度。</p>
         <div class="plans">
           <article v-for="p in plans" :key="p.name" class="plan" :class="{ 'plan-pro': p.highlight }">
             <h3>{{ p.name }}</h3>
@@ -534,13 +534,17 @@ const alsoIncluded = [
 ]
 
 const plans = [
+  // 只写当前真的能用到的东西。serenity deep 和因子模型/回测/研究实验室的后端接口还在，
+  // 但前端已经没有任何入口调用它们；微信推送 2026-08-06 起隐藏。会员版目前**实质上
+  // 只卖 AI 额度**，卡片就照实写，不靠列已经点不到的功能撑场面。
   {
     name: '免费版',
     price: '¥0',
     items: [
       '全部选股池与每日名单',
+      '盘中机会雷达 / 集合竞价 / 涨停热点',
       '历史回放数据与复盘战绩',
-      '行业热力图 / 风险预警 / 自选股',
+      '行业热力图 / 风险预警 / 个股深研 / 自选股',
       'AI 深度分析 3 次 / 天',
     ],
     cta: '免费开始',
@@ -551,11 +555,8 @@ const plans = [
     name: '会员版',
     price: '见站内会员页',
     items: [
-      '免费版全部功能',
-      'AI 深度分析 30 次 / 天',
-      '五方深度研判（serenity deep）',
-      '因子模型 / 回测 / 研究实验室',
-      '信号微信推送',
+      '免费版全部功能，一项不少',
+      'AI 深度分析 30 次 / 天（免费版 3 次）',
     ],
     cta: '查看开通方式',
     to: '/account/membership',

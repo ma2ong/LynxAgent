@@ -406,14 +406,17 @@
         <div class="card-title">
           深度多智能体分析
           <el-tag v-if="aiEnabled" size="small" type="info" effect="plain">约30-60秒</el-tag>
-          <el-tag v-else size="small" type="info" effect="plain">未开启</el-tag>
+          <el-tag v-else size="small" type="info" effect="plain">需自带 API Key</el-tag>
         </div>
         <template v-if="!aiEnabled">
           <p class="deep-hint">
-            本功能需要 AI 模型支持，当前未开启。页面上其余内容（评分、形态、走势、财务、新闻）
-            都由本地规则计算，不依赖 AI，照常可用。
+            本功能需要 AI 模型。页面上其余内容（评分、形态、走势、财务、新闻）都由本地规则计算，
+            不依赖 AI，照常可用。
           </p>
-          <p class="deep-hint dim">在服务端配置 LLM API Key 后本功能自动恢复。</p>
+          <p class="deep-hint dim">
+            想用的话在<router-link to="/account/membership">「用量」页</router-link>填入你自己的 API Key，
+            费用由你的服务商账户结算，本站不经手。
+          </p>
         </template>
         <template v-else-if="!deepStarted">
           <p class="deep-hint">多智能体分析行业/估值/风险/跟踪计划，生成结构化研究结论。</p>

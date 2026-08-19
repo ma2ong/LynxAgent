@@ -27,20 +27,23 @@ _DEEP_ANALYSIS_SYSTEM = (
 
 
 class LiteDeepAnalysisLLM:
-    """深度分析框架的 chat 适配器：优先真 LLM（DeepSeek 等），无 key/出错时回退确定性模板。"""
+    """深度分析框架的 chat 适配器：优先真 LLM（BYOK 用户密钥），无 key/出错时回退确定性模板。"""
 
-    def __init__(self, code: str, name: str):
+    def __init__(self, code: str, name: str, llm_override: dict | None = None):
         self.code = code
         self.name = name
         self.call_count = 0
+        # BYOK：站点不配密钥，这里拿的是发起这次分析的用户自己的配置。
+        self.llm_override = llm_override
 
     def chat(self, prompt: str) -> str:
         self.call_count += 1
         # 优先真 LLM；失败/无 key 回退模板，保证框架不崩。
         try:
             from quantcore.quant import llm as _qllm
-            if _qllm.available():
-                text = _qllm.chat(prompt, system=_DEEP_ANALYSIS_SYSTEM, deep=True, max_tokens=1500)
+            if _qllm.available(override=self.llm_override):
+                text = _qllm.chat(prompt, system=_DEEP_ANALYSIS_SYSTEM, deep=True,
+                                  max_tokens=1500, override=self.llm_override)
                 if text and text.strip():
                     return text.strip()
         except Exception:
@@ -1025,7 +1028,7 @@ async def enrich_lite_result_with_deep_analysis(
         from quantcore.analysis.report.html_generator import HTMLReportGenerator
 
         deep_framework_module.CacheManager = LiteNoopCacheManager
-        deep_llm = LiteDeepAnalysisLLM(symbol, stock_name)
+        deep_llm = LiteDeepAnalysisLLM(symbol, stock_name, (parameters or {}).get("_llm_override"))
         framework = deep_framework_module.DeepAnalysisFramework(llm_client=deep_llm)
         deep_result = await asyncio.wait_for(
             asyncio.to_thread(framework.analyze, symbol, stock_name),

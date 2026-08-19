@@ -106,6 +106,7 @@ app.include_router(admin_router)
 from app.routers.notifications import router as notifications_router  # noqa: E402
 from app.routers.config import router as config_router  # noqa: E402
 from app.routers.paper import router as paper_router  # noqa: E402
+from app.routers.ai_key import router as ai_key_router
 from app.routers.favorites import router as favorites_router  # noqa: E402
 from app.routers.reports import router as reports_router  # noqa: E402
 from app.routers.analysis import router as analysis_router  # noqa: E402
@@ -115,6 +116,7 @@ app.include_router(notifications_router)
 app.include_router(config_router)
 app.include_router(paper_router)
 app.include_router(favorites_router)
+app.include_router(ai_key_router)
 app.include_router(reports_router)
 app.include_router(analysis_router)
 app.include_router(insights_router)

@@ -202,19 +202,20 @@ async def single_analysis(req: LiteSingleAnalysisRequest, user: dict[str, Any] =
     if not raw_symbol:
         return {"success": False, "data": None, "message": "请输入股票代码", "code": 400}
 
-    # 没配 LLM 密钥就直说，不要让用户点下去等半分钟再撞一个看不懂的错。
-    from quantcore.quant import llm
-    if not llm.available():
+    # BYOK：用这个用户自己的密钥。没配就直说，不要让人点下去等半分钟再撞报错。
+    from app.core.user_llm_keys import get_store
+    llm_override = get_store().resolve(user["id"])
+    if not llm_override:
         return {
             "success": False,
             "data": None,
-            "code": "ai_disabled",
-            "message": "深度分析需要 AI 模型支持，当前未开启。在服务端配置 LLM API Key 后自动恢复。",
+            "code": "ai_key_missing",
+            "message": "深度分析需要 AI 模型。请在「用量」页填入你自己的 API Key 后使用。",
         }
+    parameters = {**(req.parameters or {}), "_llm_override": llm_override}
 
     task_id = "lite_" + secrets.token_hex(8)
     now = datetime.now(timezone.utc).isoformat()
-    parameters = req.parameters or {}
     lite_analysis_tasks[task_id] = {
         "task_id": task_id,
         "analysis_id": task_id,

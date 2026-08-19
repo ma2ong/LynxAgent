@@ -34,8 +34,23 @@ def _resolve_api_key(provider: str) -> str:
     return os.getenv(env_name, "") or os.getenv("OPENAI_API_KEY", "")
 
 
-def _client_and_model(deep: bool = False):
-    """构造 OpenAI 兼容客户端与模型名；缺密钥返回 (None, None)。"""
+def _client_and_model(deep: bool = False, override: Optional[dict] = None):
+    """构造 OpenAI 兼容客户端与模型名；缺密钥返回 (None, None)。
+
+    override 用于 BYOK：调用方传入某个用户自己的 {provider, base_url, model, api_key}，
+    优先于仓库配置与环境变量。产品本身不再配站点密钥，所以实际路径基本都走 override。
+    """
+    if override and override.get("api_key"):
+        try:
+            from openai import OpenAI
+
+            return (
+                OpenAI(base_url=override.get("base_url") or "https://api.openai.com/v1",
+                       api_key=override["api_key"]),
+                override.get("model") or "gpt-4o-mini",
+            )
+        except Exception:
+            return None, None
     cfg = _load_config()
     # 优先级：仓库配置 > 环境变量 > 默认（OpenAI）。让 LLM provider 可由 .env 直接配置。
     provider = str(cfg.get("llm_provider") or os.getenv("LLM_PROVIDER") or "openai")
@@ -57,9 +72,9 @@ def _client_and_model(deep: bool = False):
         return None, None
 
 
-def available() -> bool:
+def available(override: Optional[dict] = None) -> bool:
     """是否具备调用 LLM 的条件（有客户端 + 密钥）。调用方据此决定是否降级。"""
-    client, _ = _client_and_model()
+    client, _ = _client_and_model(override=override)
     return client is not None
 
 
@@ -71,9 +86,10 @@ def chat(
     temperature: float = 0.3,
     max_tokens: int = 2048,
     model: Optional[str] = None,
+    override: Optional[dict] = None,
 ) -> str:
     """单轮对话，返回纯文本。无密钥/出错时返回空串（调用方降级处理）。"""
-    client, default_model = _client_and_model(deep=deep)
+    client, default_model = _client_and_model(deep=deep, override=override)
     if client is None:
         return ""
     messages: List[Dict[str, str]] = []
@@ -100,13 +116,14 @@ def chat_json(
     deep: bool = False,
     temperature: float = 0.2,
     max_tokens: int = 2048,
+    override: Optional[dict] = None,
 ) -> Optional[dict]:
     """要求模型输出 JSON，解析为 dict。失败返回 None。
 
     容错：模型常把 JSON 包在 ```json ... ``` 或夹带前后文字，这里用正则抠出首个 {...} / [...]。
     """
     sys = (system or "") + "\n你必须只输出合法 JSON，不要任何解释或 markdown 代码块标记。"
-    raw = chat(prompt, sys.strip(), deep=deep, temperature=temperature, max_tokens=max_tokens)
+    raw = chat(prompt, sys.strip(), deep=deep, temperature=temperature, max_tokens=max_tokens, override=override)
     if not raw:
         return None
     return _extract_json(raw)

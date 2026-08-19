@@ -143,11 +143,11 @@ async def billing_me(user: dict = Depends(get_current_lite_user)):
     plan = PLANS[plan_key]
     used = billing.used_today(user["id"])
     unlimited = plan["daily_llm"] <= NO_DAILY_LIMIT
-    # ai_enabled：服务端有没有配 LLM 密钥。没有就整块 AI 功能不可用，前端据此
-    # 显示「未开启」而不是让用户点下去撞一个报错。
+    # ai_enabled：这个用户自己有没有配可用的 LLM 密钥（BYOK）。站点本身不配密钥，
+    # 所以这里只看用户。前端据此显示「未配置」而不是让人点下去撞报错。
     try:
-        from quantcore.quant import llm
-        ai_enabled = llm.available()
+        from app.core.user_llm_keys import get_store
+        ai_enabled = get_store().resolve(user["id"]) is not None
     except Exception:  # noqa: BLE001 — 探测失败一律按不可用处理
         ai_enabled = False
     return {

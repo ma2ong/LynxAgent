@@ -202,6 +202,16 @@ async def single_analysis(req: LiteSingleAnalysisRequest, user: dict[str, Any] =
     if not raw_symbol:
         return {"success": False, "data": None, "message": "请输入股票代码", "code": 400}
 
+    # 没配 LLM 密钥就直说，不要让用户点下去等半分钟再撞一个看不懂的错。
+    from quantcore.quant import llm
+    if not llm.available():
+        return {
+            "success": False,
+            "data": None,
+            "code": "ai_disabled",
+            "message": "深度分析需要 AI 模型支持，当前未开启。在服务端配置 LLM API Key 后自动恢复。",
+        }
+
     task_id = "lite_" + secrets.token_hex(8)
     now = datetime.now(timezone.utc).isoformat()
     parameters = req.parameters or {}

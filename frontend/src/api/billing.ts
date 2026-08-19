@@ -5,6 +5,8 @@ export interface BillingMe {
   plan_label: string
   plan_expires_at: string | null
   daily_limit: number
+  unlimited?: boolean
+  ai_enabled?: boolean
   used_today: number
   remaining_today: number
   features: string[]

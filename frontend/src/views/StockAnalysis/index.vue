@@ -400,13 +400,22 @@
         </div>
       </div>
 
-      <!-- 深度分析（按需触发） -->
+      <!-- 深度分析（按需触发）。未配置 LLM 密钥时整块显示为「未开启」，
+           不给按钮 —— 让用户点下去等半分钟再撞报错是最差的处理。 -->
       <div class="card deep-card">
         <div class="card-title">
           深度多智能体分析
-          <el-tag size="small" type="info" effect="plain">约30-60秒</el-tag>
+          <el-tag v-if="aiEnabled" size="small" type="info" effect="plain">约30-60秒</el-tag>
+          <el-tag v-else size="small" type="info" effect="plain">未开启</el-tag>
         </div>
-        <template v-if="!deepStarted">
+        <template v-if="!aiEnabled">
+          <p class="deep-hint">
+            本功能需要 AI 模型支持，当前未开启。页面上其余内容（评分、形态、走势、财务、新闻）
+            都由本地规则计算，不依赖 AI，照常可用。
+          </p>
+          <p class="deep-hint dim">在服务端配置 LLM API Key 后本功能自动恢复。</p>
+        </template>
+        <template v-else-if="!deepStarted">
           <p class="deep-hint">多智能体分析行业/估值/风险/跟踪计划，生成结构化研究结论。</p>
           <el-button type="primary" plain @click="startDeep">启动深度分析</el-button>
         </template>
@@ -499,6 +508,15 @@ import { ElMessage } from 'element-plus'
 import { Search, Clock, Close, ArrowLeft } from '@element-plus/icons-vue'
 import { ApiClient } from '@/api/request'
 import { quantApi, type RiskCheckResult } from '@/api/quant'
+
+// AI 是否可用由服务端决定（有没有配 LLM 密钥），前端只负责如实展示。
+const aiEnabled = ref(false)
+const loadAiStatus = async () => {
+  try {
+    const res: any = await ApiClient.get('/api/billing/me')
+    aiEnabled.value = !!res?.data?.ai_enabled
+  } catch { aiEnabled.value = false }
+}
 
 const symbolInput = ref('')
 const loading = ref(false)
@@ -905,6 +923,7 @@ async function backfillHistoryNames() {
 }
 
 onMounted(() => {
+  loadAiStatus()
   backfillHistoryNames()
   const symbol = String(route.query.symbol || route.query.stock || '').trim()
   if (symbol) analyze(symbol)
@@ -1204,6 +1223,7 @@ onUnmounted(() => {
 .nd { flex-shrink: 0; font-size: 11px; color: var(--el-text-color-secondary); margin-left: 12px; }
 
 /* Deep */
+.deep-hint.dim { color: var(--el-text-color-secondary); }
 .deep-hint { font-size: 13px; color: var(--el-text-color-secondary); margin-bottom: 12px; }
 .deep-spin { display: flex; flex-direction: column; gap: 12px; color: var(--el-text-color-secondary); padding: 12px 0; }
 .deep-steps { width: 100%; }

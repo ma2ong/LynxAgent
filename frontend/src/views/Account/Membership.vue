@@ -13,8 +13,15 @@
         <span v-if="info.plan_expires_at" class="expires">有效期至 {{ info.plan_expires_at }}</span>
       </div>
       <div class="usage">
-        <span>今日 AI 分析额度</span>
+        <span>今日 AI 分析</span>
+        <template v-if="info.unlimited">
+          <p class="usage-plain">
+            <b>{{ info.used_today }}</b> 次 · 不限次数
+            <em v-if="!info.ai_enabled">（AI 功能当前未开启）</em>
+          </p>
+        </template>
         <el-progress
+          v-else
           :percentage="info.daily_limit ? Math.min(100, (info.used_today / info.daily_limit) * 100) : 0"
           :format="() => usageLabel"
         />
@@ -26,14 +33,14 @@
          后端 PLANS 里的 member 档保留不动：已有账号的额度不受影响，只是不再对外销售。
          原来这里是支付宝收款码 + 开通申请单，整块移除。 -->
     <el-card v-if="info && info.plan !== 'member'" class="card">
-      <h3>关于额度</h3>
+      <h3>关于额度与 AI</h3>
       <p class="free-note">
-        本产品全部功能免费，没有付费档。每日 AI 分析额度是算力成本所限，不是付费墙 ——
-        选股池、名单、回放数据和复盘战绩都不受额度影响，随便看。
+        本产品全部功能免费，没有付费档，每日分析也不限次数。选股池、名单、回放数据和
+        复盘战绩都完整开放。
       </p>
       <p class="free-note dim">
-        不收费是合规决定：本产品不具备证券投资咨询资质，收费会改变「提供个股名单」这件事的性质。
-        所以它不会在攒够用户之后变卦。
+        涉及 AI 模型的功能（个股深研的深度分析、五方判读、事件驱动）当前未开启。
+        其余内容全部由本地规则计算，不依赖 AI，不受影响。
       </p>
     </el-card>
 

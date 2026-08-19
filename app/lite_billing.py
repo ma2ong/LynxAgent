@@ -12,9 +12,14 @@ from typing import Any, Optional
 
 CN_TZ = timezone(timedelta(hours=8))
 
+# daily_llm = 0 表示不限次数。2026-08-19 起产品不设付费档，每日额度原本是用来区分
+# 免费/会员的，现在没有会员可区分了；实测两个月里用户触发的 AI 调用只有 15 次，
+# 限制拦不住任何成本，只会让第一次来的人点两下就没了。
+NO_DAILY_LIMIT = 0
+
 PLANS: dict[str, dict[str, Any]] = {
-    "free": {"label": "免费版", "daily_llm": 3, "features": frozenset()},
-    "member": {"label": "会员版", "daily_llm": 30, "features": frozenset({"serenity_deep", "lab"})},
+    "free": {"label": "免费版", "daily_llm": NO_DAILY_LIMIT, "features": frozenset()},
+    "member": {"label": "会员版", "daily_llm": NO_DAILY_LIMIT, "features": frozenset({"serenity_deep", "lab"})},
 }
 
 
@@ -111,7 +116,7 @@ def require_quota(action: str, feature: str | None = None, cost: int = 1):
                 "code": "member_required",
                 "message": "该功能为会员专属，升级会员后可用",
             })
-        if cost > 0:
+        if cost > 0 and plan["daily_llm"] > NO_DAILY_LIMIT:
             # 已知限制（TOCTOU）：check 与 record 非同一事务，同用户并发请求可能
             # 超额 1-2 次。M1 单机 SQLite 可接受；并发上量后改 BEGIN IMMEDIATE 单事务。
             used = billing.used_today(user["id"])
@@ -122,6 +127,7 @@ def require_quota(action: str, feature: str | None = None, cost: int = 1):
                     "used": used,
                     "limit": plan["daily_llm"],
                 })
+        if cost > 0:
             billing.record(user["id"], action, cost)
         return user
 
@@ -136,6 +142,14 @@ async def billing_me(user: dict = Depends(get_current_lite_user)):
     plan_key = effective_plan(user)
     plan = PLANS[plan_key]
     used = billing.used_today(user["id"])
+    unlimited = plan["daily_llm"] <= NO_DAILY_LIMIT
+    # ai_enabled：服务端有没有配 LLM 密钥。没有就整块 AI 功能不可用，前端据此
+    # 显示「未开启」而不是让用户点下去撞一个报错。
+    try:
+        from quantcore.quant import llm
+        ai_enabled = llm.available()
+    except Exception:  # noqa: BLE001 — 探测失败一律按不可用处理
+        ai_enabled = False
     return {
         "success": True,
         "data": {
@@ -143,9 +157,11 @@ async def billing_me(user: dict = Depends(get_current_lite_user)):
             "plan_label": plan["label"],
             "plan_expires_at": user.get("plan_expires_at"),
             "daily_limit": plan["daily_llm"],
+            "unlimited": unlimited,
             "used_today": used,
-            "remaining_today": max(0, plan["daily_llm"] - used),
+            "remaining_today": None if unlimited else max(0, plan["daily_llm"] - used),
             "features": sorted(plan["features"]),
+            "ai_enabled": ai_enabled,
         },
         "message": "ok",
     }

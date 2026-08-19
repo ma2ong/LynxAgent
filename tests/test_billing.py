@@ -57,9 +57,13 @@ def test_migration_idempotent_on_existing_db(tmp_path):
     LiteAuthStore(db_path=db)  # 第二次初始化不应报错
 
 
-def test_require_quota_blocks_over_limit(tmp_path, monkeypatch):
+def test_require_quota_does_not_block_when_unlimited(tmp_path, monkeypatch):
+    """2026-08-19 起取消每日次数限制：不拦，但仍然记账。
+
+    记账要留着——用量数据是后来判断「该不该重新设限」的唯一依据，
+    而拦截逻辑本身没了（daily_llm = NO_DAILY_LIMIT）。
+    """
     import asyncio
-    from fastapi import HTTPException
     import app.lite_billing as lb
 
     billing = lb.BillingStore(db_path=tmp_path / "q.sqlite")
@@ -67,7 +71,24 @@ def test_require_quota_blocks_over_limit(tmp_path, monkeypatch):
     user = {"id": "u1", "plan": "free", "plan_expires_at": None}
 
     dep = lb.require_quota("deep_analysis")
-    for _ in range(3):  # free 每日 3 次
+    for _ in range(10):
+        asyncio.run(dep.dependency(user=user))  # 不应抛异常
+    assert billing.used_today("u1") == 10
+
+
+def test_require_quota_still_blocks_when_a_limit_is_set(tmp_path, monkeypatch):
+    """限制机制本身没删：把某档的 daily_llm 调回正数，拦截逻辑要照常生效。"""
+    import asyncio
+    from fastapi import HTTPException
+    import app.lite_billing as lb
+
+    billing = lb.BillingStore(db_path=tmp_path / "q3.sqlite")
+    monkeypatch.setattr(lb, "billing", billing)
+    monkeypatch.setitem(lb.PLANS, "free", {**lb.PLANS["free"], "daily_llm": 3})
+    user = {"id": "u1", "plan": "free", "plan_expires_at": None}
+
+    dep = lb.require_quota("deep_analysis")
+    for _ in range(3):
         asyncio.run(dep.dependency(user=user))
     with pytest.raises(HTTPException) as exc:
         asyncio.run(dep.dependency(user=user))

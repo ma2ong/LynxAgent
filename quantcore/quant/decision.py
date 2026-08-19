@@ -1,7 +1,7 @@
 """个股避雷决策：多角度综合 → 分档买卖建议。
 
 在「七不买」硬规则(risk_check)之上，再叠加趋势/量能/资金/盘面四个角度，综合成一个分档结论
-（可买入 / 偏多观望 / 中性观望 / 谨慎观望 / 回避 / 强烈回避）与一句话买卖倾向。
+（结构完整 / 结构偏强 / 方向不明 / 结构存疑 / 风险项偏多 / 风险项密集 / 结构偏弱）与一句话状态描述。
 
 数据口径诚实：
 - 「资金」是价量派生的资金流代理（成交额 × 价格方向 + MFI/CMF），非真·主力净流入（无可靠数据源）；
@@ -90,22 +90,24 @@ def stock_decision(symbol: str, name: str, df: pd.DataFrame,
     composite = round(trend_angle * 0.34 + capital_angle * 0.24
                       + volume_angle * 0.18 + market_score * 0.24, 1)
 
-    # 分档建议：风险硬否决优先，其次看综合分
+    # 分档：风险硬否决优先，其次看综合分。
+    # 描述这只票当前处于什么状态，不写「该买/该卖/该减仓」——同样的分档、同样的阈值，
+    # 只是把结论说成客观状态而不是操作指令。
     if risk_count >= 3 or (risk_count >= 2 and has_breakdown):
-        level, stance = "强烈回避", "坚决回避；持有者考虑减仓止损"
+        level, stance = "风险项密集", f"同时命中 {risk_count} 项风险条件，是本体系里信号最集中的一档"
     elif risk_count == 2:
-        level, stance = "回避", "回避，不建议买入；已持有注意风险"
+        level, stance = "风险项偏多", "命中 2 项风险条件，且趋势与资金面均未转好"
     elif risk_count == 1:
-        # 命中 1 项风险：封顶到「谨慎观望」，不给买入档
-        level, stance = "谨慎观望", f"谨慎——命中「{next(f['name'] for f in risk['flags'] if f['level']=='risk')}」，观望为宜"
+        # 命中 1 项风险：封顶到「结构存疑」，不给最高档
+        level, stance = "结构存疑", f"命中「{next(f['name'] for f in risk['flags'] if f['level']=='risk')}」，其余维度尚可"
     elif composite >= 70:
-        level, stance = "可买入", "符合买入条件，可逢低介入或纳入观察"
+        level, stance = "结构完整", "趋势、资金、量能三项同向，且未命中风险条件"
     elif composite >= 56:
-        level, stance = "偏多观望", "偏多，等回调企稳或放量确认再介入"
+        level, stance = "结构偏强", "多数维度偏正，但尚未形成合力"
     elif composite >= 44:
-        level, stance = "中性观望", "方向不明，观望为宜"
+        level, stance = "方向不明", "各维度分歧，没有一致方向"
     else:
-        level, stance = "偏空回避", "偏空，暂时回避"
+        level, stance = "结构偏弱", "多数维度偏负"
 
     return {
         "symbol": str(symbol).zfill(6),

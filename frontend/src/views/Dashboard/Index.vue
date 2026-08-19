@@ -376,12 +376,13 @@ const riskZoneNote = computed(() => {
   if (riskScore.value >= 35) return `处于警惕区 ${riskScore.value}/100`
   return `处于安全区 ${riskScore.value}/100`
 })
+// 描述这一档的市场状况，不写「你该怎么做」。数字和分档口径都没变，只是不用祈使句。
 const verdict = computed(() => {
   const l = risk.value?.level
-  if (l === '极危') return { word: '清仓观望', sub: '流动性踩踏风险，停止买入' }
-  if (l === '危险') return { word: '防守减仓', sub: '停止新增买入，只留最强主线' }
-  if (l === '警惕') return { word: '谨慎参与', sub: '控制仓位，只打强势方向' }
-  if (l === '安全') return { word: '可以进攻', sub: '赚钱效应尚可，按纪律选股' }
+  if (l === '极危') return { word: '环境极弱', sub: '广度与流动性同时恶化' }
+  if (l === '危险') return { word: '环境转弱', sub: '赚钱效应差，仅少数主线还在' }
+  if (l === '警惕') return { word: '环境分化', sub: '强弱分歧明显，普涨不成立' }
+  if (l === '安全') return { word: '环境尚可', sub: '赚钱效应正常，广度未见恶化' }
   return { word: '评估中', sub: '正在加载大盘环境' }
 })
 const coldEvidence = ref('')

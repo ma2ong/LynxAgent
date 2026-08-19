@@ -316,11 +316,11 @@
               <span class="av">{{ fmt(data.rating.entry_low) }} – {{ fmt(data.rating.entry_high) }}</span>
             </div>
             <div class="action-row" v-if="data.rating?.stop_loss">
-              <span class="ak">止损位</span>
+              <span class="ak">下方参考位</span>
               <span class="av loss">{{ fmt(data.rating.stop_loss) }}<small v-if="data.trade_plan?.stop_loss_pct">（{{ data.trade_plan.stop_loss_pct }}%）</small></span>
             </div>
             <div class="action-row" v-if="data.rating?.target">
-              <span class="ak">止盈位</span>
+              <span class="ak">上方参考位</span>
               <span class="av gain">{{ fmt(data.rating.target) }}<small v-if="data.trade_plan?.take_profit_pct">（+{{ data.trade_plan.take_profit_pct }}%）</small></span>
             </div>
             <div class="action-row" v-if="data.rating?.risk_reward_ratio">
@@ -775,8 +775,8 @@ const renderKline = () => {
 const riskCheck = ref<RiskCheckResult | null>(null)
 
 const VERDICT_TAG: Record<string, string> = {
-  可买入: 'success', 偏多观望: 'primary', 中性观望: 'info',
-  谨慎观望: 'warning', 回避: 'danger', 强烈回避: 'danger', 偏空回避: 'danger',
+  结构完整: 'success', 结构偏强: 'primary', 方向不明: 'info',
+  结构存疑: 'warning', 风险项偏多: 'danger', 风险项密集: 'danger', 结构偏弱: 'danger',
 }
 const verdictTagType = (level?: string) => VERDICT_TAG[level || ''] || 'info'
 const angleClass = (score: number) => (score >= 62 ? 'a-good' : score >= 42 ? 'a-mid' : 'a-bad')

@@ -102,19 +102,19 @@
                而 trading_phase 对午休和收盘后都返回 closed，加分支也分不出来。时段由
                页面顶部的 phase_label 统一报，卡片不重复。 -->
           <div v-else-if="item.signal_mode === 'intraday_archive'" class="archive-box">
-            今日 {{ timeOnly(item.triggered_at) }} {{ item.status_label }}，入场区间已过期，不再按原价追入。
+            今日 {{ timeOnly(item.triggered_at) }} {{ item.status_label }}，该价格区间已过期，不再显示。
           </div>
           <div v-else-if="item.status === 'entry'" class="trade-box">
-            <div><span>参考入场</span><b>{{ price(item.entry_low) }}—{{ price(item.entry_high) }}</b></div>
-            <div><span>停止追价</span><b class="warn">{{ price(item.chase_limit) }}</b></div>
-            <div><span>结构失效</span><b class="down">{{ price(item.invalidation_price) }}</b></div>
+            <div><span>触发区间</span><b>{{ price(item.entry_low) }}—{{ price(item.entry_high) }}</b></div>
+            <div><span>追价上限</span><b class="warn">{{ price(item.chase_limit) }}</b></div>
+            <div><span>结构失效位</span><b class="down">{{ price(item.invalidation_price) }}</b></div>
           </div>
           <div v-else-if="item.status === 'watch'" class="watch-box">
             等待量价持续确认；触发价 {{ price(item.signal_price) }}，跌破
             {{ price(item.invalidation_price) }} 视为失效。
           </div>
           <div v-else class="blocked-box">
-            距离涨停仅 {{ item.distance_to_limit.toFixed(2) }}%，当前不再提供追入价格。
+            距离涨停仅 {{ item.distance_to_limit.toFixed(2) }}%，该状态下不显示价格区间。
           </div>
 
           <div class="metric-row">

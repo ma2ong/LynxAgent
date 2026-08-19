@@ -15,14 +15,20 @@ def test_gauge_calm_market_is_safe():
 
 
 def test_gauge_crash_market_is_dangerous():
-    """连续普跌 + 高破位广度 + 跌停潮 → 至少危险，且给出停止买入的动作。"""
+    """连续普跌 + 高破位广度 + 跌停潮 → 至少危险，且档位描述说明环境已恶化。
+
+    2026-08-19 起分档文案改为描述市场状况，不再写「停止买入」这类操作指令，
+    所以这里断言的是分档与描述内容，而不是某几个祈使词是否出现。
+    """
     g = market_risk_gauge(_daily([(-3.0, 0.15), (-2.5, 0.20), (-1.5, 0.28), (-2.0, 0.22), (-1.0, 0.35)]),
                           temp=28.0, limitdown_share=0.06, breakdown_share=0.72)
     assert g["level"] in ("危险", "极危")
     assert g["score"] >= 55
-    assert "停止" in g["action"] and "买入" in g["action"]
-    assert "单一" in g["action"] and "多维" in g["action"]
-    assert "无条件了结" not in g["action"]
+    # 描述必须点明环境恶化，且不能退化成一句空话
+    assert any(k in g["action"] for k in ("恶化", "偏差", "走弱"))
+    assert len(g["action"]) >= 12
+    # 不该再出现操作指令口吻
+    assert not any(k in g["action"] for k in ("停止新增买入", "降到", "无条件了结"))
     # 破位广度必须作为一项独立信号出现
     assert any(s["key"] == "breakdown" for s in g["signals"])
 

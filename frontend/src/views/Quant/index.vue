@@ -77,7 +77,7 @@
                 {{ showPoolDesc ? '收起说明' : '选股逻辑' }}
               </a>
             </h2>
-            <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），盘中爆发只允许结构质量前 10% 的股票晋级，再按实时量价与雷达时机重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜，最终输出当前最优名单。只有绿色“可入场”才代表量价二次确认。</p>
+            <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），盘中爆发只允许结构质量前 10% 的股票晋级，再按实时量价与雷达时机重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜，最终输出当前最优名单。只有绿色“量价已确认”才代表通过了第二重条件。</p>
           </div>
           <div class="smart-inline-settings">
             <label class="strategy-pick">
@@ -154,7 +154,7 @@
                 v-if="smartPoolResult.timing_actionable_count"
                 size="small" type="success" effect="dark"
                 title="结构入选且盘中量价完成二次确认，目前仍在有效价格区间"
-              >可入场 {{ smartPoolResult.timing_actionable_count }} 只</el-tag>
+              >量价已确认 {{ smartPoolResult.timing_actionable_count }} 只</el-tag>
               <el-tag
                 v-if="smartPoolResult.timing_watch_count"
                 size="small" type="warning" effect="plain"
@@ -255,7 +255,7 @@
             <!-- 结构层有历史回放，新增时机层仍需独立留痕；两者证据边界必须清楚。 -->
             <div class="basket-note">
               <div class="basket-head">
-                <b>盘中只看绿色“可入场”</b>
+                <b>绿色表示量价已二次确认</b>
                 <span>结构入选后须再通过实时量价确认；预警和等待状态不直接入场。</span>
                 <a class="desc-toggle" @click="showBasketEvidence = !showBasketEvidence">
                   {{ showBasketEvidence ? '收起依据' : '查看依据' }}
@@ -263,7 +263,7 @@
               </div>
               <div v-show="showBasketEvidence" class="basket-evidence">
                 <div class="basket-usage">
-                  <b>状态使用：</b>“可入场”表示结构与实时量价双确认；“提前预警”和“等待确认”都不应直接买入。
+                  <b>状态含义：</b>“量价已确认”表示结构与实时量价双双满足；“提前预警”和“等待确认”尚未满足第二重条件。
                   收盘复盘候选必须等下一交易日再次确认。
                 </div>
                 <ul>
@@ -339,7 +339,7 @@
                   :type="timingTagType(row)"
                   :effect="row.timing_actionable ? 'dark' : 'plain'"
                 >
-                  {{ row.timing_actionable ? '可入场' : (row.timing_label || '等待扫描') }}
+                  {{ row.timing_actionable ? '量价已确认' : (row.timing_label || '等待扫描') }}
                 </el-tag>
                 <div v-if="row.timing_score != null" class="score-pct">
                   时机 {{ Number(row.timing_score).toFixed(0) }}分
@@ -376,7 +376,7 @@
                 <span :class="changeClass(row.pct_chg)">{{ signedPercent(row.pct_chg) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="买卖计划" width="156">
+            <el-table-column label="价位参考" width="156">
               <template #default="{ row }">
                 <div v-if="row.timing_status === 'blocked'" class="trade-plan-cell risk-paused">
                   <el-tag size="small" type="danger" effect="dark">不可追入</el-tag>
@@ -404,10 +404,10 @@
                   <em>市场风险降至警惕/安全后再显示买入计划</em>
                 </div>
                 <div v-else-if="riskLocked && row.daytrade_ok" class="trade-plan-cell daytrade">
-                  <el-tag size="small" type="warning" effect="dark">仅 T+1 短打</el-tag>
-                  <span v-if="row.trade_plan?.buy_price">买 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
+                  <el-tag size="small" type="warning" effect="dark">T+1 口径</el-tag>
+                  <span v-if="row.trade_plan?.buy_price">触发 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
                   <span v-if="row.trade_plan?.stop_loss" class="tp-stop">
-                    止损 {{ formatNumber(row.trade_plan.stop_loss) }}
+                    下沿 {{ formatNumber(row.trade_plan.stop_loss) }}
                   </span>
                   <em class="tp-warn">{{ row.daytrade_note }}</em>
                 </div>
@@ -424,16 +424,16 @@
                   </el-tooltip>
                   <template v-if="row.timing_actionable && row.radar_signal?.entry_low">
                     <span>
-                      入场 <b>{{ formatNumber(row.radar_signal.entry_low) }}–{{ formatNumber(row.radar_signal.entry_high) }}</b>
+                      区间 <b>{{ formatNumber(row.radar_signal.entry_low) }}–{{ formatNumber(row.radar_signal.entry_high) }}</b>
                     </span>
                     <span class="tp-stop">失效 {{ formatNumber(row.radar_signal.invalidation_price) }}</span>
-                    <span class="tp-target">不追高于 {{ formatNumber(row.radar_signal.chase_limit) }}</span>
+                    <span class="tp-target">上限 {{ formatNumber(row.radar_signal.chase_limit) }}</span>
                     <em>有效至 {{ row.radar_signal.valid_until?.slice(11, 16) || '本次扫描区间' }}</em>
                   </template>
                   <template v-else>
-                    <span>买 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
-                    <span class="tp-stop">止损 {{ formatNumber(row.trade_plan.stop_loss) }}（{{ row.trade_plan.stop_loss_pct }}%）</span>
-                    <span class="tp-target">止盈 {{ formatNumber(row.trade_plan.take_profit) }}（+{{ row.trade_plan.take_profit_pct }}%）</span>
+                    <span>触发 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
+                    <span class="tp-stop">下沿 {{ formatNumber(row.trade_plan.stop_loss) }}（{{ row.trade_plan.stop_loss_pct }}%）</span>
+                    <span class="tp-target">上沿 {{ formatNumber(row.trade_plan.take_profit) }}（+{{ row.trade_plan.take_profit_pct }}%）</span>
                     <em>盈亏比 {{ row.trade_plan.risk_reward_ratio ?? '-' }}:1 · {{ row.trade_plan.basis === 'atr' ? 'ATR' : '比例' }}</em>
                   </template>
                 </div>

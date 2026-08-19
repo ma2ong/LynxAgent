@@ -37,7 +37,7 @@
     </section>
     <el-skeleton v-else-if="loading" :rows="4" animated />
 
-    <!-- 高位风险：涨高见顶、该减仓的好票（已剔除 ST/退市/预亏） -->
+    <!-- 高位风险：涨幅已高且出现回撤的票（已剔除 ST/退市/预亏） -->
     <section v-if="hp" class="scan-card hp-card">
       <div class="scan-head">
         <h2>高位风险 · 涨高见顶</h2>
@@ -61,7 +61,7 @@
       </div>
       <div class="tab-hint">{{ hpHint }}</div>
       <el-table v-if="filteredHp.length" :data="filteredHp" size="small" stripe max-height="460">
-        <el-table-column label="仓位动作" width="200" fixed="left">
+        <el-table-column label="风险分档" width="200" fixed="left">
           <template #default="{ row }">
             <el-tag size="small" :type="stageType(row.stage)" effect="dark">{{ row.stage }}</el-tag>
             <div class="hp-action">{{ row.action }}</div>
@@ -229,11 +229,11 @@ const hp = computed(() => (scan.value as any)?.high_position || null)
 const stageType = (stage: string) =>
   stage === '刚见顶' ? 'danger' : stage === '下跌中继' ? 'warning' : 'info'
 
-// 分档：同一张名单里三种仓位动作差别很大，混在一起看不出该先处理谁
+// 分档：同一张名单里三种风险状态差别很大，混在一起看不出彼此的区别
 const HP_STAGES = [
-  { key: 'fresh', label: '刚见顶', hint: '唯一还来得及行动的窗口：减仓至三成以下' },
-  { key: 'falling', label: '下跌中继', hint: '趋势已坏：逢反弹继续减仓，别等回本' },
-  { key: 'deep', label: '深跌未反转', hint: '已经跌透：不抄底，反弹到均线附近再减磅' },
+  { key: 'fresh', label: '刚见顶', hint: '距高点回撤刚发生不久，是这几档里状态变化最新的一批' },
+  { key: 'falling', label: '下跌中继', hint: '趋势结构已破坏，期间的反弹尚未收复关键均线' },
+  { key: 'deep', label: '深跌未反转', hint: '回撤幅度已经很深，但还没有出现反转结构' },
 ]
 const hpTab = ref('all')
 const hpTabs = computed(() => [
@@ -241,7 +241,7 @@ const hpTabs = computed(() => [
   ...HP_STAGES.map((s) => ({ key: s.key, label: s.label, count: hp.value?.counts?.[s.key] || 0 })),
 ])
 const hpHint = computed(() =>
-  HP_STAGES.find((s) => s.key === hpTab.value)?.hint || '按仓位动作分档，越靠前越紧急')
+  HP_STAGES.find((s) => s.key === hpTab.value)?.hint || '按走坏程度分档，越靠前状态越新')
 const filteredHp = computed(() => {
   const kw = hpKeyword.value.trim().toLowerCase()
   const stage = HP_STAGES.find((s) => s.key === hpTab.value)?.label
@@ -252,8 +252,8 @@ const filteredHp = computed(() => {
 
 // 问题股按综合建议分档：退出和持有观察是两件完全不同的事，不该在同一页翻
 const SIGNALS = [
-  { key: 'exit', label: '退出/止损', hint: '多个风险维度共振：反弹即走，不留隔夜' },
-  { key: 'reduce', label: '减仓防守', hint: '风险大于保护：降到半仓以下，再破位就清' },
+  { key: 'exit', label: '退出/止损', hint: '多个风险维度同时命中，是名单里信号最集中的一档' },
+  { key: 'reduce', label: '减仓防守', hint: '风险维度多于支撑维度，但尚未达到共振' },
   { key: 'rebound', label: '反包观察', hint: '盘中已收复 MA10/MA20：先别砍，看能否站稳收盘' },
   { key: 'watch', label: '持有观察', hint: '证据还不够动手：继续持有，跌破前低再处理' },
 ]

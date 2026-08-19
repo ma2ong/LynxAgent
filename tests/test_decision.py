@@ -29,7 +29,7 @@ def test_clean_uptrend_not_avoid():
     d = stock_decision("600000", "强势股", _df([10.0 * 1.004 ** i for i in range(130)]),
                        market_env="偏暖")
     assert d["risk_count"] == 0
-    assert d["verdict"]["level"] not in ("回避", "强烈回避")
+    assert d["verdict"]["level"] not in ("风险项偏多", "风险项密集")
 
 
 def test_breakdown_downtrend_flagged():
@@ -38,7 +38,7 @@ def test_breakdown_downtrend_flagged():
                        market_env="偏冷")
     assert any(f["key"] == "breakdown" for f in d["flags"])
     assert d["risk_count"] >= 1
-    assert d["verdict"]["level"] in ("谨慎观望", "回避", "强烈回避", "偏空回避")
+    assert d["verdict"]["level"] in ("结构存疑", "风险项偏多", "风险项密集", "结构偏弱")
 
 
 def test_st_name_forces_trouble():
@@ -48,9 +48,9 @@ def test_st_name_forces_trouble():
 
 
 def test_one_risk_caps_at_caution():
-    """恰好命中 1 项风险（破位）时封顶到谨慎观望，不给买入档。"""
+    """恰好命中 1 项风险（破位）时封顶到「结构存疑」，不给最高档。"""
     # 缓慢下行只破位、不触发急涨/天量等其他项
     closes = [20.0 - i * 0.03 for i in range(130)]
     d = stock_decision("600000", "股", _df(closes))
     if d["risk_count"] == 1:
-        assert d["verdict"]["level"] == "谨慎观望"
+        assert d["verdict"]["level"] == "结构存疑"

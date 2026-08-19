@@ -732,9 +732,12 @@ _PANEL_POOLS = ("smart", "pattern", "swing", "auction")
 
 @router.get("/panel/batch")
 async def quant_panel_batch(pool: str = "smart", limit: int = 20):
-    """当日选股池候选的五方判读批量评分：返回已有评分，缺的丢后台补打（不阻塞）。"""
+    """当日选股池候选的五方判读批量评分：返回已有评分，缺的丢后台补打（不阻塞）。
+
+    2026-08-19 打分改成规则实现后这里不再需要 llm 闸门 —— 之前留着会让没配密钥的
+    环境直接拒绝补打分，规则版在这条路径上就永远出不来结果。
+    """
     from datetime import datetime
-    from quantcore.quant import llm
     from quantcore.quant.local_store import get_local_store
 
     if pool not in _PANEL_POOLS:
@@ -745,16 +748,14 @@ async def quant_panel_batch(pool: str = "smart", limit: int = 20):
     symbols = await _run_light(store.load_picks_symbols, today, pool, limit)
     if not symbols:
         return {"success": True, "data": {"date": today, "pool": pool, "items": {},
-                                          "pending": 0, "llm": llm.available(),
+                                          "pending": 0,
                                           "message": "今日该池暂无留痕候选，先跑一次选股"}}
     scores = await _run_light(store.load_panel_scores, today, symbols)
     pending = [s for s in symbols if s not in scores]
-    if pending and llm.available():
+    if pending:
         _panel_executor.submit(run_panel_batch, today, pending)
     return {"success": True, "data": {
-        "date": today, "pool": pool, "items": scores,
-        "pending": len(pending) if llm.available() else 0,
-        "llm": llm.available(),
+        "date": today, "pool": pool, "items": scores, "pending": len(pending),
     }}
 
 

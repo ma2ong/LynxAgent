@@ -970,6 +970,8 @@ export interface PanelVerdict {
   score: number
   stance: string
   reason: string
+  /** 该派的数据是否齐全；缺数据时按中性 50 计并在 summary 里说明 */
+  available?: boolean
 }
 
 export interface PanelScore {
@@ -979,6 +981,8 @@ export interface PanelScore {
   bear_count: number
   verdicts: PanelVerdict[]
   summary: string
+  /** 'rules'（2026-08-19 起）/ 'llm'（之前）。两个时期的分数不可比。 */
+  method?: string
 }
 
 export interface PanelBatchData {
@@ -986,7 +990,6 @@ export interface PanelBatchData {
   pool: string
   items: Record<string, PanelScore>
   pending: number
-  llm: boolean
   message?: string
 }
 

@@ -722,6 +722,14 @@ async def quant_replay_results():
 
 
 # ---- 个股深研增强：评委打分 / 红旗快查（走 LLM，计入配额）----
+@router.get("/stock/deep-report")
+async def quant_deep_report(symbol: str, user: dict = Depends(get_current_lite_user)):
+    """规则版深度分析：同业对位 + 跟踪要点。不调模型，不消耗任何额度。"""
+    from app.core.deep_report import build_deep_report
+    data = await asyncio.to_thread(build_deep_report, symbol)
+    return {"success": True, "data": data, "message": "ok"}
+
+
 @router.get("/stock/investor-panel")
 async def quant_investor_panel(symbol: str, user: dict = require_quota("investor_panel")):
     return await asyncio.to_thread(investor_panel, symbol)

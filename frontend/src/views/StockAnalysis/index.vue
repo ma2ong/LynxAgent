@@ -400,8 +400,38 @@
         </div>
       </div>
 
-      <!-- 深度分析（按需触发）。未配置 LLM 密钥时整块显示为「未开启」，
-           不给按钮 —— 让用户点下去等半分钟再撞报错是最差的处理。 -->
+      <!-- 同业对位：规则计算，不调模型、不耗额度。
+           原来这里是「深度多智能体分析」，无密钥时会吐出「上游原材料/核心零部件」这类
+           占位文字——看着像内容其实什么也没说。换成真算出来的、无法编造的东西。 -->
+      <div class="card deep-card" v-if="peerData?.available">
+        <div class="card-title">
+          同业对位
+          <el-tag size="small" type="info" effect="plain">本地计算</el-tag>
+        </div>
+        <p class="deep-hint">{{ peerData.peer_position.summary }}</p>
+        <table class="peer-table">
+          <thead>
+            <tr><th>维度</th><th>本股</th><th>行业中位</th><th>行业分位</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="m in peerData.peer_position.metrics" :key="m.key">
+              <td>{{ m.label }}</td>
+              <td><b>{{ m.value ?? '—' }}</b></td>
+              <td class="dim">{{ m.industry_median ?? '—' }}</td>
+              <td>{{ m.percentile == null ? '—' : m.percentile + '%' }}</td>
+              <td><span class="peer-verdict" :class="peerClass(m.percentile)">{{ m.verdict }}</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-if="peerData.watch_points?.length" class="watch-list">
+          <div class="mini-title">当前状态</div>
+          <div v-for="w in peerData.watch_points" :key="w.item" class="watch-row">
+            <span class="wk">{{ w.item }}</span><span class="wv">{{ w.state }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 深度多智能体分析：需要用户自带 API Key -->
       <div class="card deep-card">
         <div class="card-title">
           深度多智能体分析
@@ -410,8 +440,8 @@
         </div>
         <template v-if="!aiEnabled">
           <p class="deep-hint">
-            本功能需要 AI 模型。页面上其余内容（评分、形态、走势、财务、新闻）都由本地规则计算，
-            不依赖 AI，照常可用。
+            这一项需要 AI 模型生成叙述性研究结论。上面的同业对位和页面其余内容都是本地
+            规则算出来的，不依赖 AI，照常可用。
           </p>
           <p class="deep-hint dim">
             想用的话在<router-link to="/account/membership">「用量」页</router-link>填入你自己的 API Key，
@@ -514,6 +544,16 @@ import { quantApi, type RiskCheckResult } from '@/api/quant'
 
 // AI 是否可用由服务端决定（有没有配 LLM 密钥），前端只负责如实展示。
 const aiEnabled = ref(false)
+const peerData = ref<any>(null)
+const peerClass = (p: number | null) =>
+  p == null ? '' : p >= 70 ? 'pv-lead' : p <= 30 ? 'pv-lag' : 'pv-mid'
+const loadPeerPosition = async (sym: string) => {
+  peerData.value = null
+  try {
+    const res: any = await ApiClient.get('/api/quant/stock/deep-report', { symbol: sym }, { timeout: 60000 })
+    peerData.value = res?.data?.available ? res.data : null
+  } catch { peerData.value = null }
+}
 const loadAiStatus = async () => {
   try {
     const res: any = await ApiClient.get('/api/billing/me')
@@ -841,6 +881,7 @@ const analyze = async (raw?: string) => {
   deepError.value = ''
   try {
     const riskPromise = loadRiskCheck(s)  // 与主分析并行，先到先渲染
+    const peerPromise = loadPeerPosition(s)  // 同上：同业对位要读几十只同业日线，别串行等
     const res: any = await ApiClient.get(`/api/quant/stock-analysis/${s}`, { _ts: Date.now() }, { timeout: 120000 })
     data.value = res?.data || null
     if (data.value?.available) {
@@ -850,7 +891,7 @@ const analyze = async (raw?: string) => {
     } else {
       ElMessage.warning('未找到该股票数据')
     }
-    await riskPromise
+    await Promise.all([riskPromise, peerPromise])
   } catch (e: any) {
     ElMessage.error(e?.message || '分析失败')
   } finally {
@@ -1226,6 +1267,16 @@ onUnmounted(() => {
 .nd { flex-shrink: 0; font-size: 11px; color: var(--el-text-color-secondary); margin-left: 12px; }
 
 /* Deep */
+.peer-table { width: 100%; border-collapse: collapse; margin: 10px 0 4px; font-size: 13px; }
+.peer-table th { text-align: left; font-weight: 500; color: var(--el-text-color-secondary); padding: 6px 8px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.peer-table td { padding: 7px 8px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.peer-table td.dim { color: var(--el-text-color-secondary); }
+.peer-verdict { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--el-fill-color-light); }
+.peer-verdict.pv-lead { background: #fde8e8; color: #c2101f; }
+.peer-verdict.pv-lag { background: #e8f6ee; color: #0b7c3a; }
+.watch-list { margin-top: 12px; border-top: 1px dashed var(--el-border-color-lighter); padding-top: 10px; }
+.watch-row { display: flex; gap: 10px; font-size: 13px; padding: 4px 0; }
+.watch-row .wk { flex: 0 0 88px; color: var(--el-text-color-secondary); }
 .deep-hint.dim { color: var(--el-text-color-secondary); }
 .deep-hint { font-size: 13px; color: var(--el-text-color-secondary); margin-bottom: 12px; }
 .deep-spin { display: flex; flex-direction: column; gap: 12px; color: var(--el-text-color-secondary); padding: 12px 0; }

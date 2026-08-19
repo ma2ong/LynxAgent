@@ -37,8 +37,15 @@
         <el-menu-item index="/data-center"><el-icon><DataLine /></el-icon><span>数据中心</span></el-menu-item>
       </el-menu>
       <div class="sidebar-foot">
+        <!-- 取消每日额度后 remaining_today 为 null，直接插值会渲染成「今日剩余 0」，
+             看起来像用完了。不限档只报今天用了多少。 -->
         <div v-if="billingInfo" class="quota-chip" @click="$router.push('/account/membership')">
-          {{ billingInfo.plan_label }} · 今日剩余 {{ billingInfo.remaining_today }}/{{ billingInfo.daily_limit }}
+          <template v-if="billingInfo.unlimited">
+            {{ billingInfo.plan_label }} · 不限次数
+          </template>
+          <template v-else>
+            {{ billingInfo.plan_label }} · 今日剩余 {{ billingInfo.remaining_today }}/{{ billingInfo.daily_limit }}
+          </template>
         </div>
         <el-button text size="small" @click="logout">
           <el-icon><SwitchButton /></el-icon>退出登录

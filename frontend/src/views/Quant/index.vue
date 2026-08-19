@@ -80,13 +80,6 @@
             <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），盘中爆发只允许结构质量前 10% 的股票晋级，再按实时量价与雷达时机重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜，最终输出当前最优名单。只有绿色“量价已确认”才代表通过了第二重条件。</p>
           </div>
           <div class="smart-inline-settings">
-            <label class="strategy-pick">
-              <span>选股模式</span>
-              <el-radio-group v-model="smartPoolForm.strategy" size="default">
-                <el-radio-button value="balanced">全市场动量优选</el-radio-button>
-                <el-radio-button value="swing_short">短线波段(1-3日)</el-radio-button>
-              </el-radio-group>
-            </label>
             <label>
               <span>候选</span>
               <el-input-number v-model="smartPoolForm.universe_limit" :min="50" :max="10000" :step="50" controls-position="right" />
@@ -558,6 +551,8 @@ const openWhy = (row: any, pool: 'smart' | 'pattern') => {
 
 const healthLoading = ref(false)
 
+// strategy 固定 balanced：短线波段模式 2026-08-19 从页面撤掉，后端分支保留，
+// 想恢复只需把选择器加回模板，这里不必改。
 const smartPoolForm = ref({ limit: 20, universe_limit: 10000, strategy: 'balanced' })
 const smartPoolLoading = ref(false)
 const smartPoolResult = ref<QuantSmartPoolResult | null>(null)

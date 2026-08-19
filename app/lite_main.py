@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import json
 import os
 import re
@@ -232,6 +233,27 @@ async def _start_ml_factor_scheduler() -> None:
     )
 
     _ml_factor_scheduler.start()
+
+
+@app.on_event("startup")
+async def _prewarm_heavy_imports() -> None:
+    """把重模块的首次 import 挪到启动后的后台线程，别让它砸在第一个真实请求上。
+
+    akshare 单独 import 要 2.1s，还会连带拉起 py_mini_racer（V8 绑定，1.3s）。
+    数据调用本身是走独立线程池的，但**模块导入会长时间持有 GIL**，工作线程里第一次
+    import 照样把事件循环饿死 —— /api/health 因此超时，watchdog 判定不健康。
+    2026-08-19 实测：40 次探测里有 1 次被卡超过 10 秒，生产日志里表现为反复
+    「port open but health failed」，两次叠加就够触发一次没必要的重启。
+
+    放在这里仍会占一次 GIL，但发生在启动后的空窗期，且只此一次。
+    """
+    def _warm() -> None:
+        try:
+            import akshare  # noqa: F401  预热用，不调用
+        except Exception as exc:  # noqa: BLE001 — 预热失败不该拖累启动
+            logging.getLogger("prewarm").warning("akshare prewarm failed: %s", exc)
+
+    asyncio.get_running_loop().run_in_executor(None, _warm)
 
 
 @app.on_event("startup")

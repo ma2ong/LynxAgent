@@ -444,7 +444,7 @@
             规则算出来的，不依赖 AI，照常可用。
           </p>
           <p class="deep-hint dim">
-            想用的话在<router-link to="/account/membership">「用量」页</router-link>填入你自己的 API Key，
+            想用的话在<router-link to="/account/membership">「设置」页</router-link>填入你自己的 API Key，
             费用由你的服务商账户结算，本站不经手。
           </p>
         </template>

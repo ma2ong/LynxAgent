@@ -1,48 +1,9 @@
 <template>
   <div class="membership">
     <div class="page-head">
-      <h2>用量</h2>
-      <p>查看今日 AI 分析配额的使用情况。</p>
+      <h2>设置</h2>
+      <p>配置你自己的 AI API Key，并查看今日调用次数。</p>
     </div>
-
-    <el-card v-if="info" class="card">
-      <div class="plan-line">
-        <el-tag :type="info.plan === 'member' ? 'warning' : 'info'" effect="dark" size="large">
-          {{ info.plan_label }}
-        </el-tag>
-        <span v-if="info.plan_expires_at" class="expires">有效期至 {{ info.plan_expires_at }}</span>
-      </div>
-      <div class="usage">
-        <span>今日 AI 分析</span>
-        <template v-if="info.unlimited">
-          <p class="usage-plain">
-            <b>{{ info.used_today }}</b> 次 · 不限次数
-            <em v-if="!info.ai_enabled">（AI 功能当前未开启）</em>
-          </p>
-        </template>
-        <el-progress
-          v-else
-          :percentage="info.daily_limit ? Math.min(100, (info.used_today / info.daily_limit) * 100) : 0"
-          :format="() => usageLabel"
-        />
-      </div>
-    </el-card>
-
-    <!-- 付费档已下线（2026-08-18）。本产品无证券投资咨询资质，收费会改变「提供个股名单」
-         这件事的性质，所以不设付费档 —— 这是合规决定，不是定价策略。
-         后端 PLANS 里的 member 档保留不动：已有账号的额度不受影响，只是不再对外销售。
-         原来这里是支付宝收款码 + 开通申请单，整块移除。 -->
-    <el-card v-if="info && info.plan !== 'member'" class="card">
-      <h3>关于额度与 AI</h3>
-      <p class="free-note">
-        本产品全部功能免费，没有付费档，每日分析也不限次数。选股池、名单、回放数据和
-        复盘战绩都完整开放。
-      </p>
-      <p class="free-note dim">
-        涉及 AI 模型的功能（个股深研的深度分析等）默认不开启。想用的话在下面填自己的
-        API Key —— 站点不配密钥，谁用谁付，你的密钥只对你自己生效。
-      </p>
-    </el-card>
 
     <!-- BYOK：用户自带密钥。站点统一配一把的话，任何注册用户都能改服务端配置，
          那是个权限洞；而且产品不收费，推理成本不该由站长垫。 -->
@@ -87,6 +48,23 @@
       <p class="free-note dim">
         密钥加密后存在本机数据库，接口从不回传明文。费用由你的服务商账户结算，本站不经手。
         不填也不影响使用：页面上其余内容全部由本地规则计算。
+      </p>
+    </el-card>
+
+    <!-- 用量降为一行：额度已取消，这里只剩「今天调了几次」这一个事实，
+         不值得再占一整张卡片。 -->
+    <el-card v-if="info" class="card">
+      <h3>用量与说明</h3>
+      <p class="usage-plain">
+        今日 AI 调用 <b>{{ info.used_today }}</b> 次 · 不限次数
+        <em v-if="!info.ai_enabled">（未配置 API Key，AI 功能未启用）</em>
+      </p>
+      <p class="free-note">
+        本产品全部功能免费，没有付费档。选股池、名单、回放数据和复盘战绩都完整开放，
+        且全部由本地规则计算，不依赖 AI。
+      </p>
+      <p class="free-note dim">
+        只有个股深研的「深度多智能体分析」需要 AI 模型，那一项才用得上上面配置的密钥。
       </p>
     </el-card>
 
@@ -264,7 +242,6 @@ const pushForm = reactive({
   enabled: true,
 })
 
-const usageLabel = computed(() => info.value ? `${info.value.used_today}/${info.value.daily_limit}` : '')
 
 async function loadPage() {
   try {
@@ -277,7 +254,7 @@ async function loadPage() {
     wechatStatus.value = (pushRes?.data as WechatPushStatus) ?? null
     runtime.value = (runtimeRes?.data as RuntimeConfigValidation) ?? null
   } catch (e: any) {
-    ElMessage.error(e?.message || '用量信息加载失败')
+    ElMessage.error(e?.message || '设置加载失败')
   }
 }
 
@@ -336,9 +313,6 @@ onMounted(() => { loadPage(); loadKey() })
 .page-head h2 { margin: 0 0 4px; font-size: 22px; }
 .page-head p { margin: 0; color: var(--el-text-color-secondary); }
 .card { margin-bottom: 16px; border-radius: 8px; }
-.plan-line { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.expires { color: #909399; font-size: 13px; }
-.usage { display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: #606266; }
 .benefits { margin: 8px 0 16px; padding-left: 20px; color: #606266; line-height: 1.9; }
 .bound-box {
   display: grid;

@@ -16,7 +16,7 @@ if ((Test-Path $log) -and (Get-Item $log).Length -gt 10MB) {
 
 function Test-BackendHealthy {
     try {
-        $response = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/health" -TimeoutSec 5
+        $response = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/health" -TimeoutSec 15
         return $response.status -eq "healthy"
     } catch {
         return $false

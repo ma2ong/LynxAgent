@@ -177,16 +177,16 @@ def _run_daily_panel_batch() -> None:
     而我们要的正是长期积累，好用 experiments/panel_eval.py 回答「共识分高的票后续是不是
     真的更好」。有答案之前它不参与任何排序，只是记账。
 
-    每天只跑一次；LLM 单线程顺序打分，20 只要几分钟，所以丢线程里跑、不占刷新循环。
+    每天只跑一次。2026-08-19 打分从 LLM 换成规则后不再有网络调用，20 只是毫秒级，
+    但仍留在线程里跑：它要读日线和财务，不该占住刷新循环。
     """
     global _panel_batch_date
 
-    from quantcore.quant import llm
     from quantcore.quant.investor_panel import run_panel_batch
     from quantcore.quant.local_store import get_local_store
 
     today = datetime.now(_TZ).strftime("%Y-%m-%d")
-    if _panel_batch_date == today or not llm.available():
+    if _panel_batch_date == today:
         return
     store = get_local_store()
     symbols = store.load_picks_symbols(today, "smart", 20)

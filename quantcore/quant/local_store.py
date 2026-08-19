@@ -80,6 +80,10 @@ CREATE TABLE IF NOT EXISTS panel_scores (
     verdicts_json TEXT,
     summary TEXT,
     created_at TEXT,
+    -- 打分方式：'llm'（2026-08-19 之前，非确定性）/ 'rules'（之后，可复现）。
+    -- 两个时期的分数不可比，也绝不能混在一起做 panel_eval 的预测力检验 ——
+    -- LLM 期同一只票同一天重跑结果都不一样，把它和规则期合并会污染整个结论。
+    method TEXT,
     PRIMARY KEY (date, symbol)
 );
 CREATE TABLE IF NOT EXISTS arena_state (
@@ -168,6 +172,20 @@ class LocalQuantStore:
         self._stage_cache: Optional[tuple] = None  # (最新真实bar日, stage_inputs 结果)
         with self._conn() as conn:
             conn.executescript(_SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn) -> None:
+        """建表语句只对新库生效，已有库要补列。
+
+        panel_scores.method：2026-08-19 之前的行全是 LLM 打的，回填成 'llm'，
+        好让 panel_eval 能把两个时期分开检验 —— 混在一起做预测力检验，结论是废的。
+        """
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(panel_scores)")}
+        if "method" not in cols:
+            conn.execute("ALTER TABLE panel_scores ADD COLUMN method TEXT")
+            conn.execute("UPDATE panel_scores SET method='llm' WHERE method IS NULL")
+            conn.commit()
 
     def _conn(self):
         import sqlite3
@@ -1164,8 +1182,8 @@ class LocalQuantStore:
         conn = self._conn()
         conn.execute(
             "INSERT OR REPLACE INTO panel_scores"
-            "(date, symbol, consensus, divergence, bull, bear, verdicts_json, summary, created_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
+            "(date, symbol, consensus, divergence, bull, bear, verdicts_json, summary, created_at, method)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
             (date, symbol,
              float(payload.get("consensus_score") or 0.0),
              float(payload.get("divergence") or 0.0),
@@ -1173,7 +1191,8 @@ class LocalQuantStore:
              int(payload.get("bear_count") or 0),
              json.dumps(payload.get("verdicts") or [], ensure_ascii=False),
              str(payload.get("summary") or ""),
-             datetime.now().isoformat(timespec="seconds")),
+             datetime.now().isoformat(timespec="seconds"),
+             str(payload.get("method") or "rules")),
         )
         conn.commit()
 

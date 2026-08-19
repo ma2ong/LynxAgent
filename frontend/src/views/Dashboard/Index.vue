@@ -146,10 +146,10 @@
         </div>
       </article>
 
-      <!-- 盘中机会雷达 -->
+      <!-- 盘中信号 -->
       <article class="card">
         <header @click="go('/intraday-signals')">
-          <span class="c-ico">📡</span><h3>盘中机会雷达</h3>
+          <span class="c-ico">📡</span><h3>盘中信号</h3>
           <span v-if="radar?.phase" class="c-badge">{{ radar.phase }}</span>
           <span class="c-more">进入 →</span>
         </header>
@@ -531,7 +531,7 @@ const loadCards = async (retries = 1) => {
         causes: (d.causes || []).slice(0, 3).map((c: string) => ({ name: c, n: d.cause_total?.[c] || 0 })),
       }
     }).catch(() => { failed = true }),
-    // 盘中机会雷达：后台监控循环常驻扫描，这里只读其最新状态，不触发强制重扫
+    // 盘中信号：后台监控循环常驻扫描，这里只读其最新状态，不触发强制重扫
     ApiClient.get<any>('/api/lite/intraday-signals', { limit: 8 }, { timeout: 20000 }).then((raw) => {
       const d = raw?.data ?? raw
       if (!d) return

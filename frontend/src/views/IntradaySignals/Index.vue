@@ -3,7 +3,7 @@
     <header class="page-head">
       <div>
         <div class="title-line">
-          <h1>盘中机会雷达</h1>
+          <h1>盘中信号</h1>
           <span class="live-dot" :class="{ active: data?.status === 'live' }" />
           <span class="phase">{{ data?.phase_label || '等待行情' }}</span>
         </div>

@@ -23,7 +23,7 @@
         @select="mobileMenuOpen = false"
       >
         <el-menu-item index="/dashboard"><el-icon><Odometer /></el-icon><span>盘面总览</span></el-menu-item>
-        <el-menu-item index="/intraday-signals"><el-icon><Bell /></el-icon><span>盘中机会雷达</span></el-menu-item>
+        <el-menu-item index="/intraday-signals"><el-icon><Bell /></el-icon><span>盘中信号</span></el-menu-item>
         <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
         <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
         <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>

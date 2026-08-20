@@ -341,6 +341,15 @@ async def health():
 # 一键智选最终名单的条数上限。原先在 safe_limit / _finalize_intraday_quality /
 # structure_shadow 三处各写死 10，导致前端「推荐上限」控件调了也没用——改这里一处即可。
 SMART_POOL_MAX_ITEMS = 20
+# 一键智选最终名单的分数门槛：综合排序分（quality_score = 日K结构分与盘中量价融合后的
+# 0~100 刻度 + 时机层加分）达到这条线就上榜，不再按名次砍到 20 只。
+# 2026-08-20 Allen 定：名次上限两头都不对——强势日第 21 只 92 分被砍掉，弱市又要拿
+# 80 分的凑满 20 只。设 LYNX_SMART_SCORE_FLOOR=0 可退回旧的 SMART_POOL_MAX_ITEMS 名次制。
+SMART_POOL_SCORE_FLOOR = max(0.0, min(100.0, float(os.getenv("LYNX_SMART_SCORE_FLOOR", "90"))))
+# 门槛保底：一只都够不上门槛时，仍给当日最强的这几只，但标明「未达标·仅供跟踪」。
+# 空名单在产品上是死路（用户不知道是没货还是系统坏了），给最强几只 + 说清没达标，
+# 既不假装达标也不让用户对着空白页猜。设 0 = 不给保底，真空着。
+SMART_POOL_FLOOR_FALLBACK = max(0, int(float(os.getenv("LYNX_SMART_FLOOR_FALLBACK", "5"))))
 SMART_POOL_INTRADAY_WEIGHT = 0.22
 # 当日板块强弱在盘中重排里的最大加/减分：分位 1.0 → +N，0.0 → −N，0.5 → 0。
 # 与雷达的板块权重同理，这个数**没有回测依据** —— 板块的盘中口径历史从 2026-08-05
@@ -1134,9 +1143,15 @@ def _merge_intraday_quality(
         "review_mode": overlay.get("review_mode"),
         "candidate_count": int(overlay.get("candidate_count") or 0),
     }
+    cut_note = (
+        f"最终只保留综合排序≥{SMART_POOL_SCORE_FLOOR:.0f}分的标的，不限只数。"
+        if SMART_POOL_SCORE_FLOOR > 0
+        else f"最终按综合排序取前 {SMART_POOL_MAX_ITEMS} 名。"
+    )
     data["ranking_basis"] = (
         "最近完整日K筛结构底池；盘中爆发仅允许结构质量前10%、今日涨幅≥4%且实时成交≥2亿的股票补入候选；"
-        "盘中动态分权重22%重排最终名单；涨停/近板不拦截，醒目标注买入难度后照常上榜。"
+        "盘中动态分权重22%重排最终名单；涨停/近板不拦截，醒目标注买入难度后照常上榜；"
+        + cut_note
     )
     basis = data.get("list_basis")
     if isinstance(basis, dict):
@@ -1194,6 +1209,14 @@ def _reserve_breakout_slots(kept: list[dict[str, Any]], target: int) -> list[dic
     return merged[:target]
 
 
+def _quality_of(item: dict[str, Any]) -> float:
+    """综合排序分（前端「综合排序」那一列），取不到时退回结构分。"""
+    try:
+        return float(item.get("quality_score") or item.get("score") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _drop_far_below_best(kept: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
     """把明显够不上当日头部的票剔出名单，弱市宁可少给几只，也不为凑满 20 只硬塞。
 
@@ -1214,12 +1237,7 @@ def _drop_far_below_best(kept: list[dict[str, Any]]) -> tuple[list[dict[str, Any
     if not kept:
         return kept, ""
 
-    def score(item: dict[str, Any]) -> float:
-        try:
-            return float(item.get("quality_score") or item.get("score") or 0)
-        except (TypeError, ValueError):
-            return 0.0
-
+    score = _quality_of
     gap = max(0.0, float(os.getenv("LYNX_SMART_QUALITY_GAP", "0")))
     if gap <= 0:
         return kept, ""
@@ -1233,7 +1251,7 @@ def _drop_far_below_best(kept: list[dict[str, Any]]) -> tuple[list[dict[str, Any
     return survivors, note
 
 
-def _finalize_intraday_quality(data: dict[str, Any], target: int) -> None:
+def _finalize_intraday_quality(data: dict[str, Any], target: int, score_floor: float = 0.0) -> None:
     items = list(data.get("items") or [])
     blocked = [item for item in items if item.get("timing_status") == "blocked"]
     kept = [item for item in items if item.get("timing_status") != "blocked"]
@@ -1241,7 +1259,28 @@ def _finalize_intraday_quality(data: dict[str, Any], target: int) -> None:
     previous_samples = list(data.get("timing_excluded_samples") or [])
     # 上限跟随端点的 safe_limit（现 20），不再写死 10——写死会让「推荐上限」控件失效。
     safe_target = max(1, min(int(target or SMART_POOL_MAX_ITEMS), SMART_POOL_MAX_ITEMS))
-    kept = _reserve_breakout_slots(kept, safe_target)
+    if score_floor > 0:
+        # 门槛制：够分就上榜，不限只数，也不按名次砍。
+        best = max((_quality_of(item) for item in kept), default=0.0)
+        survivors = [item for item in kept if _quality_of(item) >= score_floor]
+        data["score_floor"] = round(score_floor, 1)
+        data["score_floor_best"] = round(best, 1)
+        data["score_floor_fallback"] = False
+        data["score_floor_note"] = ""
+        if not survivors and kept and SMART_POOL_FLOOR_FALLBACK > 0:
+            survivors = kept[:SMART_POOL_FLOOR_FALLBACK]
+            data["score_floor_fallback"] = True
+            data["score_floor_note"] = (
+                f"今日无个股达到 {score_floor:.0f} 分门槛（全市场最高 {best:.1f} 分），"
+                f"以下 {len(survivors)} 只是当日最强的，未达标，仅供跟踪观察。"
+            )
+        elif not survivors:
+            data["score_floor_note"] = (
+                f"今日全市场综合排序最高 {best:.1f} 分，无个股达到 {score_floor:.0f} 分门槛"
+            )
+        kept = survivors
+    else:
+        kept = _reserve_breakout_slots(kept, safe_target)
     kept, thin_reason = _drop_far_below_best(kept)
     if thin_reason:
         data["quality_thin_note"] = thin_reason
@@ -1425,9 +1464,11 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
                 item["radar_signal"]["actionable"] = False
             if item.get("timing_status") == "confirmed":
                 item["timing_label"] = "环境数据不足·暂停入场"
+    # 用户最终看到的名单在这里定稿：按综合排序分门槛过滤，不限只数。
     _finalize_intraday_quality(
         data,
         int(data.get("requested_limit") or len(items) or SMART_POOL_MAX_ITEMS),
+        score_floor=SMART_POOL_SCORE_FLOOR,
     )
     items = data.get("items") or []
     _update_smart_pool_list_basis(data)
@@ -1771,8 +1812,10 @@ async def _compute_lite_smart_pool_unlocked(
             "smart_pool",
             limit=safe_limit,
             universe_limit=safe_universe,
-            # 多带 20 只备胎供风控剔除后回填；留痕交给 _apply_confluence 在最终名单上做
-            spare=20,
+            # 多带 40 只备胎供风控剔除后回填；名单改成 90 分门槛制后备胎还要兜住
+            # 「第 40 名之外仍有够 90 分的票」——池子不够深，门槛制就名不副实。
+            # 留痕交给 _apply_confluence 在最终名单上做
+            spare=40,
             record=False,
         )
 
@@ -1847,7 +1890,7 @@ async def _compute_lite_smart_pool_unlocked(
         breakout_items = [item for item in items if item.get("intraday_breakout")]
         structural_items = [item for item in items if not item.get("intraday_breakout")]
         items = await _enrich_smart_pool_industries(
-            structural_items[: safe_limit + 20] + breakout_items
+            structural_items[: safe_limit + 40] + breakout_items
         )
         # 用可靠的 cninfo 行业模块再兜底一遍：把仍为「A股/行业待识别」等占位值的补成真实行业。
         try:
@@ -2157,7 +2200,7 @@ async def _compute_lite_smart_pool_unlocked(
             "universe": ai_factor_pool.get("universe"),
         },
         "items": items,
-        "source_note": f"结构候选叠加 AI 因子、形态强度和盘中量价时机确认，只输出最优的前 {safe_limit} 只；时机层正在独立留痕验证，仅供研究。",
+        "source_note": f"结构候选叠加 AI 因子、形态强度和盘中量价时机确认，只输出综合排序≥{SMART_POOL_SCORE_FLOOR:.0f}分的标的；时机层正在独立留痕验证，仅供研究。",
     }
     response = {"success": True, "data": data, "message": "ok"}
     await _apply_confluence(response)

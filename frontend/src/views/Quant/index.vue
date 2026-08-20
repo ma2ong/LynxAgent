@@ -77,17 +77,16 @@
                 {{ showPoolDesc ? '收起说明' : '选股逻辑' }}
               </a>
             </h2>
-            <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），盘中爆发只允许结构质量前 10% 的股票晋级，再按实时量价与雷达时机重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜，最终输出当前最优名单。只有绿色“量价已确认”才代表通过了第二重条件。</p>
+            <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），盘中爆发只允许结构质量前 10% 的股票晋级，再按实时量价与雷达时机重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜；最终只保留综合排序 ≥ 90 分的标的，够分几只就给几只，不再按名次砍到 20 只。只有绿色“量价已确认”才代表通过了第二重条件。</p>
           </div>
           <div class="smart-inline-settings">
             <label>
               <span>候选</span>
               <el-input-number v-model="smartPoolForm.universe_limit" :min="50" :max="10000" :step="50" controls-position="right" />
             </label>
-            <label>
-              <span>推荐上限</span>
-              <el-input-number v-model="smartPoolForm.limit" :min="5" :max="20" controls-position="right" />
-            </label>
+            <span class="score-floor-chip" title="综合排序分＝日K结构分与盘中量价融合后的 0~100 刻度。达到门槛就上榜，多少只都给；今天没有够分的就不给。">
+              入选门槛 综合排序 ≥ <b>{{ smartScoreFloor }}</b> 分 · 不限只数
+            </span>
           </div>
           <div class="smart-actions">
             <el-button type="success" native-type="button" :loading="smartPoolLoading" @click="loadSmartPool">
@@ -242,7 +241,7 @@
               </span>
               <span class="basis-tip">
                 · {{ smartPoolResult.list_basis.candidate_count || smartPoolResult.intraday_candidate_count || 10 }}
-                只候选实时重排，<b>前 {{ smartPoolResult.items.length }} 名自动换榜</b>
+                只候选实时重排，<b>≥ {{ smartScoreFloor }} 分的 {{ smartPoolResult.items.length }} 只自动上榜</b>
               </span>
             </div>
             <!-- 结构层有历史回放，新增时机层仍需独立留痕；两者证据边界必须清楚。 -->
@@ -294,8 +293,16 @@
             </div>
           </div>
 
+          <!-- 保底名单：今天一只都没够 90 分，给最强的几只但必须说清没达标。 -->
           <el-alert
-            v-if="smartPoolResult && smartPoolResult.items.length > 0 && smartPoolResult.items.length < 5"
+            v-if="smartPoolResult?.score_floor_fallback"
+            type="warning" :closable="false" show-icon class="few-picks-tip"
+            :title="smartPoolResult.score_floor_note"
+            description="未达标不等于能买：这是「今天最强的几只」，不是「达到入选标准的几只」。建议只跟踪观察，仓位交给顶部环境提示。"
+          />
+
+          <el-alert
+            v-if="smartPoolResult && !smartPoolResult.score_floor_fallback && smartPoolResult.items.length > 0 && smartPoolResult.items.length < 5"
             type="info" :closable="false" show-icon class="few-picks-tip"
             :title="`当前市场环境下达标标的仅 ${smartPoolResult.items.length} 只`"
             description="评分阈值不随行情放宽（保持口径诚实）。弱市达标少是正常现象，可参考顶部大盘环境提示控制仓位，或等待市场转暖。"
@@ -553,6 +560,8 @@ const healthLoading = ref(false)
 
 // strategy 固定 balanced：短线波段模式 2026-08-19 从页面撤掉，后端分支保留，
 // 想恢复只需把选择器加回模板，这里不必改。
+// limit 现在只是后端候选池深度（engine 取 limit + 备胎），不再是用户看到的名单长度——
+// 名单长度由综合排序分门槛决定，见 smartScoreFloor。
 const smartPoolForm = ref({ limit: 20, universe_limit: 10000, strategy: 'balanced' })
 const smartPoolLoading = ref(false)
 const smartPoolResult = ref<QuantSmartPoolResult | null>(null)
@@ -561,6 +570,8 @@ const smartTableRef = ref<any>()
 const selectedSmartRows = ref<QuantSmartPoolItem[]>([])
 // ①c 双确认筛选：只看结构因子+低位形态双确认的最高把握子集
 const smartDualOnly = ref(false)
+// 入选门槛由后端给（LYNX_SMART_SCORE_FLOOR），拿不到时按默认 90 显示。
+const smartScoreFloor = computed(() => Number(smartPoolResult.value?.score_floor ?? 90))
 const smartDisplayItems = computed(() => {
   const items = smartPoolResult.value?.items || []
   return smartDualOnly.value ? items.filter((it) => it.dual_confirm) : items
@@ -628,7 +639,7 @@ const smartProgressSteps = computed(() => {
     {
       index: '4',
       name: '输出候选池',
-      text: `筛出达标候选（上限 ${smartPoolForm.value.limit} 只，弱市达标少属正常）`,
+      text: `留下综合排序 ≥ ${smartScoreFloor.value} 分的标的（不限只数，弱市达标少属正常）`,
       status: smartStepStatus(86, 100)
     }
   ]
@@ -902,6 +913,7 @@ const pollSmartPoolTask = async (taskId: string) => {
         const parts = [] as string[]
         if (_res.position_gate?.note) parts.push(_res.position_gate.note)
         if (_exc) parts.push(`另有 ${_exc} 只候选命中「七不买」重度风险，已被风控剔除（宁可没得选也不给雷票）。`)
+        if (_res.score_floor_note) parts.push(_res.score_floor_note + '。')
         parts.push('评分阈值不随行情放宽、风控不给雷票——今日暂无达标推荐，建议观望或等市场转暖。')
         ElMessageBox.alert(parts.join('\n\n'), '今日无达标个股 · 暂无推荐', {
           confirmButtonText: '知道了', type: 'warning',
@@ -1232,6 +1244,23 @@ const openChart = async (row: any) => {
 
   :deep(.el-input-number) {
     width: 118px;
+  }
+
+  .score-floor-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border: 1px solid var(--el-color-success-light-5);
+    border-radius: 14px;
+    background: var(--el-color-success-light-9);
+    color: var(--el-color-success);
+    font-size: 13px;
+    cursor: help;
+
+    b {
+      font-size: 14px;
+    }
   }
 }
 

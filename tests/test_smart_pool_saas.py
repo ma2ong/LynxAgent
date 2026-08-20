@@ -10,8 +10,20 @@ import inspect
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 import app.lite_main as lite_main
 from quantcore.quant.factors import blend_intraday_score, intraday_strength_score
+
+
+@pytest.fixture(autouse=True)
+def _disable_score_floor(monkeypatch):
+    """默认关掉 90 分入选门槛（SMART_POOL_SCORE_FLOOR）。
+
+    本文件多数用例的假分数在 50~88，开着门槛会被整池滤空，考的就不是原来那条不变量了。
+    门槛本身由 test_score_floor_* 覆盖。
+    """
+    monkeypatch.setattr(lite_main, "SMART_POOL_SCORE_FLOOR", 0.0)
 
 
 def _fake_pool(scores: list[float]) -> dict[str, Any]:
@@ -489,3 +501,82 @@ def test_strong_day_keeps_everything(monkeypatch):
     kept = [_pick("60000%d" % i, s) for i, s in enumerate([95.0, 94.0, 92.5, 90.0, 88.5])]
     survivors, note = lite_main._drop_far_below_best(kept)
     assert len(survivors) == 5 and note == ""
+
+
+def _floor_pick(symbol: str, live_score: float) -> dict:
+    return {"symbol": symbol, "code": symbol, "name": f"票{symbol}",
+            "smart_score": 80.0, "score": 80.0, "pct_chg": 3.0,
+            "realtime_rank_score": live_score}
+
+
+def _finalize_with_floor(items: list[dict], floor: float = 90.0) -> dict:
+    data = {"items": items}
+    lite_main._merge_intraday_quality(
+        data, {"status": "waiting", "is_current": False, "signals": {}}
+    )
+    lite_main._finalize_intraday_quality(data, 20, score_floor=floor)
+    return data
+
+
+def test_score_floor_keeps_every_qualified_pick_without_count_cap(monkeypatch):
+    """够 90 分的全给，不再按名次砍到 20 只（2026-08-20 Allen 定的口径）。"""
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
+    data = _finalize_with_floor(
+        [_floor_pick(f"600{i:03d}", 99.0 - i * 0.2) for i in range(28)]
+    )
+
+    assert len(data["items"]) == 28 > lite_main.SMART_POOL_MAX_ITEMS
+    assert [item["rank"] for item in data["items"]] == list(range(1, 29))
+    assert data["score_floor"] == 90.0
+
+
+def test_score_floor_drops_everything_below_the_line(monkeypatch):
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
+    data = _finalize_with_floor(
+        [_floor_pick("600001", 93.5), _floor_pick("600002", 89.9), _floor_pick("600003", 70.0)]
+    )
+
+    assert [item["symbol"] for item in data["items"]] == ["600001"]
+    assert not data["score_floor_note"]
+
+
+def test_score_floor_falls_back_to_the_strongest_few_and_says_so(monkeypatch):
+    """一只都不达标时给当日最强的几只，但必须标明未达标——空名单是死路。"""
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
+    monkeypatch.setattr(lite_main, "SMART_POOL_FLOOR_FALLBACK", 5)
+    data = _finalize_with_floor([_floor_pick(f"600{i:03d}", 86.4 - i) for i in range(9)])
+
+    assert [item["symbol"] for item in data["items"]] == [f"600{i:03d}" for i in range(5)]
+    assert data["score_floor_fallback"] is True
+    assert data["score_floor_best"] == 86.4
+    assert "86.4" in data["score_floor_note"] and "未达标" in data["score_floor_note"]
+
+
+def test_score_floor_fallback_can_be_switched_off(monkeypatch):
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
+    monkeypatch.setattr(lite_main, "SMART_POOL_FLOOR_FALLBACK", 0)
+    data = _finalize_with_floor([_floor_pick("600001", 86.4), _floor_pick("600002", 80.0)])
+
+    assert data["items"] == []
+    assert data["score_floor_fallback"] is False
+    assert "86.4" in data["score_floor_note"] and "90" in data["score_floor_note"]
+
+
+def test_score_floor_fallback_stays_out_of_the_way_when_someone_qualifies(monkeypatch):
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
+    monkeypatch.setattr(lite_main, "SMART_POOL_FLOOR_FALLBACK", 5)
+    data = _finalize_with_floor([_floor_pick("600001", 93.0), _floor_pick("600002", 80.0)])
+
+    assert [item["symbol"] for item in data["items"]] == ["600001"]
+    assert data["score_floor_fallback"] is False
+    assert not data["score_floor_note"]
+
+
+def test_score_floor_zero_falls_back_to_the_old_rank_cap(monkeypatch):
+    """回滚开关：LYNX_SMART_SCORE_FLOOR=0 回到旧的 20 名上限。"""
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
+    data = _finalize_with_floor(
+        [_floor_pick(f"600{i:03d}", 99.0 - i * 0.2) for i in range(28)], floor=0.0
+    )
+
+    assert len(data["items"]) == lite_main.SMART_POOL_MAX_ITEMS

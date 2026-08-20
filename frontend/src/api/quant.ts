@@ -161,6 +161,10 @@ export interface QuantSmartPoolResult {
   ranking_basis?: string
   force_refreshed?: boolean
   requested_limit?: number
+  score_floor?: number
+  score_floor_best?: number
+  score_floor_note?: string
+  score_floor_fallback?: boolean
   ai_factor?: {
     status?: string
     pick_date?: string
@@ -448,6 +452,10 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     ranking_basis: raw?.ranking_basis,
     force_refreshed: raw?.force_refreshed,
     requested_limit: raw?.requested_limit,
+    score_floor: raw?.score_floor,
+    score_floor_best: raw?.score_floor_best,
+    score_floor_note: raw?.score_floor_note,
+    score_floor_fallback: raw?.score_floor_fallback,
     intraday_candidate_count: raw?.intraday_candidate_count,
     position_gate: raw?.position_gate,
     list_basis: raw?.list_basis,

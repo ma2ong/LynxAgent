@@ -9,18 +9,69 @@ Set-Location $root
 $log = Join-Path $root "backend.watchdog.log"
 $python = "C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe"
 $failureStamp = Join-Path $root "runtime\backend.unhealthy.since"
+$deployLock = Join-Path $root "runtime\backend.deploy.lock"
 
 if ((Test-Path $log) -and (Get-Item $log).Length -gt 10MB) {
     Move-Item -Force $log "$log.1"
 }
 
-function Test-BackendHealthy {
+# Stand down while a deploy owns the restart. Both this script and
+# build_and_serve.ps1 restart the backend; on 2026-08-19 they raced and left
+# three uvicorn processes fighting over port 8001. The two that lost could not
+# bind, and could not write backend.err.log either because the winner held the
+# redirect target open, so they died without leaving a trace and the watchdog
+# spawned another one every minute.
+#
+# A stale lock is ignored on purpose: if a deploy dies mid-flight the watchdog
+# must take over rather than stay disabled forever.
+function Test-DeployInProgress {
+    if (-not (Test-Path $deployLock)) { return $false }
     try {
-        $response = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/health" -TimeoutSec 15
-        return $response.status -eq "healthy"
+        $since = [DateTime]::Parse((Get-Content -Raw $deployLock)).ToUniversalTime()
     } catch {
+        Remove-Item $deployLock -Force -ErrorAction SilentlyContinue
         return $false
     }
+    if (((Get-Date).ToUniversalTime() - $since).TotalMinutes -gt 10) {
+        "[$(Get-Date -Format o)] deploy lock older than 10 min; ignoring it" |
+            Out-File -FilePath $log -Append -Encoding utf8
+        Remove-Item $deployLock -Force -ErrorAction SilentlyContinue
+        return $false
+    }
+    return $true
+}
+
+# Never leave more than one backend behind. Anything already running that is
+# not the healthy listener gets killed before a new one is started, otherwise
+# failed starts pile up across restarts.
+function Remove-StrayBackends {
+    $strays = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "*uvicorn*app.lite_main*" }
+    foreach ($p in $strays) {
+        cmd /c "taskkill /PID $($p.ProcessId) /T /F >nul 2>&1"
+        "[$(Get-Date -Format o)] killed stray backend PID $($p.ProcessId)" |
+            Out-File -FilePath $log -Append -Encoding utf8
+    }
+    if ($strays) { Start-Sleep -Seconds 2 }
+}
+
+# Two attempts before calling it unhealthy. The loop still stalls on heavy
+# aggregation (measured worst case ~11s on 2026-08-20), and a single timed-out
+# probe during one of those stalls is not an outage. A backend that is really
+# down fails both attempts instantly, so this costs nothing in the real case.
+function Test-BackendHealthy {
+    foreach ($attempt in 1..2) {
+        try {
+            $response = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/health" -TimeoutSec 15
+            if ($response.status -eq "healthy") { return $true }
+        } catch {}
+        if ($attempt -eq 1) { Start-Sleep -Seconds 5 }
+    }
+    return $false
+}
+
+if (Test-DeployInProgress) {
+    exit 0
 }
 
 $listening = Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue
@@ -70,6 +121,8 @@ if (Test-Path $maintenance) {
     & $python $maintenance 2>&1 |
         Out-File -FilePath $log -Append -Encoding utf8
 }
+
+Remove-StrayBackends
 
 "[$(Get-Date -Format o)] backend unavailable; starting uvicorn" |
     Out-File -FilePath $log -Append -Encoding utf8

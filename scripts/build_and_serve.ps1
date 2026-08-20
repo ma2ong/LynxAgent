@@ -104,44 +104,61 @@ $reason = if ($ForceRestart) {
 } else {
     "backend changed"
 }
-Write-Host "[2/3] Restarting backend ($reason)..."
-$connections = Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue
-if ($connections) {
-    # Kill the whole process tree (/T): the backend's ProcessPoolExecutor scan
-    # worker is a child process; killing only the backend PID orphans it, and
-    # orphans accumulate across restarts and eat memory. cmd /c + >nul swallows
-    # taskkill output so its stderr can't abort the script under -EA Stop.
-    $connections | Select-Object -ExpandProperty OwningProcess -Unique |
-        ForEach-Object { cmd /c "taskkill /PID $_ /T /F >nul 2>&1" }
-}
-
-for ($attempt = 0; $attempt -lt 20; $attempt++) {
-    if (-not (Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue)) {
-        break
-    }
-    Start-Sleep -Milliseconds 250
-}
+# Hold a lock across the restart so the watchdog stands down. Both scripts
+# restart the backend; on 2026-08-19 they raced and left three uvicorn
+# processes fighting over port 8001, two of which could neither bind nor write
+# their own error log, so they died silently and the watchdog kept spawning
+# more. try/finally because a failed deploy must still release the lock.
+$deployLock = Join-Path $root "runtime\backend.deploy.lock"
+New-Item -ItemType Directory -Force -Path (Split-Path $deployLock) | Out-Null
+[System.IO.File]::WriteAllText(
+    $deployLock,
+    (Get-Date).ToUniversalTime().ToString("o"),
+    (New-Object System.Text.UTF8Encoding($false))
+)
 
 try {
-    Start-ScheduledTask -TaskName "LynxAgentBackend"
-} catch {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\backend_watchdog.ps1")
-    if ($LASTEXITCODE -ne 0) {
-        throw "Backend watchdog failed (exit code $LASTEXITCODE)"
+    Write-Host "[2/3] Restarting backend ($reason)..."
+    $connections = Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue
+    if ($connections) {
+        # Kill the whole process tree (/T): the backend's ProcessPoolExecutor scan
+        # worker is a child process; killing only the backend PID orphans it, and
+        # orphans accumulate across restarts and eat memory. cmd /c + >nul swallows
+        # taskkill output so its stderr can't abort the script under -EA Stop.
+        $connections | Select-Object -ExpandProperty OwningProcess -Unique |
+            ForEach-Object { cmd /c "taskkill /PID $_ /T /F >nul 2>&1" }
     }
-}
 
-Write-Host "[3/3] Waiting for backend health..."
-$ready = $false
-for ($attempt = 0; $attempt -lt 30; $attempt++) {
-    Start-Sleep -Seconds 2
-    if (Test-BackendHealthy) {
-        $ready = $true
-        break
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        if (-not (Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue)) {
+            break
+        }
+        Start-Sleep -Milliseconds 250
     }
-}
-if (-not $ready) {
-    throw "Backend did not recover within 60 seconds; inspect backend.err.log"
+
+    try {
+        Start-ScheduledTask -TaskName "LynxAgentBackend"
+    } catch {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root "scripts\backend_watchdog.ps1")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Backend watchdog failed (exit code $LASTEXITCODE)"
+        }
+    }
+
+    Write-Host "[3/3] Waiting for backend health..."
+    $ready = $false
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        Start-Sleep -Seconds 2
+        if (Test-BackendHealthy) {
+            $ready = $true
+            break
+        }
+    }
+    if (-not $ready) {
+        throw "Backend did not recover within 60 seconds; inspect backend.err.log"
+    }
+} finally {
+    Remove-Item $deployLock -Force -ErrorAction SilentlyContinue
 }
 
 [System.IO.File]::WriteAllText(

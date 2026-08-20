@@ -745,12 +745,17 @@ async def lite_heatmap(level: str = "industry", industry: str = ""):
             snapshot = {}
 
     coverage: dict[str, Any] = {}
+    # 这两个聚合要遍历 5000+ 只股票，是纯 Python 循环，不放线程里会把事件循环焊死 ——
+    # 2026-08-20 实测 /api/health 最慢被拖到 13.4s，逼近 watchdog 的容忍上限，
+    # 再慢一点就会被判定为宕机而触发一次没必要的重启。取数早就走 _run_data_task 了，
+    # 唯独这一步是在循环里现算，属于「端点别同步现算」这条既有约束的漏网之处。
     if level == "industry":
         from quantcore.quant.heatmap import heatmap_coverage
-        items = build_heatmap_industry(snapshot, industry_map)
-        coverage = heatmap_coverage(snapshot, industry_map)
+        items = await _run_data_task(build_heatmap_industry, snapshot, industry_map, timeout=25.0)
+        coverage = await _run_data_task(heatmap_coverage, snapshot, industry_map, timeout=15.0)
     else:
-        items = build_heatmap_stocks(snapshot, industry_map, industry.strip())
+        items = await _run_data_task(
+            build_heatmap_stocks, snapshot, industry_map, industry.strip(), timeout=25.0)
     payload = {
         "success": True,
         "data": {"level": level, "industry": industry.strip() or None, "items": items,

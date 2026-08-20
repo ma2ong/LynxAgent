@@ -44,12 +44,19 @@ function Test-DeployInProgress {
 # Never leave more than one backend behind. Anything already running that is
 # not the healthy listener gets killed before a new one is started, otherwise
 # failed starts pile up across restarts.
+# Kill leftovers, but never a backend that is still coming up. The first cut of
+# this killed anything named uvicorn before starting a new one, which included
+# the instance started 60 seconds earlier that had not finished importing yet:
+# it was killed, replaced, killed again on the next tick, and the service never
+# got the chance to finish booting. Only processes older than the grace window
+# below are treated as strays.
 function Remove-StrayBackends {
+    $cutoff = (Get-Date).AddMinutes(-3)
     $strays = Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -like "*uvicorn*app.lite_main*" }
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "*uvicorn*app.lite_main*" -and $_.CreationDate -lt $cutoff }
     foreach ($p in $strays) {
         cmd /c "taskkill /PID $($p.ProcessId) /T /F >nul 2>&1"
-        "[$(Get-Date -Format o)] killed stray backend PID $($p.ProcessId)" |
+        "[$(Get-Date -Format o)] killed stray backend PID $($p.ProcessId) (started $($p.CreationDate))" |
             Out-File -FilePath $log -Append -Encoding utf8
     }
     if ($strays) { Start-Sleep -Seconds 2 }

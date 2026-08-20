@@ -136,6 +136,12 @@ try {
         Start-Sleep -Milliseconds 250
     }
 
+    # Release before handing the start over to the watchdog. The lock exists to
+    # stop it starting a rival instance while the old one is being killed; the
+    # start itself is delegated to that same script, so holding the lock here
+    # would leave nobody to bring the backend up.
+    Remove-Item $deployLock -Force -ErrorAction SilentlyContinue
+
     try {
         Start-ScheduledTask -TaskName "LynxAgentBackend"
     } catch {

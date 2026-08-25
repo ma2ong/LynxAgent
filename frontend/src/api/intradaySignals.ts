@@ -11,6 +11,8 @@ export interface IntradaySignalItem {
   score: number
   current_price: number
   signal_price: number
+  signal_pct_chg?: number | null
+  change_since_signal?: number | null
   pct_chg: number
   entry_low: number
   entry_high: number
@@ -48,6 +50,11 @@ export interface IntradaySignalEvent {
   status: IntradaySignalStatus
   triggered_at: string
   signal_price: number
+  /** 提醒那一刻的当日涨跌幅；current_price / pct_chg / change_since_signal 由后端按请求现取 */
+  signal_pct_chg?: number | null
+  current_price?: number | null
+  pct_chg?: number | null
+  change_since_signal?: number | null
   score: number
   item?: IntradaySignalItem
 }
@@ -66,6 +73,7 @@ export interface IntradaySignalPayload {
   scan_interval_sec: number
   score_floor?: number
   selection_note?: string
+  live_price_as_of?: string
   market?: {
     tone: string
     median_pct: number

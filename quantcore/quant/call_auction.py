@@ -52,6 +52,11 @@ HOT_TECH_INDUSTRY_KEYWORDS = (
 )
 
 
+# 推荐档位门槛：候选评分占当日最高分的比例。同时决定展示范围——达到强推荐档就上榜。
+TOP_TIER_RATIO = 0.9
+STRONG_TIER_RATIO = 0.78
+
+
 def _is_hot_tech(industry: str) -> bool:
     industry = industry or ""
     return any(kw in industry for kw in HOT_TECH_INDUSTRY_KEYWORDS)
@@ -62,11 +67,11 @@ def compute_call_auction(
     sectors_config: List[dict],
     *,
     buy_limit: int = 15,
-    # 展示只给前 3 名：18 天 / 314 条留痕实测，第 1-3 名当日涨停率 16.3%，第 4 名以后
-    # 只有 9.9%（收益上三档都无区分度，均值 -0.1%~0%）。砍尾部有据，但砍到只剩第 1 名
-    # 没有——第 1 名 16.7% 与第 2-3 名 16.1% 基本无差。
-    # 留痕仍按 buy_limit 记满，否则以后无法继续验证「砍掉第 4 名以后」是不是对的。
-    display_limit: int = 3,
+    # 展示口径按「档位」而不是按名次：凡是评分达到当日最高分 78%（即『强推荐』及以上）
+    # 的候选全部上榜，多少只给多少只。旧口径固定砍到前 3 名，强弱本来相近的第 4、5 名
+    # 被无差别丢掉；档位口径让"今天到底有几只够强"由盘面自己决定。
+    # 留痕仍按 buy_limit 记满，否则以后无法继续验证名次与涨停率的关系。
+    min_display: int = 3,
     industry_map: Dict[str, str] | None = None,
     hot_industries: Dict[str, float] | None = None,
     exclude_symbols: set | None = None,
@@ -318,16 +323,21 @@ def compute_call_auction(
     candidates.sort(key=lambda c: (c["score"], c.get("resonance", 0)), reverse=True)
 
     # 强弱排序可见化：名次(1=最强) + 综合强度(40~100，随名次递减) + 推荐档位。
-    top_candidates = candidates[:buy_limit]
-    if top_candidates:
-        scores = [c["score"] for c in top_candidates]
+    # 排名区间要同时盖住「留痕的 buy_limit 只」和「达到强推荐档的全部只数」。
+    best_score = candidates[0]["score"] if candidates else 0.0
+    strong_count = sum(1 for c in candidates if best_score and c["score"] / best_score >= STRONG_TIER_RATIO)
+    ranked = candidates[:max(buy_limit, strong_count)]
+    top_candidates = ranked[:buy_limit]
+    if ranked:
+        scores = [c["score"] for c in ranked]
         smax, smin = max(scores), min(scores)
         span = (smax - smin) or 1.0
-        for idx, c in enumerate(top_candidates):
+        for idx, c in enumerate(ranked):
             c["rank"] = idx + 1
             c["strength"] = round(40 + (c["score"] - smin) / span * 60)
             ratio = c["score"] / (smax or 1.0)
-            c["tier"] = "最强推荐" if ratio >= 0.9 else ("强推荐" if ratio >= 0.78 else "推荐")
+            c["tier"] = ("最强推荐" if ratio >= TOP_TIER_RATIO
+                         else ("强推荐" if ratio >= STRONG_TIER_RATIO else "推荐"))
 
     # 留痕当日竞价候选，供复盘页统计真实 T+N 胜率。record 由路由层控制：只在竞价
     # 冻结时刻记一次。旧行为是保温循环每 60 秒重算重记——盘中量比/成交额早已不是
@@ -342,9 +352,9 @@ def compute_call_auction(
         except Exception:
             pass
 
-    # 展示与留痕分开：页面只给前 display_limit 只（尾部涨停率腰斩，留着只会稀释注意力），
-    # 但上面已按 buy_limit 全量留痕，复盘样本继续积累。
-    shown = top_candidates[:max(1, display_limit)]
+    # 展示与留痕分开：页面给出全部「强推荐」及以上的候选（不限只数），
+    # 留痕仍按 buy_limit 记满，复盘样本继续积累。
+    shown = ranked[:strong_count] if strong_count else ranked[:max(1, min_display)]
 
     dynamic_hot = [
         {"name": name, "trend_pct": score}
@@ -355,7 +365,8 @@ def compute_call_auction(
         "overview": overview,
         "hot_sectors": hot_sectors[:8],
         "buy_candidates": shown,
-        "hidden_candidates": max(0, len(top_candidates) - len(shown)),
+        "hidden_candidates": max(0, len(candidates) - len(shown)),
+        "strong_tier_count": strong_count,
         # 留痕实测的真实命中率，直接端给前端——避免「上榜=会涨停」的误读
         "hit_stats": {
             "sessions": 18, "samples": 314,

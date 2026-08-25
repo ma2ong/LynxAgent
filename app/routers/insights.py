@@ -99,6 +99,53 @@ async def lite_sector_leaders():
     return payload
 
 
+async def _auction_with_live_prices(payload: dict[str, Any]) -> dict[str, Any]:
+    """给冻结的竞价候选补一份「打开页面这一刻」的价格。
+
+    名单和竞价口径的数字必须冻结（理由见下面的冻结逻辑），但卡片上只有 09:25 的竞价价时，
+    用户没法判断现在还追不追得上。live_* 是每次请求现算的旁注，绝不写回冻结存档，
+    也不参与排序和留痕。
+    """
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else None
+    candidates = (data or {}).get("buy_candidates") or []
+    if not data or not candidates:
+        return payload
+    try:
+        snapshot = await asyncio.to_thread(_load_realtime_quotes_snapshot, 15)
+    except Exception:  # noqa: BLE001 — 拿不到实时价就只显示竞价价，不影响名单
+        return payload
+    if not snapshot:
+        return payload
+
+    def _number(value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    enriched = []
+    for candidate in candidates:
+        row = dict(candidate)
+        quote = snapshot.get(str(row.get("code") or "").zfill(6)) or {}
+        price = _number(quote.get("price") or quote.get("close"))
+        if price > 0:
+            row["live_price"] = round(price, 2)
+            if quote.get("change_percent") is not None:
+                row["live_pct"] = round(_number(quote.get("change_percent")), 2)
+            auction_price = _number(row.get("price"))
+            if auction_price > 0:
+                row["change_since_auction"] = round((price / auction_price - 1) * 100, 2)
+        enriched.append(row)
+    return {
+        **payload,
+        "data": {
+            **data,
+            "buy_candidates": enriched,
+            "live_price_as_of": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M:%S"),
+        },
+    }
+
+
 @router.get("/api/lite/call-auction")
 async def lite_call_auction(
     window: int = 5,
@@ -118,7 +165,8 @@ async def lite_call_auction(
     top_k = max(3, min(top_k, 30))
     open_min = max(0.0, min(open_min, 10.0))
     open_max_ratio = max(0.2, min(open_max_ratio, 0.95))
-    cache_key = f"call-auction:v6:{window}:{top_k}:{open_min}:{open_max_ratio}"
+    # v7：展示口径从「固定前 3 名」改为「全部强推荐档」，旧的冻结存档必须失效重算。
+    cache_key = f"call-auction:v7:{window}:{top_k}:{open_min}:{open_max_ratio}"
 
     # —— 竞价结果日内冻结 ——
     # 症结：本页原来全天每 60 秒重算。09:26 之后快照里的量比/成交额是盘中/全日口径，
@@ -130,7 +178,7 @@ async def lite_call_auction(
 
     now_cn = datetime.now(ZoneInfo("Asia/Shanghai"))
     today = now_cn.strftime("%Y-%m-%d")
-    param_sig = f"{window}:{top_k}:{open_min}:{open_max_ratio}"
+    param_sig = f"v7:{window}:{top_k}:{open_min}:{open_max_ratio}"
     post_auction = now_cn.weekday() < 5 and (now_cn.hour * 60 + now_cn.minute) >= 9 * 60 + 26
     _FROZEN_STATE_KEY = "call_auction_frozen_v1"
 
@@ -149,11 +197,11 @@ async def lite_call_auction(
     if post_auction:
         frozen = await asyncio.to_thread(_load_frozen)
         if frozen:
-            return frozen
+            return await _auction_with_live_prices(frozen)
     else:
         cached = _cache_get(cache_key, 60)
         if cached:
-            return cached
+            return await _auction_with_live_prices(cached)
 
     snapshot = await asyncio.to_thread(_load_realtime_quotes_snapshot, 60)
     industry_map = await asyncio.to_thread(_load_industry_map)
@@ -230,7 +278,7 @@ async def lite_call_auction(
                 except Exception:
                     pass
             await asyncio.to_thread(_save_frozen)
-    return payload
+    return await _auction_with_live_prices(payload)
 
 
 @router.get("/api/lite/hot-news")

@@ -80,6 +80,7 @@
 
           <div class="price-row">
             <div>
+              <small class="price-tag">现价</small>
               <b>{{ price(item.current_price) }}</b>
               <span :class="item.pct_chg >= 0 ? 'up' : 'down'">{{ signed(item.pct_chg) }}</span>
             </div>
@@ -87,6 +88,22 @@
               <small>信号强度</small>
               <strong>{{ item.score }}</strong>
             </div>
+          </div>
+
+          <!-- 提醒价与现价必须同屏：卡片的大号数字是现价，不说清楚就会被当成「按这个价提醒的」。 -->
+          <div class="signal-price-row">
+            <span>
+              <small>提醒价</small>
+              <b>{{ price(item.signal_price) }}</b>
+              <em v-if="item.signal_pct_chg != null" :class="item.signal_pct_chg >= 0 ? 'up' : 'down'">
+                {{ signed(item.signal_pct_chg) }}
+              </em>
+              <em class="at">{{ timeOnly(item.triggered_at) }}</em>
+            </span>
+            <span v-if="item.change_since_signal != null" class="since">
+              提醒后
+              <b :class="item.change_since_signal >= 0 ? 'up' : 'down'">{{ signed(item.change_since_signal) }}</b>
+            </span>
           </div>
 
           <div v-if="item.signal_mode === 'close_review'" class="review-box">
@@ -148,6 +165,7 @@
           <p>
             今天上过榜的信号全部留在这里，早盘触发、现在已经掉出榜单的也看得到。
             只记录状态变化，不会因每轮扫描重复写入同一信号。
+            <b>提醒价</b>和它的涨幅冻结在触发那一刻；<b>现价</b>与<b>提醒后</b>按打开页面这一刻现取，收盘后即为到收盘的结果。
           </p>
         </div>
       </div>
@@ -165,11 +183,30 @@
             <a class="stock-link" @click="openStock(row.symbol)">{{ row.name }} <small>{{ row.symbol }}</small></a>
           </template>
         </el-table-column>
-        <el-table-column label="信号价" width="90">
-          <template #default="{ row }">{{ price(row.signal_price) }}</template>
+        <!-- 三列必须并排：只给提醒价，用户没法判断这条留痕后来兑现了没有。 -->
+        <el-table-column label="提醒价" width="104">
+          <template #default="{ row }">
+            <div class="cell-price">
+              <b>{{ price(row.signal_price) }}</b>
+              <em :class="toneOf(row.signal_pct_chg)">{{ signed(row.signal_pct_chg) }}</em>
+            </div>
+          </template>
         </el-table-column>
-        <el-table-column label="强度" width="76" prop="score" />
-        <el-table-column label="触发依据" min-width="320">
+        <el-table-column label="现价" width="104">
+          <template #default="{ row }">
+            <div class="cell-price">
+              <b>{{ price(row.current_price) }}</b>
+              <em :class="toneOf(row.pct_chg)">{{ signed(row.pct_chg) }}</em>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="提醒后" width="90">
+          <template #default="{ row }">
+            <b :class="toneOf(row.change_since_signal)">{{ signed(row.change_since_signal) }}</b>
+          </template>
+        </el-table-column>
+        <el-table-column label="强度" width="70" prop="score" />
+        <el-table-column label="触发依据" min-width="260">
           <template #default="{ row }">{{ row.item?.reasons?.join('；') || '状态变化' }}</template>
         </el-table-column>
       </el-table>
@@ -249,6 +286,11 @@ const toneClass = computed(() =>
 const signed = (value?: number | null) => {
   if (value === null || value === undefined || Number.isNaN(value)) return '—'
   return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+}
+// 涨绿跌红是海外习惯，这里跟 A 股一致：涨红跌绿。
+const toneOf = (value?: number | null) => {
+  if (value === null || value === undefined || Number.isNaN(value)) return 'flat'
+  return value > 0 ? 'up' : value < 0 ? 'down' : 'flat'
 }
 const percent = (value?: number | null) =>
   value === null || value === undefined ? '—' : `${(value * 100).toFixed(0)}%`
@@ -359,6 +401,23 @@ onUnmounted(() => {
   small { color: var(--el-text-color-placeholder); }
 }
 .industry { color: var(--el-text-color-secondary); font-size: 12px; }
+.signal-price-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  margin: -2px 0 8px; padding: 5px 8px; border-radius: 6px;
+  background: var(--el-fill-color-light); font-size: 12px;
+  color: var(--el-text-color-secondary);
+
+  small { margin-right: 4px; }
+  b { font-size: 13px; color: var(--el-text-color-primary); }
+  em { font-style: normal; margin-left: 5px; }
+  em.at { color: var(--el-text-color-placeholder); }
+  b.up, em.up { color: #dc2626; }
+  b.down, em.down { color: #059669; }
+  .since b { font-size: 13px; }
+}
+
+.price-tag { margin-right: 4px; color: var(--el-text-color-placeholder); }
+
 .price-row { align-items: center;
   > div:first-child { display: flex; align-items: baseline; gap: 8px; }
   b { font-size: 24px; }
@@ -400,7 +459,13 @@ onUnmounted(() => {
   background: var(--el-fill-color); font-size: 12px; text-align: center; }
 .up { color: #dc2626; }
 .down { color: #059669; }
+.flat { color: var(--el-text-color-secondary); }
 .warn { color: #d97706; }
+// 留痕表一格里放「价 + 幅」，两行比横排省宽度，也让三列价格对得整齐。
+.cell-price { display: flex; flex-direction: column; line-height: 1.35;
+  b { font-weight: 600; }
+  em { font-style: normal; font-size: 12px; }
+}
 @keyframes pulse { 50% { opacity: .45; } }
 
 @media (max-width: 900px) {

@@ -97,21 +97,27 @@
       </section>
     </div>
 
+    <!-- 同步是「按需触发」而不是常驻任务：没在跑的时候，用户要知道的是「数据齐不齐、
+         上次什么时候补的」，不是内部状态机的 idle 和 0/0。所以空闲态直接给结论。 -->
     <section class="panel" v-if="health">
       <div class="panel-title">同步进度</div>
-      <div class="sync-row">
-        <span>状态：{{ health.sync?.running ? '同步中' : '空闲' }}</span>
-        <span>阶段：{{ health.sync?.phase || '-' }}</span>
-        <span>进度：{{ health.sync?.done || 0 }}/{{ health.sync?.total || 0 }}</span>
-        <span>错误：{{ health.sync?.errors_count || 0 }}</span>
+      <template v-if="syncRunning">
+        <div class="sync-row">
+          <span>状态：<b>同步中</b></span>
+          <span>阶段：{{ syncPhaseText }}</span>
+          <span>进度：{{ health.sync?.done || 0 }}/{{ health.sync?.total || 0 }}</span>
+          <span v-if="health.sync?.errors_count">失败：{{ health.sync?.errors_count }} 只</span>
+        </div>
+        <el-progress :percentage="progress" :status="health.sync?.errors_count ? 'exception' : undefined" />
+      </template>
+      <div v-else class="sync-idle" :class="syncIdle.tone">
+        <b>{{ syncIdle.title }}</b>
+        <span>{{ syncIdle.hint }}</span>
       </div>
-      <el-progress
-        :percentage="progress"
-        :status="health.sync?.errors_count ? 'exception' : health.sync?.running ? undefined : 'success'"
-      />
       <div class="sync-meta">
-        <span>最近全量：{{ health.sync?.last_full_sync || '-' }}</span>
-        <span>最近增量：{{ health.sync?.last_incremental_sync || '-' }}</span>
+        <span>最近全量：{{ formatSyncTime(health.sync?.last_full_sync) }}</span>
+        <span>最近增量：{{ formatSyncTime(health.sync?.last_incremental_sync) }}</span>
+        <span v-if="!syncRunning && health.sync?.last_error" class="sync-err">上次报错：{{ health.sync?.last_error }}</span>
       </div>
     </section>
 
@@ -121,9 +127,12 @@
       <div class="panel-title">
         本地股票池
         <div class="pool-actions">
-          <el-input-number v-model="poolLimit" :min="1" :max="5000" size="small" controls-position="right" />
-          <el-button size="small" :loading="poolLoading" @click="loadPool">读取股票池</el-button>
+          <el-input-number v-model="poolLimit" :min="1" :max="health?.local?.meta_count || 6000" size="small" controls-position="right" />
+          <el-button size="small" :loading="poolLoading" @click="loadPool(false)">读取股票池</el-button>
         </div>
+      </div>
+      <div v-if="poolResult" class="pool-meta">
+        本地共 <b>{{ poolResult.total }}</b> 只，当前按成交额从高到低显示前 {{ poolResult.items.length }} 只（改上方数字可看更多）
       </div>
       <el-table v-if="poolResult?.items.length" :data="poolResult.items" size="small" stripe max-height="420">
         <el-table-column prop="symbol" label="代码" min-width="110" fixed />
@@ -131,7 +140,7 @@
         <el-table-column prop="market" label="市场" min-width="100" />
         <el-table-column prop="source" label="来源" min-width="120" />
       </el-table>
-      <el-empty v-else description="点「读取股票池」查看本地已入库的标的明细" :image-size="72" />
+      <el-empty v-else :description="poolLoading ? '正在读取本地股票池…' : '本地股票池为空，请先做一次历史日线重建'" :image-size="72" />
     </section>
   </div>
 </template>
@@ -159,15 +168,58 @@ const progress = computed(() => {
   return total > 0 ? Math.min(100, Math.round(done / total * 100)) : 0
 })
 
-async function loadPool() {
+const syncRunning = computed(() => !!health.value?.sync?.running)
+
+const PHASE_TEXT: Record<string, string> = {
+  idle: '未开始', starting: '启动中', meta: '拉取股票池',
+  snapshot: '当日快照', kline: '补日线', fundamental: '基本面标记', done: '已完成',
+}
+const syncPhaseText = computed(() => {
+  const phase = String(health.value?.sync?.phase || '')
+  return PHASE_TEXT[phase] || phase || '-'
+})
+
+// 时间戳后端给 ISO（2026-08-20T15:16:43），页面读起来别扭，换成「08-20 15:16」。
+function formatSyncTime(value?: string | null) {
+  if (!value) return '从未'
+  return String(value).replace('T', ' ').slice(5, 16)
+}
+
+// 空闲态结论：数据齐不齐由 health 决定，与同步线程是否跑过无关。
+const syncIdle = computed(() => {
+  const local = health.value?.local
+  const today = Number(local?.today_count || 0)
+  const meta = Number(local?.meta_count || 0)
+  const errors = Number(health.value?.sync?.errors_count || 0)
+  if (errors) {
+    return { tone: 'warn', title: `上次同步有 ${errors} 只失败`,
+      hint: '多为个股停牌或数据源限流，点「收盘后补日线」可重试这部分。' }
+  }
+  if (isIntradayMode.value) {
+    return { tone: 'ok', title: '盘中无需同步',
+      hint: `本地日 K 已覆盖 ${local?.latest_complete_date || '最近交易日'}，收盘后自动补当日日线。` }
+  }
+  if (meta > 0 && today >= meta) {
+    return { tone: 'ok', title: '本地行情已是最新，无需同步',
+      hint: `${local?.latest_complete_date || '最新交易日'} 已覆盖 ${today}/${meta} 只，选股和扫描直接走本地缓存。` }
+  }
+  if (meta > 0) {
+    return { tone: 'warn', title: `今日还差 ${meta - today} 只未补齐`,
+      hint: '收盘后点「收盘后补日线」补当日缺口；盘中不影响实时行情。' }
+  }
+  return { tone: 'warn', title: '本地还没有行情数据',
+    hint: '点「重建历史日线」做一次全量同步，之后每日只需增量补齐。' }
+})
+
+async function loadPool(silent = false) {
   poolLoading.value = true
   try {
     poolResult.value = await quantApi.pool(poolLimit.value)
     const n = poolResult.value?.items?.length || 0
-    if (n) ElMessage.success(`已读取股票池 ${n} 只`)
-    else ElMessage.warning('股票池为空，请检查数据源或稍后重试')
+    if (!n) ElMessage.warning('股票池为空，请检查数据源或稍后重试')
+    else if (!silent) ElMessage.success(`已读取股票池 ${n} 只`)
   } catch (error: any) {
-    ElMessage.error(error?.message || '读取股票池失败')
+    if (!silent) ElMessage.error(error?.message || '读取股票池失败')
   } finally {
     poolLoading.value = false
   }
@@ -212,7 +264,9 @@ async function sync(full: boolean) {
   }
 }
 
-onMounted(load)
+// 明细表原来要手点一次「读取股票池」才有内容，页面首屏就是一张空表——空表读起来像
+// 「本地没数据」，和上面 KPI 的 5525 自相矛盾。直接跟着页面一起加载。
+onMounted(() => { load(); loadPool(true) })
 onUnmounted(() => { if (timer) window.clearTimeout(timer) })
 </script>
 
@@ -244,6 +298,15 @@ onUnmounted(() => { if (timer) window.clearTimeout(timer) })
 .panel-title .pool-actions { display: flex; gap: 8px; align-items: center; margin-left: auto; }
 .panel-title { display: flex; align-items: center; gap: 10px; }
 .sync-meta { margin: 10px 0 0; }
+.sync-idle { display: flex; flex-direction: column; gap: 3px; border-radius: 8px; padding: 10px 12px; }
+.sync-idle b { font-size: 14px; }
+.sync-idle span { font-size: 13px; color: var(--el-text-color-secondary); }
+.sync-idle.ok { background: var(--el-color-success-light-9); }
+.sync-idle.ok b { color: var(--el-color-success); }
+.sync-idle.warn { background: var(--el-color-warning-light-9); }
+.sync-idle.warn b { color: var(--el-color-warning); }
+.sync-err { color: var(--el-color-danger); }
+.pool-meta { color: var(--el-text-color-secondary); font-size: 13px; margin-bottom: 8px; }
 @media (max-width: 1000px) {
   .page-head, .actions { align-items: stretch; flex-direction: column; }
   .kpi-grid, .grid { grid-template-columns: 1fr; }

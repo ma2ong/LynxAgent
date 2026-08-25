@@ -532,7 +532,17 @@ class IntradaySignalEngine:
             trigger_level = high20 if breakout20 else max(open_price, prev_close)
             invalidation = prior_invalidation or max(trigger_level * 0.992, price * 0.975)
             previous_signal_price = _f(prior_state.get("signal_price"))
-            signal_price = previous_signal_price if prior_status == status and previous_signal_price > 0 else price
+            same_signal = prior_status == status and previous_signal_price > 0
+            signal_price = previous_signal_price if same_signal else price
+            # 首次提醒那一刻的涨跌幅：和 signal_price 同进同退，卡片要能回答「提醒时它涨了
+            # 多少、现在涨了多少」。老状态（加这个字段之前触发的）没有就留 None，
+            # 前端隐藏 —— 宁可不显示，也不拿现在的涨幅冒充当时的。
+            prior_signal_pct = prior_state.get("signal_pct_chg")
+            signal_pct_chg = (
+                round(_f(prior_signal_pct), 2)
+                if same_signal and prior_signal_pct is not None
+                else (None if same_signal else round(pct, 2))
+            )
             first_seen = str(prior_state.get("first_seen") or as_of)
             triggered_at = str(prior_state.get("triggered_at") or as_of) if prior_status == status else as_of
             valid_minutes = 20 if status == "entry" else 10
@@ -584,6 +594,7 @@ class IntradaySignalEngine:
                 "score": score,
                 "current_price": round(price, 3),
                 "signal_price": round(signal_price, 3),
+                "signal_pct_chg": signal_pct_chg,
                 "pct_chg": round(pct, 2),
                 "entry_low": round(signal_price * 0.997, 3),
                 "entry_high": round(signal_price * 1.006, 3),

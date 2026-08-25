@@ -1455,9 +1455,18 @@ class QuantEngine:
         return result
 
     async def stock_pool(self, db=None, limit: int = 200) -> Dict[str, object]:
+        # _scan_pool 在 limit 小于全市场时会返回 "local-store-by-liquidity"（按成交额取头部），
+        # 原来这里只认死字符串 "local-store"，于是 limit<全市场 时全都绕去远程数据源。
         local_items, source = self._scan_pool(max(1, min(limit, 6000)))
-        if source == "local-store":
-            return {"source": source, "total": len(local_items), "items": local_items[:limit]}
+        if source.startswith("local-store"):
+            # total 报本地股票池的真实规模，不是这次截断后的条数——否则页面上的
+            # 「本地共 N 只」会跟数据中心 KPI 的 5525 对不上。
+            try:
+                total = get_local_store().symbol_count() or len(local_items)
+            except Exception as exc:  # noqa: BLE001 — 只是计数失败，明细照给
+                logger.warning("stock_pool symbol_count failed: %s", exc)
+                total = len(local_items)
+            return {"source": source, "total": total, "items": local_items[:limit]}
         return await self.datalake.get_stock_pool(db=db, limit=limit)
 
     async def sync_stock_pool(self, db=None, limit: int = 5000) -> Dict[str, object]:

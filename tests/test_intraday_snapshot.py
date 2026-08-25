@@ -86,3 +86,57 @@ def test_capture_is_idempotent_within_a_day(monkeypatch, tmp_path):
     br._capture_intraday_snapshot(_snap("2026/08/05 14:32:00"))
     assert store.intraday_snapshot_dates() == ["2026-08-05"]
     assert store._conn().execute("SELECT COUNT(*) FROM intraday_snapshots").fetchone()[0] == 5
+
+
+def test_optional_refresh_is_deferred_under_memory_pressure(monkeypatch):
+    monkeypatch.setenv("BOARD_REFRESH_MIN_AVAILABLE_MB", "3072")
+
+    class _Memory:
+        available = 2048 * 1024 * 1024
+
+    monkeypatch.setattr(br.psutil, "virtual_memory", lambda: _Memory())
+    assert br._has_memory_budget("risk-scan") is False
+
+
+def test_panel_batch_isolates_each_symbol(monkeypatch):
+    calls = []
+
+    class _Process:
+        exitcode = 0
+
+        def __init__(self, *, target, args):
+            calls.append((target, args))
+
+        def start(self):
+            pass
+
+        def join(self, _timeout):
+            pass
+
+        def is_alive(self):
+            return False
+
+        def close(self):
+            pass
+
+    class _Context:
+        Process = _Process
+
+    monkeypatch.setattr(br.multiprocessing, "get_context", lambda _method: _Context())
+    br._run_panel_batch_isolated("2026-08-24", ["600001", "600002"])
+
+    assert [args for _target, args in calls] == [
+        ("2026-08-24", ["600001"]),
+        ("2026-08-24", ["600002"]),
+    ]
+
+
+def test_panel_worker_can_spawn_with_an_isolated_database(monkeypatch, tmp_path):
+    monkeypatch.setenv("QUANT_DATA_DB_PATH", str(tmp_path / "worker.sqlite"))
+    context = br.multiprocessing.get_context("spawn")
+    process = context.Process(target=br._panel_batch_worker, args=("2099-01-01", []))
+    process.start()
+    process.join(30)
+    assert process.is_alive() is False
+    assert process.exitcode == 0
+    process.close()

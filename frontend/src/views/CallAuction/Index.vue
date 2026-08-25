@@ -112,14 +112,13 @@
         <!-- 竞价买入推荐 -->
         <section class="panel">
           <div class="panel-title">竞价买入候选 <em>近段强势板块 · 由强到弱排序，点击进深研</em></div>
-          <!-- 只留前 3 名：留痕实测尾部涨停率腰斩。同时把真实命中率写出来——
-               上榜不等于会涨停，最强档也只有六分之一。 -->
+          <!-- 上榜口径按档位不按名次：够「强推荐」就给，不限只数。
+               但真实命中率照写——上榜不等于会涨停，最强档也只有六分之一。 -->
           <div v-if="data.hit_stats" class="hit-note">
-            <b>只保留前 3 名。</b>
+            <b>凡达到「强推荐」档的全部上榜，不限只数（今日 {{ data.buy_candidates.length }} 只）。</b>
             {{ data.hit_stats.sessions }} 个交易日 / {{ data.hit_stats.samples }} 条留痕实测：
             前 3 名当日涨停率 <b class="hit-good">{{ data.hit_stats.top3_limit_up_rate }}%</b>，
-            第 4 名以后仅 {{ data.hit_stats.rest_limit_up_rate }}%（已不再展示<span
-              v-if="data.hidden_candidates">，今日隐藏 {{ data.hidden_candidates }} 只</span>）。
+            第 4 名以后 {{ data.hit_stats.rest_limit_up_rate }}%——名次越靠后越要减仓位。
             <span class="hit-warn">
               上榜 ≠ 会涨停：最强档也是约 6 次中 1 次，开盘买入到收盘的中位收益仅
               +{{ data.hit_stats.top3_intraday_median_pct }}%，收益全靠那 1/6。
@@ -144,8 +143,17 @@
               </span>
             </div>
             <div class="cc-r">
-              <div class="cc-price">{{ c.price?.toFixed(2) }}</div>
+              <!-- 竞价价是 09:25 冻结的提醒价；现价每次打开页面现取，两个一起才知道还追不追得上。 -->
+              <div class="cc-price"><small>竞价</small>{{ c.price?.toFixed(2) }}</div>
               <div class="cc-pct up">+{{ c.open_pct }}%</div>
+              <div v-if="c.live_price != null" class="cc-live">
+                <span>现 <b>{{ c.live_price.toFixed(2) }}</b>
+                  <em v-if="c.live_pct != null" :class="c.live_pct >= 0 ? 'up' : 'down'">{{ signedPct(c.live_pct) }}</em>
+                </span>
+                <span v-if="c.change_since_auction != null" class="cc-since">
+                  较竞价 <b :class="c.change_since_auction >= 0 ? 'up' : 'down'">{{ signedPct(c.change_since_auction) }}</b>
+                </span>
+              </div>
             </div>
           </button>
           <p v-if="data.buy_candidates.length" class="cand-hint">
@@ -185,6 +193,7 @@ const DIST_CLASS: Record<string, string> = {
 }
 const distClass = (label: string) => DIST_CLASS[label] || 'd-flat'
 const rankClass = (r: number) => (r === 1 ? 'r1' : r <= 3 ? 'r23' : 'rn')
+const signedPct = (value: number) => `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
 const PAT_CLASS: Record<string, string> = {
   accumulation: 'p-acc', distribution: 'p-dist', shakeout: 'p-shake', divergence: 'p-div', neutral: 'p-neu',
 }
@@ -317,7 +326,16 @@ onMounted(load)
 }
 .cc-r { flex: none; text-align: right; }
 .cc-price { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cc-price small { font-size: 11px; font-weight: 500; color: var(--el-text-color-placeholder); margin-right: 4px; }
 .cc-pct { font-size: 13px; font-weight: 600; }
+.cc-live {
+  margin-top: 3px; font-size: 12px; color: var(--el-text-color-secondary);
+  display: flex; flex-direction: column; gap: 1px; align-items: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+.cc-live b { font-weight: 700; }
+.cc-live em { font-style: normal; margin-left: 4px; }
+.cc-since { font-size: 11px; }
 
 .cand-hint { margin: 10px 2px 0; font-size: 11px; line-height: 1.7; color: var(--el-text-color-secondary);
   .pat-tag { margin: 0 2px; vertical-align: middle; } }

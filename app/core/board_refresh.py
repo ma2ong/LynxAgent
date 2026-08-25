@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import multiprocessing
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+import psutil
 
 logger = logging.getLogger("board_refresh")
 
@@ -32,6 +35,21 @@ _TZ = ZoneInfo("Asia/Shanghai")
 # 盘中快照落库时点。选 14:30：全天成交额已走掉约九成，量能推算误差小；
 # 又留出 30 分钟，让「盘中生成名单」这条路真的还来得及下单。
 _SNAPSHOT_CAPTURE_HHMM = os.getenv("INTRADAY_SNAPSHOT_AT", "14:30")
+
+
+def _has_memory_budget(job: str) -> bool:
+    """Keep optional cache warming from pushing Windows into pagefile thrash."""
+    minimum_mb = float(os.getenv("BOARD_REFRESH_MIN_AVAILABLE_MB", "3072"))
+    available_mb = psutil.virtual_memory().available / (1024 * 1024)
+    if available_mb >= minimum_mb:
+        return True
+    logger.warning(
+        "board refresh [%s] deferred: available memory %.0f MB < %.0f MB",
+        job,
+        available_mb,
+        minimum_mb,
+    )
+    return False
 
 
 def _latest_bar_is_stale(store) -> bool:
@@ -169,6 +187,31 @@ def _capture_intraday_snapshot(snapshot: dict) -> None:
     logger.info("intraday snapshot captured: %s %s, %d symbols", snap_date, snap_time, written)
 
 
+def _panel_batch_worker(date: str, symbols: list[str]) -> None:
+    """Run one small scoring chunk in a disposable process."""
+    from quantcore.quant.investor_panel import run_panel_batch
+
+    run_panel_batch(date, symbols)
+
+
+def _run_panel_batch_isolated(date: str, symbols: list[str]) -> None:
+    """Score symbols out of process so AKShare/Pandas memory dies with the worker."""
+    context = multiprocessing.get_context("spawn")
+    timeout = float(os.getenv("BOARD_PANEL_SYMBOL_TIMEOUT", "180"))
+    for symbol in symbols:
+        process = context.Process(target=_panel_batch_worker, args=(date, [symbol]))
+        process.start()
+        process.join(timeout)
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+            raise TimeoutError(f"panel scoring timed out: {symbol}")
+        exit_code = process.exitcode
+        process.close()
+        if exit_code != 0:
+            raise RuntimeError(f"panel scoring failed for {symbol}: exit {exit_code}")
+
+
 def _run_daily_panel_batch() -> None:
     """每交易日给当日留痕名单补一次五方判读，落进 panel_scores。
 
@@ -182,7 +225,6 @@ def _run_daily_panel_batch() -> None:
     """
     global _panel_batch_date
 
-    from quantcore.quant.investor_panel import run_panel_batch
     from quantcore.quant.local_store import get_local_store
 
     today = datetime.now(_TZ).strftime("%Y-%m-%d")
@@ -192,8 +234,13 @@ def _run_daily_panel_batch() -> None:
     symbols = store.load_picks_symbols(today, "smart", 20)
     if not symbols:
         return  # 今天还没留痕，下一轮再来
+    scored = set(store.load_panel_scores(today, symbols))
+    pending = [symbol for symbol in symbols if symbol not in scored]
+    if pending:
+        _run_panel_batch_isolated(today, pending)
+    before = len(scored)
+    done = max(0, len(store.load_panel_scores(today, symbols)) - before)
     _panel_batch_date = today
-    done = run_panel_batch(today, symbols)
     logger.warning("五方判读留痕：%s 当日名单 %d 只，新打分 %d 只", today, len(symbols), done)
 
 
@@ -221,23 +268,35 @@ async def _refresh_cycle() -> None:
     await _safe("intraday-snapshot", asyncio.to_thread(_capture_intraday_snapshot, snapshot))
 
     # 1.6) 五方判读留痕：每交易日给当日名单补一次分，供日后回答它有没有预测力。
-    await _safe("panel-batch", asyncio.to_thread(_run_daily_panel_batch))
+    # AKShare 的财务表会让 Pandas 堆内存；使用一次性子进程后，单只完成即彻底回收。
+    if _has_memory_budget("panel-batch"):
+        await _safe("panel-batch", asyncio.to_thread(_run_daily_panel_batch))
 
     # 2) 风险扫描（breakdown 破位广度 + 全市场卖出信号）→ 暖 _RISK_SCAN_CACHE
+    if not _has_memory_budget("risk-scan"):
+        return
     await _safe("risk-scan", asyncio.to_thread(q._risk_scan_cached, snapshot))
 
     # 3) 涨停热点（当日）→ 暖 lite_insights_cache（端点自身负责落缓存）
+    if not _has_memory_budget("limit-up"):
+        return
     await _safe("limit-up", ins.lite_limit_up_distribution())
 
     # 4) 集合竞价 + 行业热力 → 首页这两块原本是冷读（竞价端点前端给到 30s 超时），
     #    一起预热，首页才真的「进入即见全貌」而不是进去等。
+    if not _has_memory_budget("call-auction"):
+        return
     await _safe("call-auction", ins.lite_call_auction())
+    if not _has_memory_budget("heatmap"):
+        return
     await _safe("heatmap", ins.lite_heatmap("industry"))
 
     # 5) 一键智选的结构因子基于完整日 K，每个交易日只需预热一次。
     #    盘中实时价与时机层由用户请求刷新；后台每 60 秒进入推荐锁会让用户点击无谓排队。
     today = datetime.now(_TZ).strftime("%Y-%m-%d")
     if _in_active_window() and _smart_pool_warm_date != today and not syncing:
+        if not _has_memory_budget("smart-pool"):
+            return
         try:
             # 参数必须与端点默认值一致：cache_key 含 limit 与 universe，
             # 预热用 10/5000 而用户默认请求 20/10000 会全部未命中，等于没预热。

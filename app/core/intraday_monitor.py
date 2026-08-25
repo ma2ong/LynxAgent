@@ -454,6 +454,64 @@ async def scan_once(force: bool = False) -> dict[str, Any]:
             return _latest
 
 
+def _with_live_prices(
+    items: list[dict[str, Any]],
+    snapshot: dict[str, dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """把每张卡片的 current_price / pct_chg 刷成打开页面这一刻的价。
+
+    归档条目（今天早些时候触发、区间已过期）的价格原本冻结在触发那一刻，卡片上却是
+    最显眼的大号数字，看着像现价——13:16 提醒 25.19，两小时后打开页面还是 25.19。
+    signal_price / signal_pct_chg 保持首次提醒值不动，两者一起才能回答
+    「提醒时多少、现在多少、提醒后走了多少」。
+    """
+    if not snapshot:
+        return items
+    refreshed = []
+    for item in items:
+        row = dict(item)
+        quote = snapshot.get(str(row.get("symbol") or "").zfill(6)) or {}
+        try:
+            price = float(quote.get("price") or quote.get("close") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        if price > 0:
+            row["current_price"] = round(price, 3)
+            raw_pct = quote.get("change_percent")
+            raw_pct = quote.get("pct_chg") if raw_pct is None else raw_pct
+            try:
+                if raw_pct is not None:
+                    row["pct_chg"] = round(float(raw_pct), 2)
+            except (TypeError, ValueError):
+                pass
+            signal_price = float(row.get("signal_price") or 0)
+            if signal_price > 0:
+                row["change_since_signal"] = round((price / signal_price - 1) * 100, 2)
+        refreshed.append(row)
+    return refreshed
+
+
+def _events_with_live_prices(
+    events: list[dict[str, Any]],
+    snapshot: dict[str, dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """给留痕行补齐「提醒时涨幅 / 现价 / 提醒后涨跌」。
+
+    事件本身是那一刻的冻结快照：signal_price 是提醒价，item.signal_pct_chg 是提醒时的
+    当日涨幅，两个都不能动。缺的是「现在怎么样了」——现价、现在的涨幅、以及提醒后
+    走了多少，这三个按请求现取，与卡片走同一份快照，口径一致。
+    """
+    rows = []
+    for event in events:
+        row = dict(event)
+        item = row.get("item") if isinstance(row.get("item"), dict) else {}
+        if row.get("signal_pct_chg") is None:
+            signal_pct = item.get("signal_pct_chg")
+            row["signal_pct_chg"] = item.get("pct_chg") if signal_pct is None else signal_pct
+        rows.append(row)
+    return _with_live_prices(rows, snapshot)
+
+
 async def payload(
     limit: int = 200,
     history_limit: int = 100,
@@ -463,15 +521,28 @@ async def payload(
         await scan_once(force=True)
     # limit 只是安全上限：条数由信号强度门槛决定，不再按名次截断。
     current = _trim_recommendations(dict(_latest), max(1, min(limit, 200)))
+    # 现价按请求刷新：扫描 15 秒一轮只覆盖活信号，归档条目的价格会一直停在触发那一刻。
+    try:
+        snapshot = await _run_data_task(
+            _load_realtime_quotes_snapshot, 15, timeout=8.0
+        ) or {}
+    except Exception:  # noqa: BLE001 — 拿不到快照就沿用扫描时的价，不影响信号本身
+        snapshot = {}
+    if snapshot:
+        current["items"] = _with_live_prices(current.get("items") or [], snapshot)
+        current["live_price_as_of"] = datetime.now(_TZ).isoformat(timespec="seconds")
     # 留痕 = 今天上过榜的每一次状态变化，与「此刻榜上有谁」无关。
     # 原来的写法是「最新 N 条事件 ∩ 当前榜单」，两头都错：一天两三千条状态变化，最新
     # 100 条全是低分票的 watch/invalid 抖动；再与当前榜单取交集，上午触发、现在已经掉
     # 出榜单的票就一条不剩 —— 而那恰恰是用户回头最想看的。改成按展示门槛取当日全量。
-    current["recent_events"] = await asyncio.to_thread(
-        get_local_store().load_intraday_signal_events,
-        None,
-        max(1, min(history_limit, 500)),
-        score_floor(),
+    current["recent_events"] = _events_with_live_prices(
+        await asyncio.to_thread(
+            get_local_store().load_intraday_signal_events,
+            None,
+            max(1, min(history_limit, 500)),
+            score_floor(),
+        ),
+        snapshot,
     )
     current["scan_interval_sec"] = int(scan_interval_seconds())
     return current

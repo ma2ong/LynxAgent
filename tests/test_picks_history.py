@@ -310,3 +310,14 @@ def test_first_seen_skips_before_open(store, pick_clock):
     pick_clock["now"] = pick_clock["now"].replace(hour=9, minute=40)
     store.record_first_seen("smart", [{"symbol": "600001", "close": 10.6}])
     assert store.load_first_seen("smart")["600001"]["first_price"] == 10.6
+
+
+def test_first_seen_write_gives_up_instead_of_blocking(store, pick_clock, monkeypatch):
+    """写锁被长任务占住时直接放弃这一轮，不能拖住调用方（名单请求的热路径）。"""
+    import sqlite3
+
+    def locked(*a, **kw):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(sqlite3, "connect", locked)
+    assert store.record_first_seen("smart", [{"symbol": "600001", "close": 10.0}]) == 0

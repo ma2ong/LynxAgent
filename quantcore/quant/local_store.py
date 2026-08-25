@@ -899,6 +899,7 @@ class LocalQuantStore:
         与 record_picks 的「当日只留一份」不同：这里要覆盖盘中每一只新进榜的票，
         否则 13:00 才上榜的票没有首推价可显示。同样不在开盘前记——盘前拿到的是昨收。
         """
+        import sqlite3
         from datetime import datetime as _datetime
         now = _now_cn()
         if (now.hour * 60 + now.minute) < 9 * 60 + 25:
@@ -915,11 +916,21 @@ class LocalQuantStore:
             rows.append((day, pool, symbol, price, at))
         if not rows:
             return 0
-        conn = self._conn()
-        with conn:
-            conn.executemany(
-                "INSERT OR IGNORE INTO pick_first_seen"
-                "(pick_date,pool,symbol,first_price,first_at) VALUES(?,?,?,?,?)", rows)
+        # 独立短超时连接，不走 self._conn()（那条是 30 秒超时的共享连接）。
+        # 这个写发生在每次推荐名单请求的热路径上，而回放这类长任务会长时间占着写锁：
+        # 2026-08-25 实测撞上 "database is locked"。首推价只是展示项，宁可这一轮没记上、
+        # 下一轮补记，也不能让用户的名单请求卡在等锁上。
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=2.0)
+            try:
+                with conn:
+                    conn.executemany(
+                        "INSERT OR IGNORE INTO pick_first_seen"
+                        "(pick_date,pool,symbol,first_price,first_at) VALUES(?,?,?,?,?)", rows)
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            return 0
         return len(rows)
 
     def load_first_seen(self, pool: str, pick_date: Optional[str] = None) -> Dict[str, Dict[str, object]]:

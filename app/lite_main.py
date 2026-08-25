@@ -1659,7 +1659,12 @@ def _attach_first_seen(items: list[dict[str, Any]]) -> None:
     from quantcore.quant.local_store import get_local_store
 
     store = get_local_store()
-    store.record_first_seen("smart", items)
+    # 记不上就算了（典型是回放占着写锁），已经记过的票照样要显示出来——
+    # 把写失败连读一起吞掉，等于整块功能在长任务期间全黑。
+    try:
+        store.record_first_seen("smart", items)
+    except Exception as exc:  # noqa: BLE001
+        print(f"record first_seen skipped: {exc}")
     seen = store.load_first_seen("smart")
     for item in items:
         symbol = str(item.get("symbol") or item.get("code") or "").zfill(6)

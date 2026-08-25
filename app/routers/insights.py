@@ -767,11 +767,49 @@ def _load_period_returns() -> dict[str, dict[str, float]]:
     return out
 
 
+def _prev_session_amount_yi(industry: str = "") -> float:
+    """上一个交易日的全日成交额（亿），作为「较昨日」的分母。
+
+    用本地日线的**倒数第二个**真实交易日：最后一个可能就是今天、且盘中还没走完，
+    拿它当昨日基准会得出恒等于 1 的比值。
+    """
+    from quantcore.quant.local_store import get_local_store
+
+    def num(value) -> float:
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    store = get_local_store()
+    conn = store._conn()
+    dates = [r[0] for r in conn.execute(
+        "SELECT DISTINCT date FROM daily_kline WHERE amount > 0 ORDER BY date DESC LIMIT 2")]
+    if len(dates) < 2:
+        return 0.0
+    prev = dates[1]
+    if industry:
+        syms = {s for s, name in _load_industry_map().items() if name == industry}
+        if not syms:
+            return 0.0
+        total = sum(num(r[1]) for r in conn.execute(
+            "SELECT symbol, amount FROM daily_kline WHERE date = ? AND amount > 0", (prev,))
+            if str(r[0]) in syms)
+    else:
+        row = conn.execute(
+            "SELECT SUM(amount) FROM daily_kline WHERE date = ? AND amount > 0", (prev,)).fetchone()
+        total = num(row[0]) if row else 0.0
+    return round(total / 1e8, 2)
+
+
 @router.get("/api/lite/heatmap")
-async def lite_heatmap(level: str = "industry", industry: str = ""):
+async def lite_heatmap(level: str = "industry", industry: str = "", nested: bool = False):
     """行业/个股热力图：面积=A股市值（亿，成交额兜底），颜色=当日涨跌幅。60s 缓存。
 
     市值口径见 quantcore/quant/heatmap.py：只计 A 股股本，A+H 公司会被低估。
+
+    nested=1 时每个行业块带上成分股（两层 treemap），并附市场概览。默认关着：
+    盘面总览页只要 128 行的行业聚合，给它塞 5000 只个股是白白多传三倍。
 
     快照不可用（收盘后/断网）时退回本地日线最新 bar（同收盘快照教训：不读未同步的当日）。
     """
@@ -781,7 +819,7 @@ async def lite_heatmap(level: str = "industry", industry: str = ""):
         raise HTTPException(status_code=400, detail="level 必须是 industry/stock")
     if level == "stock" and not industry.strip():
         raise HTTPException(status_code=400, detail="level=stock 需要 industry 参数")
-    cache_key = f"heatmap:{level}:{industry}"
+    cache_key = f"heatmap:{level}:{industry}:{int(nested)}"
     cached = _cache_get(cache_key, 60)
     if cached:
         return cached
@@ -817,19 +855,30 @@ async def lite_heatmap(level: str = "industry", industry: str = ""):
     # 多周期涨跌（5日/20日）：本地日线现算，与实时快照的当日涨跌一起下发，
     # 前端切周期只换颜色不重新取数。取不到就退化成只有当日一档，不阻断热力图。
     returns = await _run_data_task(_load_period_returns, timeout=25.0) or {}
+    overview: dict[str, Any] = {}
     if level == "industry":
-        from quantcore.quant.heatmap import heatmap_coverage
-        items = await _run_data_task(
-            build_heatmap_industry, snapshot, industry_map, returns, timeout=25.0)
+        from quantcore.quant.heatmap import (
+            build_heatmap_nested, heatmap_coverage, heatmap_overview,
+        )
+        builder = build_heatmap_nested if nested else build_heatmap_industry
+        items = await _run_data_task(builder, snapshot, industry_map, returns, timeout=30.0)
         coverage = await _run_data_task(heatmap_coverage, snapshot, industry_map, timeout=15.0)
+        if nested:
+            prev_yi = await _run_data_task(_prev_session_amount_yi, timeout=15.0) or 0.0
+            overview = await _run_data_task(
+                heatmap_overview, snapshot, industry_map, "", prev_yi, timeout=15.0)
     else:
+        from quantcore.quant.heatmap import heatmap_overview
         items = await _run_data_task(
             build_heatmap_stocks, snapshot, industry_map, industry.strip(), returns, timeout=25.0)
+        prev_yi = await _run_data_task(_prev_session_amount_yi, industry.strip(), timeout=15.0) or 0.0
+        overview = await _run_data_task(
+            heatmap_overview, snapshot, industry_map, industry.strip(), prev_yi, timeout=15.0)
     payload = {
         "success": True,
         "data": {"level": level, "industry": industry.strip() or None, "items": items,
                  "source": source, "mapped": len(industry_map), "coverage": coverage,
-                 "periods_ready": bool(returns),
+                 "periods_ready": bool(returns), "nested": bool(nested), "overview": overview,
                  "updated_at": datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S")},
     }
     if items:

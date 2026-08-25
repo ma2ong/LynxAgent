@@ -23,16 +23,35 @@
         <el-button size="small" :loading="loading" @click="load(currentIndustry)">刷新</el-button>
       </div>
     </div>
+
+    <!-- 概览随视图联动：下钻进某个行业后，这一行统计的就是该行业 -->
+    <div v-if="ov" class="overview">
+      <b>{{ currentIndustry || '全市场' }}</b>
+      <span class="up">涨 {{ ov.up }}</span>
+      <span class="down">跌 {{ ov.down }}</span>
+      <span class="muted">平 {{ ov.flat }}</span>
+      <span class="sep">·</span>
+      <span>成交 {{ ov.amount_yi }} 亿</span>
+      <span v-if="ov.amount_vs_prev != null" :class="ov.amount_vs_prev >= 1 ? 'up' : 'down'">
+        较昨日全天 {{ (ov.amount_vs_prev * 100).toFixed(0) }}%
+      </span>
+      <span v-if="ov.amount_vs_prev != null" class="muted">（盘中未走完时天然小于 100%）</span>
+    </div>
+
     <div v-loading="loading" class="chart-wrap">
       <div ref="chartEl" class="chart" />
       <el-empty v-if="!loading && !items.length" description="暂无数据：请先在数据中心同步行情" />
     </div>
-    <p class="hint">{{ currentIndustry ? '点击个股跳转个股深研' : '点击行业下钻查看成分股' }}</p>
+    <p class="hint">
+      {{ currentIndustry
+        ? '点击个股跳转个股深研'
+        : '每个行业块里直接铺开成分股（每行业最多 60 只）；点个股进深研，点行业标题只看该行业' }}
+    </p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { nextTick, onActivated, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref } from 'vue'
 defineOptions({ name: 'HeatmapPage' })  // keep-alive 保活标识，勿改
 import { useRouter } from 'vue-router'
 import { echarts, type ECharts } from '@/utils/echarts'
@@ -46,6 +65,8 @@ const items = ref<HeatmapItem[]>([])
 const currentIndustry = ref('')
 let chart: ECharts | null = null
 
+const ov = computed(() => data.value?.overview || null)
+
 // 每档周期的饱和刻度必须各不相同：20 日涨跌若也用 ±4% 封顶，
 // 但凡走出趋势的板块全是纯红，热力图退化成一块红布，区分不出强弱。
 const PERIODS = [
@@ -58,15 +79,32 @@ const periodCap = () => PERIODS.find(p => p.key === period.value)?.cap || 4
 const valOf = (it: HeatmapItem) => it[period.value] as number | null | undefined
 
 // A股红涨绿跌：按当前周期的刻度线性插值；无数据给中性灰，不拿 0 冒充平盘
-const flat = [58, 63, 75]
+const flatRgb = [58, 63, 75]
 const pctColor = (pct: number | null | undefined) => {
   if (pct == null) return 'rgb(72,76,86)'
   const t = Math.max(-1, Math.min(1, pct / periodCap()))
   const mix = (a: number[], b: number[], k: number) =>
     `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(',')})`
-  return t >= 0 ? mix(flat, [224, 64, 44], t) : mix(flat, [30, 158, 99], -t)
+  return t >= 0 ? mix(flatRgb, [224, 64, 44], t) : mix(flatRgb, [30, 158, 99], -t)
 }
 const fmtPct = (v: number | null | undefined) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v}%`)
+
+// 瓦片够大才写字：小格子上挤名字会糊成一片噪点，反而看不清颜色分布
+const labelIfRoomy = {
+  show: true,
+  overflow: 'truncate' as const,
+  formatter: (p: any) => (p.data?.symbol ? `${p.data.name}\n${fmtPct(valOf(p.data))}` : p.data?.name),
+}
+
+const tileData = () => items.value.map((it) => {
+  const kids = (it.children || []).map(k => ({
+    ...k, itemStyle: { color: pctColor(valOf(k)) },
+  }))
+  return kids.length
+    // 行业块本身不着色：它的颜色由内部个股自然呈现，父块再上色会盖住子块
+    ? { ...it, children: kids, itemStyle: { color: 'transparent' } }
+    : { ...it, itemStyle: { color: pctColor(valOf(it)) } }
+})
 
 const render = () => {
   if (!chartEl.value) return
@@ -75,8 +113,9 @@ const render = () => {
     chart.on('click', (params: any) => {
       const it = params?.data as HeatmapItem | undefined
       if (!it) return
-      if (!currentIndustry.value && it.name) load(it.name)
-      else if (it.symbol) router.push({ path: '/stock-analysis', query: { symbol: it.symbol } })
+      // 点个股进深研；点行业块（无 symbol）只看该行业
+      if (it.symbol) router.push({ path: '/stock-analysis', query: { symbol: it.symbol } })
+      else if (!currentIndustry.value && it.name) load(it.name)
     })
   }
   chart.setOption({
@@ -84,7 +123,9 @@ const render = () => {
       formatter: (p: any) => {
         const it = p?.data as HeatmapItem
         if (!it) return ''
-        const head = it.symbol ? `${it.name} ${it.symbol}` : `${it.name}（${it.count} 只）`
+        const head = it.symbol
+          ? `${it.name} ${it.symbol}`
+          : `${it.name}（${it.count} 只${it.shown && it.shown < (it.count || 0) ? `，图上画前 ${it.shown} 只` : ''}）`
         // 口径必须写清楚：行情源给的是 A股股本×现价，不含 H 股。建设银行 96% 的股本在
         // 港股，这里只有 949 亿而真实总市值约 2.5 万亿，不标注会被当成数据错误。
         // 三档一起给：切到 20 日看到一块红时，得能立刻看出它今天是不是正在回落
@@ -100,13 +141,20 @@ const render = () => {
       breadcrumb: { show: false },
       width: '100%',
       height: '100%',
-      label: {
-        show: true,
-        formatter: (p: any) => `${p.data.name}\n${fmtPct(valOf(p.data))}`,
-        fontSize: 12,
-      },
-      itemStyle: { borderColor: '#1a1c22', borderWidth: 1, gapWidth: 1 },
-      data: items.value.map(it => ({ ...it, itemStyle: { color: pctColor(valOf(it)) } })),
+      // 两层一起画：行业标题条 + 内部个股瓦片。leafDepth 不设，否则 ECharts
+      // 只画到第一层、双击才展开，那就退回成原来的扁平图了。
+      upperLabel: { show: true, height: 18, fontSize: 12, color: '#dfe3ea' },
+      label: labelIfRoomy,
+      itemStyle: { borderColor: '#12141a', borderWidth: 1, gapWidth: 1 },
+      levels: [
+        // 行业层：粗边框把板块分开，标题条常驻
+        { itemStyle: { borderColor: '#0d0f14', borderWidth: 3, gapWidth: 3 },
+          upperLabel: { show: true } },
+        // 个股层
+        { itemStyle: { borderColor: '#12141a', borderWidth: 1, gapWidth: 1 },
+          label: { fontSize: 11 } },
+      ],
+      data: tileData(),
     }],
   }, true)
 }
@@ -114,7 +162,8 @@ const render = () => {
 const load = async (industry = '') => {
   loading.value = true
   try {
-    const res = await heatmapApi.fetch(industry ? 'stock' : 'industry', industry || undefined)
+    const res = await heatmapApi.fetch(
+      industry ? 'stock' : 'industry', industry || undefined, !industry)
     if (!res) return
     data.value = res
     items.value = res.items || []
@@ -147,6 +196,18 @@ onBeforeUnmount(() => {
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;
   h2 { margin: 0; font-size: 20px; }
   .sub { margin: 4px 0 0; font-size: 12px; color: var(--el-text-color-secondary); }
+}
+.actions { display: flex; align-items: center; gap: 8px; }
+.overview {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 6px 12px; margin-bottom: 8px; font-size: 12px;
+  border: 1px solid var(--el-border-color-lighter); border-radius: 8px;
+
+  b { font-size: 13px; }
+  .up { color: #e0402c; font-weight: 600; }
+  .down { color: #1e9e63; font-weight: 600; }
+  .muted { color: var(--el-text-color-placeholder); }
+  .sep { color: var(--el-text-color-placeholder); }
 }
 .chart-wrap { position: relative; flex: 1; min-height: 520px; }
 .chart { width: 100%; height: 100%; min-height: 520px; }

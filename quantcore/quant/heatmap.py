@@ -16,6 +16,8 @@ from typing import Dict, List, Optional
 _UNMAPPED = "其他"
 # 多周期着色的字段名，与 recent_returns 的 window 对应
 _PERIOD_KEYS = ("pct5", "pct20")
+# 每个行业内最多画多少只个股。60 只时最小瓦片仍可点，再多就是一堆看不见的碎片。
+TOP_CHILDREN = 60
 
 
 def _num(value) -> float:
@@ -89,6 +91,70 @@ def build_heatmap_industry(snapshot: Dict[str, Dict], industry_map: Dict[str, st
         out.append(row)
     out.sort(key=lambda x: x["value"], reverse=True)
     return out
+
+
+def build_heatmap_nested(snapshot: Dict[str, Dict], industry_map: Dict[str, str],
+                         returns: Optional[Dict[str, Dict[str, float]]] = None) -> List[Dict]:
+    """行业块 + 每块内的个股块（treemap 的两层 data）。
+
+    扁平的 128 个行业色块看不出「钱在哪些股票上」：一个行业整体 +2% 可能是全员小涨，
+    也可能是一只权重股涨停拖着一片绿。把成分股嵌进去，一屏之内同时给出板块结构和
+    个股分布 —— 这才是热力图相对排行榜的唯一优势。
+
+    每个行业内的个股按面积降序并**截断到 TOP_CHILDREN**：全市场 5000+ 只全画出来，
+    尾部瓦片小于一个像素，既看不见又白白撑大三倍传输量。被截断的部分仍计入行业块的
+    面积与涨跌（聚合在 build_heatmap_industry 里算过），只是不单独画。
+    """
+    industries = build_heatmap_industry(snapshot, industry_map, returns)
+    by_industry: Dict[str, List[Dict]] = {}
+    for symbol, q in snapshot.items():
+        name = industry_map.get(symbol)
+        if not name or name == _UNMAPPED:
+            continue
+        item = _stock_item(symbol, q, returns)
+        if item is not None:
+            by_industry.setdefault(name, []).append(item)
+    out: List[Dict] = []
+    for row in industries:
+        kids = sorted(by_industry.get(row["name"], []), key=lambda x: x["value"], reverse=True)
+        block = dict(row)
+        block["children"] = kids[:TOP_CHILDREN]
+        block["shown"] = len(block["children"])
+        out.append(block)
+    return out
+
+
+def heatmap_overview(snapshot: Dict[str, Dict], industry_map: Dict[str, str],
+                     industry: str = "", prev_amount_yi: float = 0.0) -> Dict[str, object]:
+    """涨/跌/平家数、成交额与较昨日的量比。行业筛选时只统计该行业。
+
+    「较昨日」用的是同一批股票的昨日全日成交额，盘中读出来必然小于 1（半天 vs 全天），
+    所以字段名叫 amount_vs_prev 而不是「放量倍数」，由前端标注时段。
+    """
+    up = down = flat = 0
+    amount_yi = 0.0
+    want = industry.strip()
+    for symbol, q in snapshot.items():
+        name = industry_map.get(symbol)
+        if not name or name == _UNMAPPED:
+            continue
+        if want and name != want:
+            continue
+        item = _stock_item(symbol, q)
+        if item is None:
+            continue
+        if item["pct"] > 0:
+            up += 1
+        elif item["pct"] < 0:
+            down += 1
+        else:
+            flat += 1
+        amount_yi += item["amount_yi"]
+    return {
+        "up": up, "down": down, "flat": flat,
+        "amount_yi": round(amount_yi, 1),
+        "amount_vs_prev": round(amount_yi / prev_amount_yi, 3) if prev_amount_yi > 0 else None,
+    }
 
 
 def heatmap_coverage(snapshot: Dict[str, Dict], industry_map: Dict[str, str]) -> Dict[str, float]:

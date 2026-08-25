@@ -1035,6 +1035,9 @@ export interface HeatmapItem {
   /** 多周期涨跌幅%；缺 bar 的次新股/长停牌为 null，按中性色画，不当成 0 */
   pct5?: number | null
   pct20?: number | null
+  /** nested=1 时行业块带成分股；shown < count 表示图上只画了前 shown 只 */
+  children?: HeatmapItem[]
+  shown?: number
 }
 
 export interface HeatmapData {
@@ -1050,11 +1053,23 @@ export interface HeatmapData {
   }
   /** 本地日线可用时才有 5 日/20 日两档 */
   periods_ready?: boolean
+  nested?: boolean
+  /** 随当前视图联动的涨跌家数与成交额；下钻后统计的是该行业 */
+  overview?: {
+    up: number
+    down: number
+    flat: number
+    amount_yi: number
+    amount_vs_prev: number | null
+  }
 }
 
 export const heatmapApi = {
-  fetch: async (level: 'industry' | 'stock', industry?: string) => {
-    const raw = await ApiClient.get<any>('/api/lite/heatmap', { level, industry: industry || '' }, { timeout: 30000 })
+  fetch: async (level: 'industry' | 'stock', industry?: string, nested = false) => {
+    const raw = await ApiClient.get<any>(
+      '/api/lite/heatmap',
+      { level, industry: industry || '', nested: nested ? 1 : 0 },
+      { timeout: 30000 })
     return (raw as any)?.data as HeatmapData | null
   },
 }

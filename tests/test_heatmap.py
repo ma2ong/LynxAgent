@@ -117,3 +117,41 @@ def test_industry_period_is_none_when_no_member_has_data():
     row = build_heatmap_industry(snapshot, {"600001": "银行"}, {})[0]
     assert row["pct20"] is None and row["pct5"] is None
     assert row["pct"] == 2.0
+
+
+def test_nested_truncates_children_but_keeps_true_industry_weight():
+    """行业块只画前 N 只成分股，但它的面积与涨跌仍按全部成分股算。
+
+    否则被截断的大行业会凭空缩水，热力图上的板块权重就不再是市值权重。
+    """
+    from quantcore.quant import heatmap as hm
+
+    snapshot = {f"6{i:05d}": {"name": f"股{i}", "pct_chg": 1.0, "total_mv": 10.0}
+                for i in range(hm.TOP_CHILDREN + 20)}
+    industry_map = {s: "银行" for s in snapshot}
+
+    block = hm.build_heatmap_nested(snapshot, industry_map)[0]
+    assert block["count"] == hm.TOP_CHILDREN + 20      # 聚合口径：全部成分股
+    assert block["shown"] == hm.TOP_CHILDREN           # 画出来的：截断后
+    assert len(block["children"]) == hm.TOP_CHILDREN
+    assert block["value"] == pytest.approx(10.0 * (hm.TOP_CHILDREN + 20))
+
+
+def test_overview_counts_only_the_selected_industry():
+    """下钻后概览必须只统计该行业，否则「涨 3961」跟眼前这块图对不上。"""
+    from quantcore.quant.heatmap import heatmap_overview
+
+    snapshot = {
+        "600001": {"name": "银行涨", "pct_chg": 2.0, "total_mv": 100.0, "amount": 1e8},
+        "600002": {"name": "银行跌", "pct_chg": -2.0, "total_mv": 100.0, "amount": 1e8},
+        "600003": {"name": "券商涨", "pct_chg": 3.0, "total_mv": 100.0, "amount": 1e8},
+    }
+    industry_map = {"600001": "银行", "600002": "银行", "600003": "券商"}
+
+    whole = heatmap_overview(snapshot, industry_map)
+    assert (whole["up"], whole["down"]) == (2, 1)
+
+    bank = heatmap_overview(snapshot, industry_map, "银行", prev_amount_yi=4.0)
+    assert (bank["up"], bank["down"], bank["flat"]) == (1, 1, 0)
+    assert bank["amount_yi"] == pytest.approx(2.0)
+    assert bank["amount_vs_prev"] == pytest.approx(0.5)

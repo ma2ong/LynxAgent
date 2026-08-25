@@ -7,7 +7,7 @@
       <div class="mobile-brand">
         <BrandLogo :size="22" /><span class="wordmark"><i>A</i>StockPick</span>
       </div>
-      <div v-if="billingInfo" class="mobile-quota">
+      <div v-if="billingInfo && !billingInfo.unlimited" class="mobile-quota">
         剩余 {{ billingInfo.remaining_today }}/{{ billingInfo.daily_limit }}
       </div>
     </div>
@@ -37,15 +37,9 @@
         <el-menu-item index="/data-center"><el-icon><DataLine /></el-icon><span>数据中心</span></el-menu-item>
       </el-menu>
       <div class="sidebar-foot">
-        <!-- 取消每日额度后 remaining_today 为 null，直接插值会渲染成「今日剩余 0」，
-             看起来像用完了。不限档只报今天用了多少。 -->
-        <div v-if="billingInfo" class="quota-chip" @click="$router.push('/account/membership')">
-          <template v-if="billingInfo.unlimited">
-            {{ billingInfo.plan_label }} · 不限次数
-          </template>
-          <template v-else>
-            {{ billingInfo.plan_label }} · 今日剩余 {{ billingInfo.remaining_today }}/{{ billingInfo.daily_limit }}
-          </template>
+        <!-- 不限档没有额度可报，不显示任何标识；只有限额档才提示今日剩余。 -->
+        <div v-if="billingInfo && !billingInfo.unlimited" class="quota-chip" @click="$router.push('/account/membership')">
+          {{ billingInfo.plan_label }} · 今日剩余 {{ billingInfo.remaining_today }}/{{ billingInfo.daily_limit }}
         </div>
         <el-button text size="small" @click="logout">
           <el-icon><SwitchButton /></el-icon>退出登录

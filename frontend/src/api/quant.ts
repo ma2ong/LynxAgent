@@ -83,6 +83,10 @@ export interface QuantSmartPoolItem {
   timing_actionable?: boolean
   timing_signal_mode?: 'live' | 'intraday_archive' | 'close_review' | null
   timing_reasons?: string[]
+  /** 今日首次上榜时的价格与时刻，以及从那时到现在的涨跌幅 */
+  first_price?: number | null
+  first_at?: string
+  since_first_pct?: number | null
   distance_to_limit?: number
   radar_signal?: {
     status?: string
@@ -748,10 +752,20 @@ export interface PicksHorizonStat {
   avg_excess?: number | null
 }
 
+export interface PicksAlignedStat {
+  samples: number
+  excess_win_rate?: number | null
+  avg_excess?: number | null
+}
+
 export interface PicksPoolStat {
   pool: string
   picks: number
+  /** 该池在窗口内的首个留痕日；各池上线时间不同，横向比必须看这个 */
+  first_pick_date?: string | null
   horizons: { t1: PicksHorizonStat; t3: PicksHorizonStat; t5: PicksHorizonStat }
+  /** 统一起点（aligned_since）后的超额，唯一可跨池横向比较的口径 */
+  aligned?: { t1: PicksAlignedStat; t3: PicksAlignedStat; t5: PicksAlignedStat }
 }
 
 export interface PicksStatsItem {
@@ -785,6 +799,8 @@ export interface LatestPickItem {
 export interface PicksStatsResult {
   days: number
   since: string
+  /** 各池共同起点：仍在运行的池里最晚的那个首痕日 */
+  aligned_since?: string | null
   total_picks: number
   pools: PicksPoolStat[]
   items: PicksStatsItem[]

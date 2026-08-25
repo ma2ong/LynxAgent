@@ -1505,6 +1505,10 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
         data["quote_updated_at"] = None
         data["price_source"] = "最近完整日K（实时行情不可用）"
     data["position_gate"] = gate
+    try:
+        await asyncio.to_thread(_attach_first_seen, items)
+    except Exception as exc:  # noqa: BLE001 — 首推价只是展示项，失败不能拖垮名单
+        print(f"attach first_seen failed: {exc}")
     data["items"] = items
     enriched = dict(response)
     enriched["data"] = data
@@ -1640,6 +1644,35 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
                 _pick_store.record_picks("smart", items)
             except Exception as exc:  # noqa: BLE001 — 留痕失败不能阻断推荐主流程
                 print(f"record_picks failed: {exc}")
+
+
+def _attach_first_seen(items: list[dict[str, Any]]) -> None:
+    """给名单补「今日首推价」与「首推后涨跌幅」。
+
+    对齐盘中信号的「提醒价 / 提醒后」：用户要能一眼看出"系统是在什么价位推的、
+    推完之后走了多少"，而不是只看到一个此刻的现价和当日涨幅——后者混进了开盘到
+    上榜之间的涨幅，那一段用户根本没机会参与。
+
+    写与读都放在实时刷新这一步：这里的 close 已经是刷新过的实时价，且这条路径
+    每次请求都会跑（缓存命中也跑），盘中新上榜的票当轮就能拿到自己的首推价。
+    """
+    from quantcore.quant.local_store import get_local_store
+
+    store = get_local_store()
+    store.record_first_seen("smart", items)
+    seen = store.load_first_seen("smart")
+    for item in items:
+        symbol = str(item.get("symbol") or item.get("code") or "").zfill(6)
+        rec = seen.get(symbol)
+        if not rec:
+            continue
+        first = float(rec.get("first_price") or 0)
+        now = float(item.get("close") or 0)
+        item["first_price"] = round(first, 2) if first > 0 else None
+        item["first_at"] = str(rec.get("first_at") or "")[11:16]
+        item["since_first_pct"] = (
+            round((now / first - 1) * 100, 2) if first > 0 and now > 0 else None
+        )
 
 
 def _smart_pool_task_update(task_id: str | None, **patch: Any) -> None:

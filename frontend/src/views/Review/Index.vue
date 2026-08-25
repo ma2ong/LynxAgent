@@ -37,11 +37,19 @@
       <span class="ctx-advice">{{ marketCtx.advice }}</span>
     </div>
 
+    <div v-if="pools.length && alignedSince" class="align-note">
+      <b>跨池对比看「可比」那一行</b>
+      <span>
+        各池上线日期不同（最早 {{ earliestPool }}，最晚 {{ alignedSince }}），窗口内经历的行情天数不一样，
+        主数字之间不能直接比大小。「可比」= 统一自 {{ alignedSince }} 起算的 T+N 超额。
+      </span>
+    </div>
+
     <section v-if="pools.length" class="pool-grid">
       <div v-for="p in pools" :key="p.pool" class="pool-card">
         <div class="pool-title">
           <b>{{ poolLabel(p.pool) }}</b>
-          <small>{{ p.picks }} 条留痕</small>
+          <small>{{ p.picks }} 条留痕<template v-if="p.first_pick_date"> · 自 {{ p.first_pick_date }}</template></small>
         </div>
         <div class="horizon-row">
           <div v-for="h in horizons" :key="h.key" class="horizon-cell">
@@ -56,6 +64,10 @@
               超额 {{ fmtExcess(stat(p, h.key)?.avg_excess) }} · 胜 {{ fmtRate(stat(p, h.key)?.excess_win_rate) }}
             </small>
             <small class="muted">{{ stat(p, h.key)?.samples ?? 0 }} 样本</small>
+            <small v-if="alignedSince" class="aligned-line" :class="retClass(aligned(p, h.key)?.avg_excess)">
+              可比 {{ fmtExcess(aligned(p, h.key)?.avg_excess) }}
+              <span class="muted">（{{ aligned(p, h.key)?.samples ?? 0 }}）</span>
+            </small>
           </div>
         </div>
       </div>
@@ -266,6 +278,12 @@ const keepVisible = <T extends { pool: string }>(list: T[]) =>
   list.filter((p) => VISIBLE_POOLS.includes(p.pool))
 
 const stat = (p: PicksPoolStat, key: 't1' | 't3' | 't5') => p.horizons?.[key]
+const aligned = (p: PicksPoolStat, key: 't1' | 't3' | 't5') => p.aligned?.[key]
+const alignedSince = ref('')
+const earliestPool = computed(() => {
+  const dates = pools.value.map((p) => p.first_pick_date).filter(Boolean) as string[]
+  return dates.length ? dates.reduce((a, b) => (a < b ? a : b)) : ''
+})
 
 const filteredItems = computed(() =>
   poolFilter.value ? items.value.filter((it) => it.pool === poolFilter.value) : items.value,
@@ -287,6 +305,7 @@ const load = async () => {
   try {
     const res = await quantApi.picksStats(days.value)
     pools.value = keepVisible(res?.pools || [])
+    alignedSince.value = res?.aligned_since || ''
     items.value = (res?.items || []).filter((it: PicksStatsItem) => VISIBLE_POOLS.includes(it.pool))
   } catch (e: any) {
     error.value = e?.message || '加载复盘数据失败'
@@ -504,6 +523,32 @@ onBeforeUnmount(() => {
   span { display: block; font-size: 12px; color: var(--el-text-color-secondary); }
   b { display: block; font-size: 18px; margin: 2px 0; }
   small { display: block; font-size: 11px; }
+}
+
+/* 「可比」是唯一能跨池横着比的数字，用分隔线和字重把它从本池自说自话的统计里拎出来 */
+.aligned-line {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--el-border-color);
+  font-weight: 600;
+
+  span { display: inline; font-size: 11px; }
+}
+
+.align-note {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-left: 3px solid var(--el-color-primary);
+  border-radius: 8px;
+  font-size: 12px;
+
+  b { font-size: 13px; }
+  span { color: var(--el-text-color-secondary); }
 }
 
 .panel {

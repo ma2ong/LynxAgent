@@ -82,7 +82,13 @@
           <div class="smart-inline-settings">
             <label>
               <span>候选</span>
-              <el-input-number v-model="smartPoolForm.universe_limit" :min="50" :max="10000" :step="50" controls-position="right" />
+              <el-input-number
+                v-model="smartPoolForm.universe_limit"
+                :min="50" :max="localUniverseSize" :step="50" controls-position="right"
+              />
+              <em v-if="localUniverseSize" class="universe-hint" title="候选上限就是数据中心的本地股票池规模，填满即全市场扫描">
+                / 本地全市场 {{ localUniverseSize }} 只
+              </em>
             </label>
             <span class="score-floor-chip" title="综合排序分＝日K结构分与盘中量价融合后的 0~100 刻度。达到门槛就上榜，多少只都给；今天没有够分的就不给。">
               入选门槛 综合排序 ≥ <b>{{ smartScoreFloor }}</b> 分 · 不限只数
@@ -322,38 +328,10 @@
                 <div class="score-pct">仅用于本次排序</div>
               </template>
             </el-table-column>
-            <el-table-column label="结构分" width="82">
-              <template #default="{ row }">
-                <b>{{ displayScore(row) }}</b>
-                <!-- 结构因子分全市场上限约 79.6，所以「79 分」是前 0.1% 而非「只有七八十分」。
-                     分数本身不可横向解读，百分位可以，故一并显示。 -->
-                <div v-if="row.score_percentile != null" class="score-pct">
-                  全市场前 {{ row.score_percentile < 1 ? row.score_percentile.toFixed(1) : Math.round(row.score_percentile) }}%
-                </div>
-              </template>
-            </el-table-column>
-            <el-table-column label="时机确认" width="104">
-              <template #default="{ row }">
-                <el-tag
-                  size="small"
-                  :type="timingTagType(row)"
-                  :effect="row.timing_actionable ? 'dark' : 'plain'"
-                >
-                  {{ row.timing_actionable ? '量价已确认' : (row.timing_label || '等待扫描') }}
-                </el-tag>
-                <div v-if="row.timing_score != null" class="score-pct">
-                  时机 {{ Number(row.timing_score).toFixed(0) }}分
-                </div>
-              </template>
-            </el-table-column>
-            <el-table-column label="AI因子" width="64">
-              <template #default="{ row }">
-                <el-tag v-if="row.ai_factor_score" size="small" type="success" effect="plain">
-                  {{ Number(row.ai_factor_score).toFixed(0) }}
-                </el-tag>
-                <span v-else>-</span>
-              </template>
-            </el-table-column>
+            <!-- 结构分 / 时机确认 / AI因子 三列已并入右侧（2026-08-25）：
+                 结构分 → 「形态 · 强度」首个标签；AI因子 → 「入选理由」标签；
+                 时机确认本就与「价位参考」的状态标签和「入选理由」的时机层一句话重复。
+                 三列各占 64~104px 却只承载一个数字，挤掉的是真正要读的理由。 -->
             <!-- 五方判读那一列已撤（2026-08-06）：它的输入就是本表已经展示过的那些
                  本地指标，不带来新信息；又从未被验证过命中率；LLM 单线程补打导致大多数
                  时候显示「—」，反而像数据出错。功能保留在个股深研，并转入留痕+复盘：
@@ -374,6 +352,25 @@
             <el-table-column label="涨跌幅" width="72" align="right">
               <template #default="{ row }">
                 <span :class="changeClass(row.pct_chg)">{{ signedPercent(row.pct_chg) }}</span>
+              </template>
+            </el-table-column>
+            <!-- 首推价／首推后：当日涨跌幅里混着「开盘到上榜之间」那一段，用户根本没机会参与。
+                 只有从上榜那一刻起算的这个数，才是跟着名单做能拿到的结果。 -->
+            <el-table-column label="首推价" width="94" align="right">
+              <template #default="{ row }">
+                <template v-if="row.first_price">
+                  <b>{{ formatNumber(row.first_price) }}</b>
+                  <div class="score-pct">{{ row.first_at || '' }}</div>
+                </template>
+                <span v-else class="panel-pending">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="首推后" width="80" align="right">
+              <template #default="{ row }">
+                <span v-if="row.since_first_pct != null" :class="changeClass(row.since_first_pct)">
+                  {{ signedPercent(row.since_first_pct) }}
+                </span>
+                <span v-else class="panel-pending">—</span>
               </template>
             </el-table-column>
             <el-table-column label="价位参考" width="156">
@@ -442,6 +439,13 @@
             </el-table-column>
             <el-table-column label="形态 · 强度" min-width="250">
               <template #default="{ row }">
+                <!-- 结构因子分全市场上限约 79.6，所以「79 分」是前 0.1% 而非「只有七八十分」。
+                     分数本身不可横向解读，百分位可以，故一并显示。 -->
+                <el-tag class="capability-tag" type="info" effect="plain"
+                  :title="`日K结构因子分（不含盘中量价）；综合排序 ${Number(row.quality_score ?? row.score).toFixed(1)} 分才是上榜依据`">
+                  结构 {{ displayScore(row) }}<template v-if="row.score_percentile != null">
+                    · 前 {{ row.score_percentile < 1 ? row.score_percentile.toFixed(1) : Math.round(row.score_percentile) }}%</template>
+                </el-tag>
                 <el-tag v-if="row.confluence_bonus" class="capability-tag" type="warning" effect="dark"
                   :title="`结构因子之上，形态/强度共振加成 +${row.confluence_bonus}（已计入排序，量化分保持结构分不动）`">
                   共振+{{ row.confluence_bonus }}
@@ -475,6 +479,10 @@
                     ⚠ {{ f.name }}
                   </el-tag>
                 </el-tooltip>
+                <el-tag v-if="row.ai_factor_score" class="capability-tag" type="success" effect="plain"
+                  title="AI 因子模型 Top-K 排名分（机器学习评分因子，已计入综合排序）">
+                  AI因子 {{ Number(row.ai_factor_score).toFixed(0) }}
+                </el-tag>
                 <el-tag v-for="reason in (row.reasons || []).slice(0, MAX_REASON_TAGS)" :key="reason" class="capability-tag" effect="plain">
                   {{ reason }}
                 </el-tag>
@@ -546,6 +554,10 @@ const route = useRoute()
 const router = useRouter()
 
 const dataHealth = ref<QuantDataHealth | null>(null)
+// 本地股票池规模拿到之前的占位上限；拿到 health 后立刻按真实规模收敛。
+const DEFAULT_UNIVERSE_LIMIT = 6000
+const localUniverseSize = computed(() =>
+  Number(dataHealth.value?.meta_count || 0) || DEFAULT_UNIVERSE_LIMIT)
 
 const whyVisible = ref(false)
 const whyRow = ref<any | null>(null)
@@ -562,7 +574,10 @@ const healthLoading = ref(false)
 // 想恢复只需把选择器加回模板，这里不必改。
 // limit 现在只是后端候选池深度（engine 取 limit + 备胎），不再是用户看到的名单长度——
 // 名单长度由综合排序分门槛决定，见 smartScoreFloor。
-const smartPoolForm = ref({ limit: 20, universe_limit: 10000, strategy: 'balanced' })
+// universe_limit 的上限＝数据中心本地股票池规模（health.meta_count），不再写死 10000：
+// 后端本来就按 min(universe_limit, 全市场) 取池，写死的 10000 只会让页面报一个
+// 与数据中心「本地股票池 / K线覆盖」对不上的假数字。
+const smartPoolForm = ref({ limit: 20, universe_limit: DEFAULT_UNIVERSE_LIMIT, strategy: 'balanced' })
 const smartPoolLoading = ref(false)
 const smartPoolResult = ref<QuantSmartPoolResult | null>(null)
 const smartPoolTask = ref<QuantSmartPoolTask | null>(null)
@@ -697,6 +712,9 @@ const refreshDataHealth = async (autoStart = true) => {
   try {
     const health = await quantApi.dataHealth(autoStart)
     dataHealth.value = health
+    // 候选数默认跟随本地股票池：用户手动调小的值保留，只把「全市场」这一档对齐真实规模。
+    const size = Number(health?.meta_count || 0)
+    if (size > 0 && smartPoolForm.value.universe_limit >= size) smartPoolForm.value.universe_limit = size
     if (health.sync_running || health.auto_started) {
       syncWatching = true
       pollSync()
@@ -765,13 +783,6 @@ const realtimeBadge = computed(() => {
   }
   return { type: 'danger' as const, text: '实时行情不可用', title: '当前仅展示结构候选，不提供实时买入判断' }
 })
-const timingTagType = (row: QuantSmartPoolItem) => {
-  if (row.timing_status === 'blocked') return 'danger'
-  if (row.timing_actionable) return 'success'
-  // hot_limit（涨停/近板）照常上榜，用橙色提示买入难度，不当成拦截。
-  if (['confirmed', 'watch', 'hot_limit'].includes(row.timing_status || '')) return 'warning'
-  return 'info'
-}
 // ③b 危险市况下不再整池锁死：后端标了 daytrade_ok 的逆势票仍给买入计划，但限定 T+1。
 // 依据是回测——弱市里这类票 T+1 超额 +1.06pp/胜率 62%，T+2 起衰减、T+5 转负，
 // 所以「放开但限期」比「一律不给」和「照常推荐」都更贴近真实赔率。
@@ -1244,6 +1255,13 @@ const openChart = async (row: any) => {
 
   :deep(.el-input-number) {
     width: 118px;
+  }
+
+  .universe-hint {
+    font-style: normal;
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+    cursor: help;
   }
 
   .score-floor-chip {

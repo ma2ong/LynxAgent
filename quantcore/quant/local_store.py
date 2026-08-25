@@ -7,6 +7,19 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
+try:
+    from zoneinfo import ZoneInfo
+
+    _CN_TZ = ZoneInfo("Asia/Shanghai")
+except Exception:  # pragma: no cover — 缺 tzdata 时退回本机时区（服务器本就在 CST）
+    _CN_TZ = None
+
+
+def _now_cn():
+    """北京时间「现在」。单独抽成函数，测试才能把留痕时点钉死，不随运行时刻漂。"""
+    from datetime import datetime as _dt
+    return _dt.now(_CN_TZ)
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = os.environ.get("QUANT_DATA_DB_PATH", str(_PROJECT_ROOT / "runtime" / "quant_data.sqlite"))
 
@@ -63,6 +76,17 @@ CREATE TABLE IF NOT EXISTS latest_picks (
     PRIMARY KEY (pool, symbol)
 );
 CREATE INDEX IF NOT EXISTS idx_latest_picks_pool_rank ON latest_picks(pool, rank);
+-- 每只票当日「首次上榜」的价格与时刻，供名单上显示「首推价 / 首推后涨跌」。
+-- 与 picks_history 分开：那张表是复盘样本，当日只留开盘后第一份（不受访问量影响）；
+-- 这张表要记下盘中每一只新进榜的票，否则 13:00 才上榜的票没有首推价可显示。
+CREATE TABLE IF NOT EXISTS pick_first_seen (
+    pick_date TEXT,
+    pool TEXT,
+    symbol TEXT,
+    first_price REAL,
+    first_at TEXT,
+    PRIMARY KEY (pick_date, pool, symbol)
+);
 CREATE TABLE IF NOT EXISTS daily_reports (
     date TEXT,
     kind TEXT,
@@ -818,12 +842,24 @@ class LocalQuantStore:
         return output
 
     def record_picks(self, pool: str, items: List[Dict[str, object]]) -> int:
-        """历史表保留当日首次快照；latest_picks 原子替换为本次完整名单。"""
+        """历史表保留当日**开盘后**的首次快照；latest_picks 原子替换为本次完整名单。
+
+        两道闸门，缺一不可（2026-08-25 修，此前留痕不可直接与修后横向比）：
+        - 开盘前不留痕：盘前预热扫描（09:00）拿不到实时价，会把昨收当留痕价写进去，
+          实测 smart 池每天恰好 20 条留痕价 == 昨收，占当日留痕三分之一以上，
+          复盘等于白送了一整天的涨幅。
+        - 当日只留一次：INSERT OR IGNORE 只挡同一只票，盘中每次重扫的**新票**照样入库，
+          smart 因此日均 35 条（其他池 15~18），既超过用户任一时刻看到的 20 只上限，
+          也让留痕条数取决于当天有多少人刷新页面 —— 复盘统计的样本必须与用户流量无关。
+        """
         if not items:
             return 0
-        from datetime import date as _date, datetime as _datetime
-        today = _date.today().strftime("%Y-%m-%d")
+        from datetime import datetime as _datetime
+        now = _now_cn()
+        today = now.strftime("%Y-%m-%d")
         batch_at = _datetime.now().astimezone().isoformat(timespec="seconds")
+        # 09:25 起算：集合竞价池的留痕价就是竞价成交价，早于此则一定是陈旧价。
+        after_open = (now.hour * 60 + now.minute) >= 9 * 60 + 25
         rows = []
         for rank, it in enumerate(items, start=1):
             raw = str(it.get("symbol") or it.get("code") or "").strip()
@@ -843,14 +879,56 @@ class LocalQuantStore:
             for pick_date, _, symbol, name, score, close, rank, patterns in rows
         ]
         with conn:
-            conn.executemany(
-                "INSERT OR IGNORE INTO picks_history(pick_date,pool,symbol,name,score,close,rank,patterns) "
-                "VALUES(?,?,?,?,?,?,?,?)", rows)
+            already = conn.execute(
+                "SELECT 1 FROM picks_history WHERE pick_date=? AND pool=? LIMIT 1",
+                (today, pool)).fetchone()
+            if after_open and not already:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO picks_history"
+                    "(pick_date,pool,symbol,name,score,close,rank,patterns) "
+                    "VALUES(?,?,?,?,?,?,?,?)", rows)
             conn.execute("DELETE FROM latest_picks WHERE pool = ?", (pool,))
             conn.executemany(
                 "INSERT INTO latest_picks(pool,symbol,pick_date,batch_at,name,score,close,rank,patterns) "
                 "VALUES(?,?,?,?,?,?,?,?,?)", latest_rows)
         return len(rows)
+
+    def record_first_seen(self, pool: str, items: List[Dict[str, object]]) -> int:
+        """记下每只票当日首次上榜的价格（INSERT OR IGNORE，只有第一次生效）。
+
+        与 record_picks 的「当日只留一份」不同：这里要覆盖盘中每一只新进榜的票，
+        否则 13:00 才上榜的票没有首推价可显示。同样不在开盘前记——盘前拿到的是昨收。
+        """
+        from datetime import datetime as _datetime
+        now = _now_cn()
+        if (now.hour * 60 + now.minute) < 9 * 60 + 25:
+            return 0
+        day = now.strftime("%Y-%m-%d")
+        at = _datetime.now().astimezone().isoformat(timespec="seconds")
+        rows = []
+        for it in items:
+            raw = str(it.get("symbol") or it.get("code") or "").strip()
+            symbol = raw.zfill(6)
+            price = _f(it.get("close"))
+            if not raw or not symbol.isdigit() or len(symbol) != 6 or price <= 0:
+                continue
+            rows.append((day, pool, symbol, price, at))
+        if not rows:
+            return 0
+        conn = self._conn()
+        with conn:
+            conn.executemany(
+                "INSERT OR IGNORE INTO pick_first_seen"
+                "(pick_date,pool,symbol,first_price,first_at) VALUES(?,?,?,?,?)", rows)
+        return len(rows)
+
+    def load_first_seen(self, pool: str, pick_date: Optional[str] = None) -> Dict[str, Dict[str, object]]:
+        """当日各票首次上榜的价格与时刻，{代码: {first_price, first_at}}。"""
+        day = pick_date or _now_cn().strftime("%Y-%m-%d")
+        rows = self._conn().execute(
+            "SELECT symbol, first_price, first_at FROM pick_first_seen "
+            "WHERE pool=? AND pick_date=?", (pool, day)).fetchall()
+        return {str(r[0]): {"first_price": _f(r[1]), "first_at": str(r[2] or "")} for r in rows}
 
     def load_latest_picks(self, pool: Optional[str] = None) -> List[Dict[str, object]]:
         sql = (
@@ -955,6 +1033,25 @@ class LocalQuantStore:
         detail: List[Dict[str, object]] = []
         agg: Dict[str, Dict[int, List[float]]] = {}
         ex_agg: Dict[str, Dict[int, List[float]]] = {}
+        # 可比窗口：各池留痕起始日不同（新池上线晚），直接横向比会把「谁少经历了哪几天」
+        # 读成「谁选股更强」。2026-08 实测：smart 比 smart_timing 多担了 7 月末四个暴跌日，
+        # 两池名单其实逐日相同，T+5 超额却差 0.9pp。故另算一份统一起点的对照口径。
+        first_seen: Dict[str, str] = {}
+        last_seen: Dict[str, str] = {}
+        for row in picks:
+            pool_name = str(row[1])
+            d = str(row[0])
+            if pool_name not in first_seen or d < first_seen[pool_name]:
+                first_seen[pool_name] = d
+            if d > last_seen.get(pool_name, ""):
+                last_seen[pool_name] = d
+        # 只让「还在跑」的池决定共同起点：已停用的池（如 swing）往往上线晚、停得早，
+        # 拿它定边界会把所有池的可比窗口无谓地压窄。留 3 个留痕日的余量，容忍偶发扫描失败。
+        recent_days = sorted({str(r[0]) for r in picks}, reverse=True)[:3]
+        active_first = [d for pool_name, d in first_seen.items()
+                        if last_seen.get(pool_name) in recent_days]
+        aligned_since = max(active_first) if len(active_first) > 1 else None
+        aligned_agg: Dict[str, Dict[int, List[float]]] = {}
         for pick_date, pool_name, symbol, name, score, close, rank, patterns_str in picks:
             bars = _bars(str(symbol))
             dates = [b[0] for b in bars]
@@ -985,6 +1082,8 @@ class LocalQuantStore:
             })
             bucket = agg.setdefault(str(pool_name), {h: [] for h in horizons})
             ex_bucket = ex_agg.setdefault(str(pool_name), {h: [] for h in horizons})
+            in_aligned = aligned_since is not None and str(pick_date) >= aligned_since
+            al_bucket = aligned_agg.setdefault(str(pool_name), {h: [] for h in horizons})
             for h in horizons:
                 v = rets[f"t{h}"]
                 if v is not None:
@@ -992,6 +1091,8 @@ class LocalQuantStore:
                 ev = rets[f"excess_t{h}"]
                 if ev is not None:
                     ex_bucket[h].append(ev)
+                    if in_aligned:
+                        al_bucket[h].append(ev)
 
         pools_out: List[Dict[str, object]] = []
         for pool_name in sorted(agg):
@@ -1006,13 +1107,24 @@ class LocalQuantStore:
                     "excess_win_rate": round(sum(1 for v in evals if v > 0) / len(evals), 4) if evals else None,
                     "avg_excess": round(sum(evals) / len(evals), 2) if evals else None,
                 }
+            aligned: Dict[str, object] = {}
+            for h in horizons:
+                evals = aligned_agg.get(pool_name, {}).get(h, [])
+                aligned[f"t{h}"] = {
+                    "samples": len(evals),
+                    "excess_win_rate": round(sum(1 for v in evals if v > 0) / len(evals), 4) if evals else None,
+                    "avg_excess": round(sum(evals) / len(evals), 2) if evals else None,
+                }
             pools_out.append({
                 "pool": pool_name,
                 "picks": sum(1 for p in detail if p["pool"] == pool_name),
+                "first_pick_date": first_seen.get(pool_name),
                 "horizons": stats,
+                "aligned": aligned,
             })
         out = {
             "days": days, "since": since, "total_picks": len(picks),
+            "aligned_since": aligned_since,
             "pools": pools_out, "items": detail[:300],
         }
         conn.execute(

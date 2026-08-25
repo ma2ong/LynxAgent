@@ -5,12 +5,28 @@ import pandas as pd
 import pytest
 
 from quantcore.quant.backtest import BUY_COST, run_long_only_backtest
+from quantcore.quant import local_store
 from quantcore.quant.local_store import LocalQuantStore
 
 
 @pytest.fixture()
 def store(tmp_path):
     return LocalQuantStore(str(tmp_path / "test.sqlite"))
+
+
+@pytest.fixture()
+def pick_clock(monkeypatch):
+    """把留痕时点钉在开盘后，并允许测试自己拨表——否则用例在 09:25 前跑会全灭。"""
+    from datetime import datetime, timedelta
+
+    state = {"now": datetime.combine(date.today(), datetime.min.time()).replace(hour=10)}
+    monkeypatch.setattr(local_store, "_now_cn", lambda: state["now"])
+
+    def advance(**kw):
+        state["now"] += timedelta(**kw)
+
+    state["advance"] = advance
+    return state
 
 
 def _trading_dates(n: int):
@@ -34,7 +50,7 @@ def _seed_kline(store: LocalQuantStore, symbol: str, closes):
     return dates
 
 
-def test_record_picks_keeps_first_snapshot_of_day(store):
+def test_record_picks_keeps_first_snapshot_of_day(store, pick_clock):
     n = store.record_picks("smart", [{
         "symbol": "600001", "name": "涨股", "score": 90, "close": 10.0,
         "patterns": [{"name": "趋势强"}],
@@ -48,11 +64,16 @@ def test_record_picks_keeps_first_snapshot_of_day(store):
     assert row == (90.0, 10.0)
 
 
-def test_record_picks_replaces_latest_batch_without_changing_history(store):
+def test_record_picks_replaces_latest_batch_without_changing_history(store, pick_clock):
+    """盘中重扫只换 latest_picks，历史留痕锁定当日第一份。
+
+    否则留痕条数取决于当天有多少人刷新页面，复盘样本会被访问量污染。
+    """
     store.record_picks("smart", [
         {"symbol": "600001", "name": "旧一", "score": 90, "close": 10.0},
         {"symbol": "600002", "name": "旧二", "score": 80, "close": 9.0},
     ])
+    pick_clock["advance"](hours=3)
     store.record_picks("smart", [
         {"symbol": "600003", "name": "新一", "score": 88, "close": 12.0},
     ])
@@ -62,9 +83,26 @@ def test_record_picks_replaces_latest_batch_without_changing_history(store):
     ).fetchall()
     latest = store.load_latest_picks("smart")
 
-    assert history == [("600001",), ("600002",), ("600003",)]
+    assert history == [("600001",), ("600002",)]
     assert [(item["symbol"], item["rank"]) for item in latest] == [("600003", 1)]
     assert latest[0]["batch_at"]
+
+
+def test_record_picks_skips_history_before_open(store, pick_clock):
+    """盘前预热扫描拿的是昨收，绝不能进历史；latest_picks 仍要更新（首页得有货）。"""
+    pick_clock["now"] = pick_clock["now"].replace(hour=9, minute=0)
+    assert store.record_picks("smart", [
+        {"symbol": "600001", "name": "盘前", "score": 90, "close": 10.0},
+    ]) == 1
+    assert store._conn().execute(
+        "SELECT COUNT(*) FROM picks_history WHERE pool='smart'").fetchone()[0] == 0
+    assert [i["symbol"] for i in store.load_latest_picks("smart")] == ["600001"]
+
+    # 开盘后第一份才是留痕
+    pick_clock["now"] = pick_clock["now"].replace(hour=9, minute=35)
+    store.record_picks("smart", [{"symbol": "600002", "name": "盘后", "score": 88, "close": 12.0}])
+    assert store._conn().execute(
+        "SELECT symbol FROM picks_history WHERE pool='smart'").fetchall() == [("600002",)]
 
 
 def test_record_picks_skips_invalid_symbols(store):
@@ -95,7 +133,7 @@ def test_evaluate_picks_t_plus_n_returns_and_win_rate(store):
     assert down_item["t3"] < 0
 
 
-def test_evaluate_picks_future_bars_missing_gives_none(store):
+def test_evaluate_picks_future_bars_missing_gives_none(store, pick_clock):
     up = [10.0] * 30
     _seed_kline(store, "600003", up)
     store.record_picks("swing", [{"symbol": "600003", "name": "x", "score": 70, "close": 10.0}])
@@ -186,7 +224,7 @@ def test_signal_stats_pattern_level_excess(store):
     assert names["金叉"]["excess_win_rate"] == 1.0
 
 
-def test_evaluate_picks_cache_invalidates_on_new_picks(store):
+def test_evaluate_picks_cache_invalidates_on_new_picks(store, pick_clock):
     """留痕统计缓存：同数据版本命中缓存；新留痕写入后必须失效（否则新票永远不进统计）。"""
     _seed_kline(store, "600001", [10.0 * 1.02 ** i for i in range(8)])
     _seed_kline(store, "600002", [10.0 * 0.98 ** i for i in range(8)])
@@ -197,7 +235,8 @@ def test_evaluate_picks_cache_invalidates_on_new_picks(store):
     cached = store.evaluate_picks(days=30)
     assert cached["total_picks"] == 1  # 命中缓存，结果一致
 
-    # 新留痕落库 → 缓存 key 变化 → 统计必须包含新票
+    # 新留痕落库 → 缓存 key 变化 → 统计必须包含新票（同池当日只留一份，故拨到次日）
+    pick_clock["advance"](days=1)
     store.record_picks("smart", [{"symbol": "600002", "name": "跌股", "score": 80, "close": 10.0}])
     after = store.evaluate_picks(days=30)
     assert after["total_picks"] == 2
@@ -205,7 +244,7 @@ def test_evaluate_picks_cache_invalidates_on_new_picks(store):
     assert [item["symbol"] for item in after["latest"]] == ["600002"]
 
 
-def test_signal_stats_cached_within_day(store, monkeypatch):
+def test_signal_stats_cached_within_day(store, monkeypatch, pick_clock):
     """signal_stats 全量重算约 20s：同日同数据版本必须命中缓存，refresh=True 强制重算。"""
     _seed_kline(store, "600001", [10.0 * 1.02 ** i for i in range(8)])
     store.record_picks("smart", [{"symbol": "600001", "name": "涨股", "score": 90, "close": 10.0}])
@@ -242,3 +281,32 @@ def test_backtest_applies_transaction_costs():
     assert res.trades == 1
     assert res.total_return < gross
     assert res.total_return == pytest.approx(expected, abs=1e-3)
+
+
+def test_first_seen_records_every_new_entrant_at_its_own_price(store, pick_clock):
+    """首推价：盘中每只新上榜的票都要记下自己那一刻的价格，且只记第一次。
+
+    与 picks_history 的「当日只留一份」区分开——13:00 才进榜的票在留痕表里没有行，
+    但名单上必须显示它是在什么价位被推的。
+    """
+    store.record_first_seen("smart", [{"symbol": "600001", "close": 10.0}])
+    pick_clock["advance"](hours=2)
+    store.record_first_seen("smart", [
+        {"symbol": "600001", "close": 12.0},   # 已记过，价格不许被改写
+        {"symbol": "600002", "close": 20.0},   # 盘中新进榜，按此刻价格记
+    ])
+
+    seen = store.load_first_seen("smart")
+    assert seen["600001"]["first_price"] == 10.0
+    assert seen["600002"]["first_price"] == 20.0
+
+
+def test_first_seen_skips_before_open(store, pick_clock):
+    """盘前那一轮拿的是昨收，记进去会让「首推后涨跌」凭空多出一整天的涨幅。"""
+    pick_clock["now"] = pick_clock["now"].replace(hour=9, minute=0)
+    assert store.record_first_seen("smart", [{"symbol": "600001", "close": 10.0}]) == 0
+    assert store.load_first_seen("smart") == {}
+
+    pick_clock["now"] = pick_clock["now"].replace(hour=9, minute=40)
+    store.record_first_seen("smart", [{"symbol": "600001", "close": 10.6}])
+    assert store.load_first_seen("smart")["600001"]["first_price"] == 10.6

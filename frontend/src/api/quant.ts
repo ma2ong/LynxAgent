@@ -1032,6 +1032,9 @@ export interface HeatmapItem {
   count?: number
   symbol?: string
   mv_yi?: number
+  /** 多周期涨跌幅%；缺 bar 的次新股/长停牌为 null，按中性色画，不当成 0 */
+  pct5?: number | null
+  pct20?: number | null
 }
 
 export interface HeatmapData {
@@ -1045,6 +1048,8 @@ export interface HeatmapData {
     unclassified?: number
     unmapped_value_share?: number
   }
+  /** 本地日线可用时才有 5 日/20 日两档 */
+  periods_ready?: boolean
 }
 
 export const heatmapApi = {

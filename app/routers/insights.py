@@ -750,6 +750,23 @@ async def lite_macro_bar():
     return payload
 
 
+def _load_period_returns() -> dict[str, dict[str, float]]:
+    """每只股票的 5 日 / 20 日涨跌幅%，供热力图多周期着色。
+
+    复用 recent_returns（45 天窗口 + amount>0 的真实 bar），不另写全表扫描。
+    刻意不做「年初至今」那一档：次新股没有基准会大片留白，而本产品的持有窗口是
+    T+1~T+5，年初至今回答不了「现在能不能买」。
+    """
+    from quantcore.quant.local_store import get_local_store
+
+    store = get_local_store()
+    out: dict[str, dict[str, float]] = {}
+    for window, key in ((5, "pct5"), (20, "pct20")):
+        for symbol, pct in (store.recent_returns(window) or {}).items():
+            out.setdefault(str(symbol), {})[key] = pct
+    return out
+
+
 @router.get("/api/lite/heatmap")
 async def lite_heatmap(level: str = "industry", industry: str = ""):
     """行业/个股热力图：面积=A股市值（亿，成交额兜底），颜色=当日涨跌幅。60s 缓存。
@@ -797,17 +814,22 @@ async def lite_heatmap(level: str = "industry", industry: str = ""):
     # 2026-08-20 实测 /api/health 最慢被拖到 13.4s，逼近 watchdog 的容忍上限，
     # 再慢一点就会被判定为宕机而触发一次没必要的重启。取数早就走 _run_data_task 了，
     # 唯独这一步是在循环里现算，属于「端点别同步现算」这条既有约束的漏网之处。
+    # 多周期涨跌（5日/20日）：本地日线现算，与实时快照的当日涨跌一起下发，
+    # 前端切周期只换颜色不重新取数。取不到就退化成只有当日一档，不阻断热力图。
+    returns = await _run_data_task(_load_period_returns, timeout=25.0) or {}
     if level == "industry":
         from quantcore.quant.heatmap import heatmap_coverage
-        items = await _run_data_task(build_heatmap_industry, snapshot, industry_map, timeout=25.0)
+        items = await _run_data_task(
+            build_heatmap_industry, snapshot, industry_map, returns, timeout=25.0)
         coverage = await _run_data_task(heatmap_coverage, snapshot, industry_map, timeout=15.0)
     else:
         items = await _run_data_task(
-            build_heatmap_stocks, snapshot, industry_map, industry.strip(), timeout=25.0)
+            build_heatmap_stocks, snapshot, industry_map, industry.strip(), returns, timeout=25.0)
     payload = {
         "success": True,
         "data": {"level": level, "industry": industry.strip() or None, "items": items,
                  "source": source, "mapped": len(industry_map), "coverage": coverage,
+                 "periods_ready": bool(returns),
                  "updated_at": datetime.now().astimezone().strftime("%Y/%m/%d %H:%M:%S")},
     }
     if items:

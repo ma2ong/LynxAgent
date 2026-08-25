@@ -14,6 +14,8 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 _UNMAPPED = "其他"
+# 多周期着色的字段名，与 recent_returns 的 window 对应
+_PERIOD_KEYS = ("pct5", "pct20")
 
 
 def _num(value) -> float:
@@ -30,7 +32,7 @@ def _mv_yi(value) -> float:
     return v / 1e8 if v > 1_000_000 else v
 
 
-def _stock_item(symbol: str, q: Dict) -> Optional[Dict]:
+def _stock_item(symbol: str, q: Dict, returns: Optional[Dict[str, Dict[str, float]]] = None) -> Optional[Dict]:
     pct = q.get("pct_chg", q.get("change_percent"))
     if pct is None:
         return None
@@ -39,12 +41,21 @@ def _stock_item(symbol: str, q: Dict) -> Optional[Dict]:
     value = mv if mv > 0 else amount_yi
     if value <= 0:
         return None
-    return {"symbol": symbol, "name": str(q.get("name") or symbol),
+    item = {"symbol": symbol, "name": str(q.get("name") or symbol),
             "pct": round(float(pct), 2), "value": round(value, 2),
             "mv_yi": round(mv, 2), "amount_yi": round(amount_yi, 2)}
+    # 多周期涨跌：只有当日颜色回答不了「这个板块是不是在持续走强」——
+    # 一根大阳线和连涨二十天在单日口径下是同一个红色。缺 bar 的（次新股、长停牌）
+    # 给 None，前端按中性灰画，不拿 0 冒充「没涨没跌」。
+    r = (returns or {}).get(symbol) or {}
+    for key in _PERIOD_KEYS:
+        v = r.get(key)
+        item[key] = round(float(v), 2) if v is not None else None
+    return item
 
 
-def build_heatmap_industry(snapshot: Dict[str, Dict], industry_map: Dict[str, str]) -> List[Dict]:
+def build_heatmap_industry(snapshot: Dict[str, Dict], industry_map: Dict[str, str],
+                           returns: Optional[Dict[str, Dict[str, float]]] = None) -> List[Dict]:
     """行业块列表：面积=行业总市值（亿），颜色=市值加权当日涨跌幅，按面积降序。
 
     不含「其他」（未归类）：行业源覆盖不全时，未归类桶会聚起数千只股票、市值总和碾压
@@ -53,7 +64,7 @@ def build_heatmap_industry(snapshot: Dict[str, Dict], industry_map: Dict[str, st
     """
     groups: Dict[str, List[Dict]] = {}
     for symbol, q in snapshot.items():
-        item = _stock_item(symbol, q)
+        item = _stock_item(symbol, q, returns)
         if item is None:
             continue
         name = industry_map.get(symbol) or _UNMAPPED
@@ -66,9 +77,16 @@ def build_heatmap_industry(snapshot: Dict[str, Dict], industry_map: Dict[str, st
         if total <= 0:
             continue
         pct = sum(i["pct"] * i["value"] for i in items) / total
-        out.append({"name": name, "count": len(items),
-                    "value": round(total, 2), "pct": round(pct, 2),
-                    "amount_yi": round(sum(i["amount_yi"] for i in items), 2)})
+        row = {"name": name, "count": len(items),
+               "value": round(total, 2), "pct": round(pct, 2),
+               "amount_yi": round(sum(i["amount_yi"] for i in items), 2)}
+        # 各周期各自按「有数据的成分股」市值加权：拿不到 20 日涨幅的次新股
+        # 不该把整个行业的分母撑大，否则行业越是次新股多、20 日颜色越淡。
+        for key in _PERIOD_KEYS:
+            have = [i for i in items if i.get(key) is not None]
+            w = sum(i["value"] for i in have)
+            row[key] = round(sum(i[key] * i["value"] for i in have) / w, 2) if w > 0 else None
+        out.append(row)
     out.sort(key=lambda x: x["value"], reverse=True)
     return out
 
@@ -92,10 +110,11 @@ def heatmap_coverage(snapshot: Dict[str, Dict], industry_map: Dict[str, str]) ->
             "unmapped_value_share": round(unmapped_val / total_val, 4) if total_val > 0 else 0.0}
 
 
-def build_heatmap_stocks(snapshot: Dict[str, Dict], industry_map: Dict[str, str], industry: str) -> List[Dict]:
+def build_heatmap_stocks(snapshot: Dict[str, Dict], industry_map: Dict[str, str], industry: str,
+                        returns: Optional[Dict[str, Dict[str, float]]] = None) -> List[Dict]:
     """指定行业的个股块列表，按面积降序。"""
     out = [item for symbol, q in snapshot.items()
            if (industry_map.get(symbol) or _UNMAPPED) == industry
-           and (item := _stock_item(symbol, q)) is not None]
+           and (item := _stock_item(symbol, q, returns)) is not None]
     out.sort(key=lambda x: x["value"], reverse=True)
     return out

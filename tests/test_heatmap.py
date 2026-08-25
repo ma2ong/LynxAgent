@@ -86,3 +86,34 @@ def test_build_heatmap_stocks_filters_by_industry():
     assert items[0]["pct"] == 5.0 and items[0]["value"] == 200.0
     assert build_heatmap_stocks(SNAP, IND, "其他")[0]["symbol"] == "600004"
     assert build_heatmap_stocks(SNAP, IND, "不存在") == []
+
+
+def test_industry_multi_period_weights_only_stocks_with_data():
+    """多周期加权只用「该周期有数据」的成分股当分母。
+
+    否则次新股越多的行业，20 日颜色被凭空稀释得越淡——看上去像走弱，其实是没数据。
+    """
+    from quantcore.quant.heatmap import build_heatmap_industry
+
+    snapshot = {
+        "600001": {"name": "老股", "pct_chg": 1.0, "total_mv": 100.0},
+        "600002": {"name": "次新", "pct_chg": 1.0, "total_mv": 300.0},
+    }
+    industry_map = {"600001": "银行", "600002": "银行"}
+    # 次新股没有 20 日数据，且它市值是老股的 3 倍
+    returns = {"600001": {"pct5": 4.0, "pct20": 20.0}, "600002": {"pct5": 8.0}}
+
+    row = build_heatmap_industry(snapshot, industry_map, returns)[0]
+    assert row["pct5"] == pytest.approx((4.0 * 100 + 8.0 * 300) / 400)
+    # 20 日只有老股有数 -> 等于老股自己的值，而不是被 400 的分母摊成 5.0
+    assert row["pct20"] == pytest.approx(20.0)
+
+
+def test_industry_period_is_none_when_no_member_has_data():
+    """整个行业都没有该周期数据时给 None，不给 0——0 会被画成「平盘」。"""
+    from quantcore.quant.heatmap import build_heatmap_industry
+
+    snapshot = {"600001": {"name": "新股", "pct_chg": 2.0, "total_mv": 100.0}}
+    row = build_heatmap_industry(snapshot, {"600001": "银行"}, {})[0]
+    assert row["pct20"] is None and row["pct5"] is None
+    assert row["pct"] == 2.0

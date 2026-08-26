@@ -1,31 +1,32 @@
 <template>
   <div class="heatmap-page">
+    <!-- 标题与口径说明同一行：这页的价值全在那张图上，每多占一行文字，
+         就少一行瓦片、多一次滚动。 -->
     <div class="page-head">
-      <div>
-        <h2>行业热力图</h2>
-        <p class="sub">
-          面积=A股市值 · 颜色={{ PERIODS.find(p => p.key === period)?.label }}涨跌幅（红涨绿跌）
-          <template v-if="data"> · {{ data.source === 'realtime' ? '实时行情' : '本地日线' }} · {{ data.updated_at }}</template>
-          <template v-if="!currentIndustry && data?.coverage?.classified">
-            · 已归类 {{ data.coverage.classified }} 只<span
-              v-if="(data.coverage.unclassified || 0) > 0"
-              class="cov-note">（未归类 {{ data.coverage.unclassified }} 只，行业源不全暂不计入）</span>
-          </template>
-        </p>
-      </div>
+      <h2>行业热力图</h2>
+      <p class="sub">
+        面积=A股市值 · 颜色={{ PERIODS.find(p => p.key === period)?.label }}涨跌幅（红涨绿跌）
+        <template v-if="data"> · {{ data.source === 'realtime' ? '实时行情' : '本地日线' }} · {{ data.updated_at }}</template>
+        <template v-if="!currentIndustry && data?.coverage?.classified">
+          · 已归类 {{ data.coverage.classified }} 只<span
+            v-if="(data.coverage.unclassified || 0) > 0"
+            class="cov-note">（未归类 {{ data.coverage.unclassified }} 只，行业源不全暂不计入）</span>
+        </template>
+      </p>
       <div class="actions">
         <!-- 单日颜色回答不了「这个板块是不是在持续走强」：一根大阳线和连涨二十天
              在当日口径下同样是红的。周期切换只换颜色，不重新取数。 -->
         <el-radio-group v-model="period" size="small" :disabled="data?.periods_ready === false" @change="render">
           <el-radio-button v-for="p in PERIODS" :key="p.key" :value="p.key">{{ p.label }}</el-radio-button>
         </el-radio-group>
-        <!-- 板块直达：图上点标题条也能进，但那是一条 18px 的窄边，找得到才怪。
-             这个下拉还兼做「在板块之间横跳」——否则每换一个板块都要先退回全市场。 -->
+        <!-- 板块直达：图上点标题条也能进，但那是一条窄边，找得到才怪。
+             这个下拉还兼做「在板块之间横跳」——否则每换一个板块都要先退回全市场。
+             不开 filterable：那会变成输入框，用户得先想「这个板块叫什么」再打字；
+             板块名是固定的一百多个，展开直接挑才对。 -->
         <el-select
           v-model="currentIndustry"
           class="industry-jump"
           size="small"
-          filterable
           clearable
           placeholder="进入板块热力图"
           @change="(v: string) => load(v || '')"
@@ -60,17 +61,18 @@
         较昨日全天 {{ (ov.amount_vs_prev * 100).toFixed(0) }}%
       </span>
       <span v-if="ov.amount_vs_prev != null" class="muted">（盘中未走完时天然小于 100%）</span>
+      <!-- 操作提示并进这一行，不再单占一行：省下的高度全给瓦片 -->
+      <span class="hint">
+        {{ currentIndustry
+          ? '点个股进深研 · 右上角下拉可直接换板块'
+          : '点个股进深研 · 点行业标题条「›」进该板块热力图' }}
+      </span>
     </div>
 
     <div v-loading="loading" class="chart-wrap">
       <div ref="chartEl" class="chart" />
       <el-empty v-if="!loading && !items.length" description="暂无数据：请先在数据中心同步行情" />
     </div>
-    <p class="hint">
-      {{ currentIndustry
-        ? `当前只看「${currentIndustry}」板块 · 点个股进深研 · 右上角下拉可直接换板块`
-        : '每个行业块里直接铺开成分股（每行业最多 60 只）· 点个股进深研 · 点行业标题条「›」进该板块热力图' }}
-    </p>
   </div>
 </template>
 
@@ -90,6 +92,8 @@ const currentIndustry = ref('')
 let chart: ECharts | null = null
 
 const ov = computed(() => data.value?.overview || null)
+// 全市场视图才是两层嵌套；进了板块就是一层个股
+const nested = computed(() => items.value.some(it => (it.children || []).length > 0))
 
 // 行业清单单独留一份：下钻后 items 变成个股了，下拉框还得能在板块之间横跳
 const industryList = ref<HeatmapItem[]>([])
@@ -185,14 +189,22 @@ const render = () => {
       },
       label: labelIfRoomy,
       itemStyle: { borderColor: '#12141a', borderWidth: 1, gapWidth: 1 },
-      levels: [
-        // 行业层：粗边框把板块分开，标题条常驻
-        { itemStyle: { borderColor: '#0d0f14', borderWidth: 3, gapWidth: 3 },
-          upperLabel: { show: true } },
-        // 个股层
-        { itemStyle: { borderColor: '#12141a', borderWidth: 1, gapWidth: 1 },
-          label: { fontSize: 11 } },
-      ],
+      // levels[0] 是**根节点**，不是行业层 —— 配错这一格，根节点就会顶着一条
+      // 「undefined ›」的标题条白占 26px（2026-08-26 线上出现过）。
+      // 行业在 levels[1]、个股在 levels[2]；板块视图里个股升到第 1 层，
+      // 所以那时只给两级配置，否则个股会套上行业层的粗边框。
+      levels: nested.value
+        ? [
+            { upperLabel: { show: false }, itemStyle: { borderWidth: 0, gapWidth: 0 } },
+            { upperLabel: { show: true },
+              itemStyle: { borderColor: '#0d0f14', borderWidth: 3, gapWidth: 3 } },
+            { itemStyle: { borderColor: '#12141a', borderWidth: 1, gapWidth: 1 },
+              label: { fontSize: 11 } },
+          ]
+        : [
+            { upperLabel: { show: false }, itemStyle: { borderWidth: 0, gapWidth: 0 } },
+            { itemStyle: { borderColor: '#12141a', borderWidth: 1, gapWidth: 1 } },
+          ],
       data: tileData(),
     }],
   }, true)
@@ -232,16 +244,25 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="scss">
-.heatmap-page { display: flex; flex-direction: column; height: 100%; }
-.page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;
-  h2 { margin: 0; font-size: 20px; }
-  .sub { margin: 4px 0 0; font-size: 12px; color: var(--el-text-color-secondary); }
+/* 整页不出滚动条：外层锁死视口高度，中间那块图吃掉全部剩余空间。
+   min-height 一旦写死（原来是 520px），窗口矮一点就把页面撑出滚动条，
+   而这一页的全部价值就是「一屏看完全市场」。 */
+.heatmap-page { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
+.page-head {
+  display: flex; align-items: baseline; flex-wrap: nowrap; gap: 10px; margin-bottom: 6px;
+
+  h2 { margin: 0; font-size: 20px; flex-shrink: 0; }
+  .sub {
+    margin: 0; font-size: 12px; color: var(--el-text-color-secondary);
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .actions { margin-left: auto; flex-shrink: 0; }
 }
 .actions { display: flex; align-items: center; gap: 8px; }
 .industry-jump { width: 190px; }
 .overview {
   display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
-  padding: 6px 12px; margin-bottom: 8px; font-size: 12px;
+  padding: 5px 12px; margin-bottom: 6px; font-size: 12px; flex-shrink: 0;
   border: 1px solid var(--el-border-color-lighter); border-radius: 8px;
 
   b { font-size: 13px; }
@@ -249,6 +270,7 @@ onBeforeUnmount(() => {
   .down { color: #1e9e63; font-weight: 600; }
   .muted { color: var(--el-text-color-placeholder); }
   .sep { color: var(--el-text-color-placeholder); }
+  .hint { margin-left: auto; color: var(--el-text-color-placeholder); }
 }
 /* 下拉里的涨跌幅与只数右对齐，扫一眼就能挑最强的板块进去 */
 .opt-pct { float: right; margin-left: 12px; font-variant-numeric: tabular-nums;
@@ -256,8 +278,7 @@ onBeforeUnmount(() => {
   &.down { color: #1e9e63; }
 }
 .opt-count { float: right; margin-left: 12px; color: var(--el-text-color-placeholder); font-size: 12px; }
-.chart-wrap { position: relative; flex: 1; min-height: 520px; }
-.chart { width: 100%; height: 100%; min-height: 520px; }
-.hint { margin: 8px 0 0; font-size: 12px; color: var(--el-text-color-placeholder); }
+.chart-wrap { position: relative; flex: 1; min-height: 0; }
+.chart { width: 100%; height: 100%; }
 .cov-note { color: var(--el-text-color-placeholder); }
 </style>

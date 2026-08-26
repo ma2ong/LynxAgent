@@ -19,6 +19,30 @@
         <el-radio-group v-model="period" size="small" :disabled="data?.periods_ready === false" @change="render">
           <el-radio-button v-for="p in PERIODS" :key="p.key" :value="p.key">{{ p.label }}</el-radio-button>
         </el-radio-group>
+        <!-- 板块直达：图上点标题条也能进，但那是一条 18px 的窄边，找得到才怪。
+             这个下拉还兼做「在板块之间横跳」——否则每换一个板块都要先退回全市场。 -->
+        <el-select
+          v-model="currentIndustry"
+          class="industry-jump"
+          size="small"
+          filterable
+          clearable
+          placeholder="进入板块热力图"
+          @change="(v: string) => load(v || '')"
+        >
+          <el-option
+            v-for="opt in industryOptions"
+            :key="opt.name"
+            :label="`${opt.name}  ${fmtPct(opt.val)}`"
+            :value="opt.name"
+          >
+            <span>{{ opt.name }}</span>
+            <span class="opt-pct" :class="opt.val != null && opt.val > 0 ? 'up' : 'down'">
+              {{ fmtPct(opt.val) }}
+            </span>
+            <span class="opt-count">{{ opt.count }} 只</span>
+          </el-option>
+        </el-select>
         <el-button v-if="currentIndustry" size="small" @click="backToIndustry">← 全部行业</el-button>
         <el-button size="small" :loading="loading" @click="load(currentIndustry)">刷新</el-button>
       </div>
@@ -44,8 +68,8 @@
     </div>
     <p class="hint">
       {{ currentIndustry
-        ? '点击个股跳转个股深研'
-        : '每个行业块里直接铺开成分股（每行业最多 60 只）；点个股进深研，点行业标题只看该行业' }}
+        ? `当前只看「${currentIndustry}」板块 · 点个股进深研 · 右上角下拉可直接换板块`
+        : '每个行业块里直接铺开成分股（每行业最多 60 只）· 点个股进深研 · 点行业标题条「›」进该板块热力图' }}
     </p>
   </div>
 </template>
@@ -66,6 +90,13 @@ const currentIndustry = ref('')
 let chart: ECharts | null = null
 
 const ov = computed(() => data.value?.overview || null)
+
+// 行业清单单独留一份：下钻后 items 变成个股了，下拉框还得能在板块之间横跳
+const industryList = ref<HeatmapItem[]>([])
+const industryOptions = computed(() =>
+  industryList.value
+    .map(it => ({ name: it.name, count: it.count || 0, val: valOf(it) }))
+    .sort((a, b) => (b.val ?? -999) - (a.val ?? -999)))
 
 // 每档周期的饱和刻度必须各不相同：20 日涨跌若也用 ±4% 封顶，
 // 但凡走出趋势的板块全是纯红，热力图退化成一块红布，区分不出强弱。
@@ -143,7 +174,15 @@ const render = () => {
       height: '100%',
       // 两层一起画：行业标题条 + 内部个股瓦片。leafDepth 不设，否则 ECharts
       // 只画到第一层、双击才展开，那就退回成原来的扁平图了。
-      upperLabel: { show: true, height: 18, fontSize: 12, color: '#dfe3ea' },
+      //
+      // 标题条是进板块热力图的唯一图上入口，做到 26px 并带上涨跌幅和「›」：
+      // 原来 18px 的窄边既看不出可点、也很难点中，等于这个功能不存在。
+      upperLabel: {
+        show: true, height: 26, fontSize: 12, color: '#e8ecf3',
+        formatter: (p: any) => (p.data?.children?.length
+          ? `${p.data.name}  ${fmtPct(valOf(p.data))}  ›`
+          : p.data?.name),
+      },
       label: labelIfRoomy,
       itemStyle: { borderColor: '#12141a', borderWidth: 1, gapWidth: 1 },
       levels: [
@@ -167,6 +206,7 @@ const load = async (industry = '') => {
     if (!res) return
     data.value = res
     items.value = res.items || []
+    if (!industry) industryList.value = res.items || []
     currentIndustry.value = industry
     render()
   } finally {
@@ -198,6 +238,7 @@ onBeforeUnmount(() => {
   .sub { margin: 4px 0 0; font-size: 12px; color: var(--el-text-color-secondary); }
 }
 .actions { display: flex; align-items: center; gap: 8px; }
+.industry-jump { width: 190px; }
 .overview {
   display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
   padding: 6px 12px; margin-bottom: 8px; font-size: 12px;
@@ -209,6 +250,12 @@ onBeforeUnmount(() => {
   .muted { color: var(--el-text-color-placeholder); }
   .sep { color: var(--el-text-color-placeholder); }
 }
+/* 下拉里的涨跌幅与只数右对齐，扫一眼就能挑最强的板块进去 */
+.opt-pct { float: right; margin-left: 12px; font-variant-numeric: tabular-nums;
+  &.up { color: #e0402c; }
+  &.down { color: #1e9e63; }
+}
+.opt-count { float: right; margin-left: 12px; color: var(--el-text-color-placeholder); font-size: 12px; }
 .chart-wrap { position: relative; flex: 1; min-height: 520px; }
 .chart { width: 100%; height: 100%; min-height: 520px; }
 .hint { margin: 8px 0 0; font-size: 12px; color: var(--el-text-color-placeholder); }

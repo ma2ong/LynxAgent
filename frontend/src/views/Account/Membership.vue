@@ -1,8 +1,8 @@
 <template>
   <div class="membership">
     <div class="page-head">
-      <h2>设置</h2>
-      <p>配置你自己的 AI API Key，并查看今日调用次数。</p>
+      <h2>用户设置</h2>
+      <p>配置你自己的 AI API Key、查看今日调用次数，以及退出登录。</p>
     </div>
 
     <!-- BYOK：用户自带密钥。站点统一配一把的话，任何注册用户都能改服务端配置，
@@ -133,6 +133,21 @@
       </div>
     </el-card>
 
+    <!-- 退出登录从侧栏底部收到这里：低频且不可撤销，常驻侧栏只会被误点。
+         放在整页最后、且要二次确认——避免用户想改 API Key 却顺手把自己登出了。 -->
+    <el-card class="card">
+      <div class="card-title">
+        <h3>账号</h3>
+      </div>
+      <p class="account-line">
+        当前登录 <b>{{ currentUser?.username || currentUser?.email || '—' }}</b>
+        <em v-if="currentUser?.is_admin">（管理员）</em>
+      </p>
+      <el-button type="danger" plain @click="confirmLogout">
+        <el-icon><SwitchButton /></el-icon>退出登录
+      </el-button>
+    </el-card>
+
     <p class="disclaimer">
       本产品为 AI 研究工具，所有内容仅供研究参考，不构成投资建议。市场有风险，决策需独立。
     </p>
@@ -141,8 +156,11 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { SwitchButton } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 import { ApiClient } from '@/api/request'
+import { currentUser, clearCurrentUser } from '@/stores/user'
 import {
   fetchBillingMe,
   fetchRuntimeValidation,
@@ -156,6 +174,22 @@ import {
   unbindWechatPush,
   type WechatPushStatus,
 } from '@/api/notifications'
+
+const router = useRouter()
+
+// 二次确认：这个按钮就在 API Key 表单下面，误点一次就得重新登录
+const confirmLogout = async () => {
+  try {
+    await ElMessageBox.confirm('退出后需要重新登录才能使用。确定退出吗？', '退出登录', {
+      confirmButtonText: '退出', cancelButtonText: '取消', type: 'warning',
+    })
+  } catch {
+    return  // 用户取消
+  }
+  clearCurrentUser()
+  localStorage.removeItem('auth-token')
+  router.push('/login')
+}
 
 const info = ref<BillingMe | null>(null)
 const runtime = ref<RuntimeConfigValidation | null>(null)
@@ -337,6 +371,9 @@ onMounted(() => { loadPage(); loadKey() })
 .muted { color: var(--el-text-color-secondary); line-height: 1.7; }
 .push-form { margin-top: 14px; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.account-line { margin: 0 0 12px; color: var(--el-text-color-regular);
+  em { font-style: normal; color: var(--el-text-color-placeholder); }
+}
 .disclaimer { color: #909399; font-size: 12px; text-align: center; line-height: 1.6; }
 
 @media (max-width: 720px) {

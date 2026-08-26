@@ -32,18 +32,17 @@
         <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
         <el-menu-item index="/review"><el-icon><DataAnalysis /></el-icon><span>选股复盘</span></el-menu-item>
         <el-menu-item index="/favorites"><el-icon><Star /></el-icon><span>我的自选股</span></el-menu-item>
-        <el-menu-item index="/account/membership"><el-icon><Tools /></el-icon><span>设置</span></el-menu-item>
-        <el-menu-item v-if="currentUser?.is_admin" index="/admin/users"><el-icon><Setting /></el-icon><span>用户管理</span></el-menu-item>
         <el-menu-item index="/data-center"><el-icon><DataLine /></el-icon><span>数据中心</span></el-menu-item>
+        <el-menu-item v-if="currentUser?.is_admin" index="/admin/users"><el-icon><Setting /></el-icon><span>用户管理</span></el-menu-item>
+        <el-menu-item index="/account/membership"><el-icon><Tools /></el-icon><span>用户设置</span></el-menu-item>
       </el-menu>
-      <div class="sidebar-foot">
+      <!-- 退出登录已移进「用户设置」页：它是低频且不可撤销的操作，
+           常驻在侧栏底部只会被误点，而每天要点的那些入口反而被它挤着。 -->
+      <div v-if="billingInfo && !billingInfo.unlimited" class="sidebar-foot">
         <!-- 不限档没有额度可报，不显示任何标识；只有限额档才提示今日剩余。 -->
-        <div v-if="billingInfo && !billingInfo.unlimited" class="quota-chip" @click="$router.push('/account/membership')">
+        <div class="quota-chip" @click="$router.push('/account/membership')">
           {{ billingInfo.plan_label }} · 今日剩余 {{ billingInfo.remaining_today }}/{{ billingInfo.daily_limit }}
         </div>
-        <el-button text size="small" @click="logout">
-          <el-icon><SwitchButton /></el-icon>退出登录
-        </el-button>
       </div>
     </el-aside>
     <el-main class="content">
@@ -60,19 +59,18 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import {
-  TrendCharts, Star, SwitchButton,
+  TrendCharts, Star,
   DocumentChecked, Menu,
   MagicStick, Tools, Setting, DataLine, Sunrise, DataAnalysis, Histogram, Warning, Odometer, Bell,
 } from '@element-plus/icons-vue'
-import { currentUser, loadCurrentUser, clearCurrentUser } from '@/stores/user'
+import { currentUser, loadCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'
 import BrandLogo from './BrandLogo.vue'
 import MacroBar from '@/components/MacroBar.vue'
 
 const route = useRoute()
-const router = useRouter()
 
 // 需要保活的搜索类页面（组件 name 必须与此一致）。个股深研/复盘不保活：
 // 深研每次点开都要跟着新代码重新分析，不能复用上一只票的旧结果。
@@ -89,11 +87,6 @@ onMounted(async () => {
   } catch { /* 配额信息拉不到不阻塞页面 */ }
 })
 
-const logout = () => {
-  clearCurrentUser()
-  localStorage.removeItem('auth-token')
-  router.push('/login')
-}
 </script>
 
 <style scoped lang="scss">

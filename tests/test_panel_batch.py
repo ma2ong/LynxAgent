@@ -1,12 +1,23 @@
 """五方判读批量化（panel_scores 表 + panel_batch 逻辑）回归测试。"""
+from datetime import date, datetime
+
 import pytest
 
+from quantcore.quant import local_store
 from quantcore.quant.local_store import LocalQuantStore
 
 
 @pytest.fixture()
 def store(tmp_path):
     return LocalQuantStore(str(tmp_path / "test.sqlite"))
+
+
+@pytest.fixture()
+def pick_clock(monkeypatch):
+    """把留痕时点钉在开盘后：record_picks 在 09:25 前不写历史，
+    不钉住的话这个用例只在下午跑才通过。"""
+    fixed = datetime.combine(date.today(), datetime.min.time()).replace(hour=10)
+    monkeypatch.setattr(local_store, "_now_cn", lambda: fixed)
 
 
 def _payload(consensus=60.0, divergence=20.0):
@@ -41,12 +52,11 @@ def test_load_panel_scores_no_symbols_returns_all_of_day(store):
     assert len(scores) == 2
 
 
-def test_load_picks_symbols(store):
+def test_load_picks_symbols(store, pick_clock):
     store.record_picks("smart", [
         {"symbol": "600001", "name": "甲", "score": 90, "close": 10.0},
         {"symbol": "600002", "name": "乙", "score": 80, "close": 20.0},
     ])
-    from datetime import date
     today = date.today().strftime("%Y-%m-%d")
     assert store.load_picks_symbols(today, "smart", limit=10) == ["600001", "600002"]
     assert store.load_picks_symbols(today, "pattern") == []

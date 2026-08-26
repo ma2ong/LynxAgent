@@ -92,3 +92,35 @@ def test_holm_tightens_the_bar_as_more_rules_are_submitted():
     # 同一个 p=0.03，混在 10 条里就过不了 0.05/10 的阈值
     assert many[0]["p_holm_threshold"] == pytest.approx(0.005)
     assert many[0]["pass_holm"] is False
+
+
+def test_paired_vs_base_measures_the_gate_not_the_market():
+    """较基线必须是同日配对差：行情好坏两边一起承担，不该记到闸门头上。"""
+    from rule_audit import paired_vs_base
+
+    rows = []
+    for d, mood in (("2026-03-02", 10.0), ("2026-03-03", -10.0), ("2026-03-04", 0.0)):
+        # 每天两只票：留下的那只比被剔的那只稳定高 2pp，与当天行情无关
+        rows.append((d, "600001", 0, mood + 1.0))
+        rows.append((d, "600002", 0, mood - 1.0))
+    panel = _panel(rows)
+    base = pd.Series(True, index=panel.index)
+    variant = panel["symbol"].eq("600001")
+
+    out = paired_vs_base(panel, base, variant)
+    assert out["vs_base"] == pytest.approx(1.0)   # 变体 mood+1 vs 基线 mood
+    assert out["vs_base_days"] == 3
+
+
+def test_variant_spec_rejects_gates_that_are_not_filters():
+    """闸门只能收窄名单。拼错方向或用了不存在的规则要当场报错，不能静默放行。"""
+    from rule_audit import parse_variant
+
+    base, gates = parse_variant("base,-chase20,+consolidate")
+    assert base == "base"
+    assert gates == [("-", "chase20"), ("+", "consolidate")]
+
+    with pytest.raises(SystemExit):
+        parse_variant("base,chase20")      # 少了 +/-
+    with pytest.raises(SystemExit):
+        parse_variant("base,-nosuchrule")  # 未知规则

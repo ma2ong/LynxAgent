@@ -302,7 +302,10 @@ def verdict(r: dict) -> dict:
 # 内置规则：只允许读 prior_* 与当日量价，读 fwd_* 就是未来函数
 # --------------------------------------------------------------------------
 RULES = {
+    # 三档追高闸门做剂量反应：只在某一档有效、邻档无效，多半是噪音而不是机制
+    "chase15": ("近20日已涨≥15%", lambda d: d["prior_ret20"] >= 15),
     "chase20": ("近20日已涨≥25%（追高）", lambda d: d["prior_ret20"] >= 25),
+    "chase35": ("近20日已涨≥35%", lambda d: d["prior_ret20"] >= 35),
     "near_high": ("贴着20日高点（距高点≤3%）", lambda d: d["dist_high20"] >= -3),
     "chase_near_high": ("近20日≥25% 且贴着高点", lambda d: (d["prior_ret20"] >= 25) & (d["dist_high20"] >= -3)),
     "deep_drop": ("近20日跌≥20%（深跌）", lambda d: d["prior_ret20"] <= -20),
@@ -325,13 +328,77 @@ def pool_mask(panel: pd.DataFrame, db: str, pool: str) -> pd.Series:
                      index=panel.index)
 
 
+def replay_mask(panel: pd.DataFrame, db: str, pool: str) -> pd.Series:
+    """把最近一次回放选出来的票当信号。
+
+    比线上留痕更适合审闸门：留痕只有两个月、25 个交易日，过不了样本闸；回放是
+    point-in-time 重建的 12 个月 × 52 期 × top20，日数和样本量都够，且与线上共用
+    同一套评分函数。代价是它按收盘价、每 5 个交易日一期，不含盘中时机层。
+    """
+    conn = sqlite3.connect(db, timeout=60)
+    try:
+        run = conn.execute(
+            "SELECT run_id FROM replay_runs WHERE status='done' "
+            "ORDER BY created_at DESC LIMIT 1").fetchone()
+        if not run:
+            raise SystemExit("快照里没有跑完的回放，先在页面上跑一次「重跑回放」")
+        rows = conn.execute(
+            "SELECT as_of, symbol FROM replay_results WHERE run_id=? AND pool=?",
+            (run[0], pool)).fetchall()
+    finally:
+        conn.close()
+    keys = {(str(d), str(s).zfill(6)) for d, s in rows}
+    return pd.Series([(d, s) in keys for d, s in zip(panel["date"], panel["symbol"])],
+                     index=panel.index)
+
+
+def parse_variant(spec: str) -> tuple[str, list[tuple[str, str]]]:
+    """"base,-chase20,+consolidate" -> ("base", [("-","chase20"),("+","consolidate")])。
+
+    `-` 是剔除（这些票不要了），`+` 是必须满足。闸门只能收窄名单，不能引入新票 ——
+    「加一条规则把别的票捞进来」是换一个池，不是给这个池装闸门，两者不可比。
+    """
+    parts = [p.strip() for p in spec.split(",") if p.strip()]
+    if not parts:
+        raise SystemExit(f"空的 --variant：{spec!r}")
+    gates = []
+    for p in parts[1:]:
+        if p[0] not in "+-":
+            raise SystemExit(f"闸门要以 + 或 - 开头：{p!r}")
+        if p[1:] not in RULES:
+            raise SystemExit(f"未知规则 {p[1:]}，用 --list 看可用的")
+        gates.append((p[0], p[1:]))
+    return parts[0], gates
+
+
+def paired_vs_base(panel: pd.DataFrame, base: pd.Series, variant: pd.Series) -> dict:
+    """变体相对基线的日配对差：同一天两边各自的平均超额相减。
+
+    这才是「闸门要不要装」的决策数字。变体自己的对照增量回答的是另一个问题
+    （这批票有没有 alpha），两者都要看：闸门可能提高了均值却把样本砍到没法用。
+    """
+    b = panel[base].groupby("date")["fwd_excess"].mean()
+    v = panel[variant].groupby("date")["fwd_excess"].mean()
+    both = pd.concat([b.rename("b"), v.rename("v")], axis=1).dropna()
+    if len(both) < 2:
+        return {"vs_base": None, "vs_base_t": None, "vs_base_days": len(both)}
+    diff = (both["v"] - both["b"]).tolist()
+    m = statistics.mean(diff)
+    sd = statistics.stdev(diff)
+    t = m / (sd / math.sqrt(len(diff))) if sd else 0.0
+    return {"vs_base": round(m, 3), "vs_base_t": round(t, 2), "vs_base_days": len(diff)}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=DEFAULT_DB)
     ap.add_argument("--since", default="2019-01-01", help="面板起始日；越长时间稳定性越可信")
     ap.add_argument("--horizon", type=int, default=5, help="持有交易日数（T+N）")
     ap.add_argument("--rule", action="append", default=[], help="内置规则名，可重复")
-    ap.add_argument("--pool", action="append", default=[], help="按留痕池审计，可重复")
+    ap.add_argument("--pool", action="append", default=[], help="按线上留痕审计，可重复")
+    ap.add_argument("--replay", default="", help="以最近一次回放的该池选股为基线，配合 --variant")
+    ap.add_argument("--variant", action="append", default=[],
+                    help='闸门变体，如 "base" / "base,-chase20" / "base,-chase20,+consolidate"，可重复')
     ap.add_argument("--list", action="store_true", help="列出内置规则")
     args = ap.parse_args()
 
@@ -339,8 +406,10 @@ def main() -> None:
         for k, (desc, _) in RULES.items():
             print(f"  {k:18s} {desc}")
         return
-    if not args.rule and not args.pool:
-        ap.error("至少给一个 --rule 或 --pool")
+    if not args.rule and not args.pool and not args.replay:
+        ap.error("至少给一个 --rule / --pool / --replay")
+    if args.variant and not args.replay:
+        ap.error("--variant 需要配合 --replay 指定基线池")
 
     print(f"载入面板 since={args.since} horizon=T+{args.horizon} …")
     panel = build_panel(args.db, args.since, args.horizon)
@@ -360,6 +429,23 @@ def main() -> None:
         r["desc"] = f"线上 {pool} 池的真实留痕"
         results.append(r)
 
+    if args.replay:
+        base_mask = replay_mask(panel, args.db, args.replay)
+        print(f"回放基线 {args.replay}: {int(base_mask.sum())} 笔 · "
+              f"{panel[base_mask]['date'].nunique()} 期")
+        specs = args.variant or ["base"]
+        for spec in specs:
+            _, gates = parse_variant(spec)
+            mask = base_mask.copy()
+            for sign, name in gates:
+                gate = RULES[name][1](panel)
+                mask &= (~gate) if sign == "-" else gate
+            r = audit_one(panel, mask, f"{args.replay}:{spec}", args.horizon)
+            r["desc"] = f"回放 {args.replay} 池 + 闸门 {spec}"
+            r.update(paired_vs_base(panel, base_mask, mask))
+            r["kept_share"] = round(float(mask.sum()) / max(1, float(base_mask.sum())), 3)
+            results.append(r)
+
     holm(results)
     for r in results:
         verdict(r)
@@ -374,21 +460,33 @@ def main() -> None:
                                   "FRICTION_PP": FRICTION_PP, "ALPHA": ALPHA},
                    "results": results}, fh, ensure_ascii=False, indent=2)
 
+    has_variants = any("vs_base" in r for r in results)
     print("\n超额按交易日等权；「票权」是按票等权，带 ! 表示两者反号"
           "（好日子票少、坏日子票多，或反过来）。")
-    print(f"{'规则':22s}{'样本':>7s}{'日数':>6s}{'超额':>8s}{'票权':>8s}{'去右尾':>9s}"
-          f"{'对照增量':>10s}{'CI下沿':>9s}{'稳定年':>7s}  判定")
+    if has_variants:
+        print("「较基线」= 同日配对差，正数表示这个闸门改善了池子；「留存」= 还剩多少票。")
+    head = (f"{'规则':26s}{'样本':>7s}{'日数':>6s}{'超额':>8s}{'去右尾':>8s}"
+            f"{'对照增量':>10s}{'CI下沿':>9s}")
+    head += f"{'较基线':>9s}{'t':>7s}{'留存':>7s}" if has_variants else f"{'稳定年':>7s}"
+    print(head + "  判定")
     for r in results:
         if not r.get("samples"):
-            print(f"{r['rule']:22s}{'无样本':>7s}")
+            print(f"{r['rule']:26s}{'无样本':>7s}")
             continue
         mark = "通过" if r["passed"] else "未过: " + "/".join(r["failed_gates"][:2])
         flag = "!" if r.get("weighting_conflict") else " "
-        print(f"{r['rule']:22s}{r['samples']:>7d}{r['clusters']:>6d}{r['avg_excess']:>8.2f}"
-              f"{r['avg_excess_by_pick']:>7.2f}{flag}{r['avg_excess_ex_tail']:>9.2f}"
-              f"{(r['inc_excess'] if r['inc_excess'] is not None else float('nan')):>10.2f}"
-              f"{(r['inc_ci_lo'] if r['inc_ci_lo'] is not None else float('nan')):>9.2f}"
-              f"{r['stable_years']:>7d}  {mark}")
+        nan = float("nan")
+        line = (f"{r['rule']:26s}{r['samples']:>7d}{r['clusters']:>6d}{r['avg_excess']:>7.2f}{flag}"
+                f"{r['avg_excess_ex_tail']:>8.2f}"
+                f"{(r['inc_excess'] if r['inc_excess'] is not None else nan):>10.2f}"
+                f"{(r['inc_ci_lo'] if r['inc_ci_lo'] is not None else nan):>9.2f}")
+        if has_variants:
+            line += (f"{(r.get('vs_base') if r.get('vs_base') is not None else nan):>9.2f}"
+                     f"{(r.get('vs_base_t') if r.get('vs_base_t') is not None else nan):>7.2f}"
+                     f"{(r.get('kept_share') if r.get('kept_share') is not None else nan):>7.0%}")
+        else:
+            line += f"{r['stable_years']:>7d}"
+        print(line + f"  {mark}")
     print(f"\n明细 -> {out_path}")
 
 

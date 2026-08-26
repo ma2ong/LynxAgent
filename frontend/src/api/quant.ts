@@ -83,6 +83,11 @@ export interface QuantSmartPoolItem {
   timing_actionable?: boolean
   timing_signal_mode?: 'live' | 'intraday_archive' | 'close_review' | null
   timing_reasons?: string[]
+  /** 入场位置：入选前近20日涨幅、现价距20日高点。用于如实标注追涨取向 */
+  entry_position?: {
+    ret20?: number | null
+    dist_high20?: number | null
+  }
   /** 今日首次上榜时的价格与时刻，以及从那时到现在的涨跌幅 */
   first_price?: number | null
   first_at?: string
@@ -194,6 +199,13 @@ export interface QuantSmartPoolResult {
     same_count?: number
     total?: number
   }
+  /** 当日名单的入选位置画像，直接由当日名单算出，不是硬编码快照 */
+  list_profile?: {
+    median_ret20: number
+    median_dist_high20: number | null
+    chased_share: number
+    samples: number
+  } | null
   dual_confirm_count?: number
   triple_confirm_count?: number
   excluded_severe_count?: number
@@ -463,6 +475,7 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     intraday_candidate_count: raw?.intraday_candidate_count,
     position_gate: raw?.position_gate,
     list_basis: raw?.list_basis,
+    list_profile: raw?.list_profile ?? null,
     dual_confirm_count: raw?.dual_confirm_count,
     triple_confirm_count: raw?.triple_confirm_count,
     excluded_severe_count: raw?.excluded_severe_count,

@@ -1505,6 +1505,7 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
         data["quote_updated_at"] = None
         data["price_source"] = "最近完整日K（实时行情不可用）"
     data["position_gate"] = gate
+    _attach_list_profile(data)
     try:
         await asyncio.to_thread(_attach_first_seen, items)
     except Exception as exc:  # noqa: BLE001 — 首推价只是展示项，失败不能拖垮名单
@@ -1567,6 +1568,21 @@ def _confluence_enrich_items(items: list[dict[str, Any]]) -> None:
                 "above_ema8": sm["above_ema8"], "above_ema21": sm["above_ema21"],
                 "ema_stack": sm["ema_stack"],
             }
+        # 入场位置：近20日已经涨了多少、离阶段高点还有多远。
+        # 回放实测本池选股的近20日涨幅中位是 +25%、离20日高点仅 −3.7%，也就是说它
+        # 本质上是追涨型选股。这个事实改不掉（七个闸门变体全部未通过验证），
+        # 但必须让用户看见——不标注等于让人以为自己买的是「低位机会」。
+        try:
+            closes = data["close"].astype(float)
+            highs = data["high"].astype(float) if "high" in data else closes
+            if len(closes) > 21:
+                hi20 = float(highs.iloc[-21:-1].max())
+                item["entry_position"] = {
+                    "ret20": round((float(closes.iloc[-1]) / float(closes.iloc[-21]) - 1) * 100, 1),
+                    "dist_high20": round((float(closes.iloc[-1]) / hi20 - 1) * 100, 1) if hi20 > 0 else None,
+                }
+        except Exception:  # noqa: BLE001 — 位置标注失败不影响选股主流程
+            pass
             if sm["above_ema8"] and sm["above_ema21"]:
                 tags.append("强度")
                 bonus += 1.0
@@ -1644,6 +1660,34 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
                 _pick_store.record_picks("smart", items)
             except Exception as exc:  # noqa: BLE001 — 留痕失败不能阻断推荐主流程
                 print(f"record_picks failed: {exc}")
+
+
+def _attach_list_profile(data: dict[str, Any]) -> None:
+    """给整份名单算一句诚实的画像：这批票入选时普遍处在什么位置。
+
+    逐只标位置还不够——用户看单只票时总能给自己找个理由，看到「本名单中位已涨 25%」
+    才会意识到这是这套规则的系统性取向，不是今天恰好挑到几只强势股。
+
+    数字直接来自当日名单，不是硬编码的历史快照，所以它永远和眼前这份名单一致。
+    """
+    import statistics as _stats
+
+    items = data.get("items") or []
+    rets = [float(it["entry_position"]["ret20"]) for it in items
+            if isinstance(it.get("entry_position"), dict)
+            and it["entry_position"].get("ret20") is not None]
+    dists = [float(it["entry_position"]["dist_high20"]) for it in items
+             if isinstance(it.get("entry_position"), dict)
+             and it["entry_position"].get("dist_high20") is not None]
+    if not rets:
+        data["list_profile"] = None
+        return
+    data["list_profile"] = {
+        "median_ret20": round(_stats.median(rets), 1),
+        "median_dist_high20": round(_stats.median(dists), 1) if dists else None,
+        "chased_share": round(sum(1 for v in rets if v >= 15) / len(rets), 2),
+        "samples": len(rets),
+    }
 
 
 def _attach_first_seen(items: list[dict[str, Any]]) -> None:

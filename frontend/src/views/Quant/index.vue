@@ -250,6 +250,28 @@
                 只候选实时重排，<b>≥ {{ smartScoreFloor }} 分的 {{ smartPoolResult.items.length }} 只自动上榜</b>
               </span>
             </div>
+            <!-- 名单画像：这套规则系统性地在买什么位置的票。
+                 回放实测本池近20日涨幅中位 +25%、离20日高点仅 −3.7%，本质是追涨型选股。
+                 七个候选闸门（三档追高、贴高点、消化型）全部未通过验证，改不掉；
+                 但不标出来，用户会以为自己买的是「低位机会」。数字取自当日名单，不是硬编码。 -->
+            <div v-if="smartPoolResult.list_profile" class="profile-note">
+              <b>入选位置</b>
+              <span>
+                本名单近 20 日涨幅中位
+                <b :class="profileTone">{{ signedPercent(smartPoolResult.list_profile.median_ret20) }}</b>
+                <template v-if="smartPoolResult.list_profile.median_dist_high20 != null">
+                  · 离 20 日高点中位
+                  <b>{{ signedPercent(smartPoolResult.list_profile.median_dist_high20) }}</b>
+                </template>
+                · 其中
+                <b>{{ Math.round(smartPoolResult.list_profile.chased_share * 100) }}%</b>
+                的票入选时近 20 日已涨超 15%
+              </span>
+              <span class="profile-tip">
+                这是追涨型选股：买的是已经启动的强势股，不是低位埋伏。强势可能延续，
+                也可能你买在这一段的末尾——务必配合价位参考里的失效价，别重仓单票。
+              </span>
+            </div>
             <!-- 结构层有历史回放，新增时机层仍需独立留痕；两者证据边界必须清楚。 -->
             <div class="basket-note">
               <div class="basket-head">
@@ -469,6 +491,17 @@
                   title="站上 EMA8 与 EMA21（趋势确认）">站上双均线</el-tag>
                 <el-tag v-if="row.strength && row.strength.dist_from_low != null" class="capability-tag" effect="plain"
                   title="距 250 日最低点涨幅（已证明的上升趋势）">距低点 +{{ Math.round(row.strength.dist_from_low) }}%</el-tag>
+                <!-- 入场位置：这只票是「刚启动」还是「已经涨完一大段」。
+                     ≥15% 标红提示追高风险——这是本池的系统性取向，不是个别现象。 -->
+                <el-tag v-if="row.entry_position?.ret20 != null" class="capability-tag"
+                  :type="row.entry_position.ret20 >= 15 ? 'danger' : 'info'" effect="plain"
+                  :title="`入选前近 20 个交易日的涨幅。已涨得多说明启动早、追高风险大；本池中位约 +25%`">
+                  近20日 {{ signedPercent(row.entry_position.ret20) }}
+                </el-tag>
+                <el-tag v-if="row.entry_position?.dist_high20 != null" class="capability-tag" effect="plain"
+                  title="现价距近 20 日最高价。贴着高点买入，等于没有回撤缓冲">
+                  离高点 {{ signedPercent(row.entry_position.dist_high20) }}
+                </el-tag>
                 <span v-if="!row.confluence_bonus && !(row.patterns || []).length && !row.strength" class="panel-pending">—</span>
               </template>
             </el-table-column>
@@ -587,6 +620,11 @@ const selectedSmartRows = ref<QuantSmartPoolItem[]>([])
 const smartDualOnly = ref(false)
 // 入选门槛由后端给（LYNX_SMART_SCORE_FLOOR），拿不到时按默认 90 显示。
 const smartScoreFloor = computed(() => Number(smartPoolResult.value?.score_floor ?? 90))
+// 中位近20日涨幅越高，追高提示越该显眼。阈值取 15%：回放里这个池 83% 的选股在此之上。
+const profileTone = computed(() => {
+  const v = smartPoolResult.value?.list_profile?.median_ret20
+  return v == null ? '' : v >= 15 ? 'profile-hot' : 'profile-mild'
+})
 const smartDisplayItems = computed(() => {
   const items = smartPoolResult.value?.items || []
   return smartDualOnly.value ? items.filter((it) => it.dual_confirm) : items
@@ -1642,6 +1680,18 @@ const openChart = async (row: any) => {
   }
   .basis-high { color: #e6a23c; }
 }
+.profile-note {
+  margin: 0; padding: 6px 10px; border-radius: 8px; font-size: 13px;
+  background: var(--el-color-warning-light-9);
+  border-left: 4px solid var(--el-color-warning);
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+
+  .profile-hot { color: #e0402c; }
+  .profile-mild { color: var(--el-text-color-primary); }
+  .profile-tip {
+    flex-basis: 100%; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5;
+  }
+}
 .basket-usage {
   margin-bottom: 8px; padding: 6px 10px; border-radius: 6px; line-height: 1.6;
   background: rgba(230,162,60,.12); color: var(--el-text-color-regular);
@@ -1913,6 +1963,7 @@ const openChart = async (row: any) => {
 .decision-context { gap: 4px; margin-bottom: 4px; }
 .env-gate, .basket-note { padding: 4px 10px; font-size: 12px; }
 .basis-note { padding: 4px 10px; font-size: 12px; }
+.profile-note { padding: 4px 10px; font-size: 12px; }
 .summary-meta { gap: 4px 8px; padding-top: 3px; }
 .pattern-cat-filter { margin: 2px 0 6px; }
 

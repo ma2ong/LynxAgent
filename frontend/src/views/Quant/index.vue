@@ -849,11 +849,32 @@ const refreshSmartPoolLive = async () => {
       true,
     )
     if (result?.items?.length) smartPoolResult.value = result
+    maybeAutoScan(result)
   } catch {
     // 静默刷新失败时保留上一份可用名单，用户手动点击仍会得到明确错误。
   } finally {
     smartLiveRefreshing = false
   }
+}
+
+// 进页面自动跑一次一键智能推荐（Allen 2026-08-28：不想每天手点）。
+// 三条约束，缺一条就会变成灾难：
+// 1. 只在**今天还没扫过**时触发。cache_only 秒显的名单可能是昨天底池按今日实时重排
+//    的结果 —— 有名单不代表今天扫过，所以判据用后端的 scanned_today（当日留痕），
+//    不是 items.length。
+// 2. 每次进页面最多自动触发一次。扫描失败时 scanned_today 仍是 false，没有这个闸
+//    30 秒一轮的静默刷新会把全市场重扫排成死循环。
+// 3. 交易时段之外不自动扫。收盘后底池不会变，重扫只是白烧一次全市场。
+let autoScanTried = false
+
+const maybeAutoScan = (result: QuantSmartPoolResult | null) => {
+  if (autoScanTried || !result || result.scanned_today !== false) return
+  if (smartPoolLoading.value || smartPoolTask.value) return
+  const hour = new Date().getHours()
+  if (hour < 9 || hour >= 16) return
+  autoScanTried = true
+  ElMessage.info('今日尚未生成名单，正在自动运行一键智能推荐')
+  loadSmartPool()
 }
 
 // 吸顶两层（工具条 / 表头）：表头要停在工具条的正下方。工具条高度会随窗口宽度换行而变，

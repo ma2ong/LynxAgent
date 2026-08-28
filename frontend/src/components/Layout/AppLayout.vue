@@ -23,7 +23,6 @@
         @select="mobileMenuOpen = false"
       >
         <el-menu-item index="/dashboard"><el-icon><Odometer /></el-icon><span>盘面总览</span></el-menu-item>
-        <el-menu-item index="/intraday-signals"><el-icon><Bell /></el-icon><span>盘中信号</span></el-menu-item>
         <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
         <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
         <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
@@ -63,7 +62,7 @@ import { useRoute } from 'vue-router'
 import {
   TrendCharts, Star,
   DocumentChecked, Menu,
-  MagicStick, Tools, Setting, DataLine, Sunrise, DataAnalysis, Histogram, Warning, Odometer, Bell,
+  MagicStick, Tools, Setting, DataLine, Sunrise, DataAnalysis, Histogram, Warning, Odometer,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'
@@ -141,9 +140,16 @@ onMounted(async () => {
 }
 
 .content {
+  /* 列式弹性：MacroBar 固定高度，页面拿走剩下的。整屏型页面（行业热力图）
+     才能用 flex:1 精确吃满剩余空间——它们若写 height:100%，会把 MacroBar
+     的高度重复占一遍，凭空多出一截滚动条。普通页面仍按内容高度撑开并滚动。 */
+  display: flex;
+  flex-direction: column;
   padding: 18px 20px;
   background: var(--el-fill-color-lighter);
   overflow-y: auto;
+
+  :deep(.macro-bar) { flex: none; }
 }
 
 .quota-chip {

@@ -14,7 +14,6 @@ const routes: RouteRecordRaw[] = [
       // `to` 已经是重定向后的 /dashboard，分不出访客原本敲的是 / 还是深链接。
       { path: '', redirect: () => (localStorage.getItem('auth-token') ? '/dashboard' : '/home') },
       { path: 'dashboard', name: 'dashboard', component: () => import('@/views/Dashboard/Index.vue') },
-      { path: 'intraday-signals', name: 'intraday-signals', component: () => import('@/views/IntradaySignals/Index.vue') },
       { path: 'limit-up', name: 'limit-up', component: () => import('@/views/LimitUp/Index.vue') },
       { path: 'heatmap', name: 'heatmap', component: () => import('@/views/Heatmap/Index.vue') },
       { path: 'call-auction', name: 'call-auction', component: () => import('@/views/CallAuction/Index.vue') },

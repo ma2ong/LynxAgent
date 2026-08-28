@@ -346,6 +346,12 @@ SMART_POOL_MAX_ITEMS = 20
 # 2026-08-20 Allen 定：名次上限两头都不对——强势日第 21 只 92 分被砍掉，弱市又要拿
 # 80 分的凑满 20 只。设 LYNX_SMART_SCORE_FLOOR=0 可退回旧的 SMART_POOL_MAX_ITEMS 名次制。
 SMART_POOL_SCORE_FLOOR = max(0.0, min(100.0, float(os.getenv("LYNX_SMART_SCORE_FLOOR", "90"))))
+# 时机层加分的**盘中信号分**门槛（2026-08-28 Allen 定）：盘中信号分不到这条线的，
+# 状态标签照常显示，但一分不加。此前只看状态（entry/watch）不看强度，一个 60 分的
+# 弱确认和一个 95 分的强确认拿到同样的 +8。与上面的名单门槛是两回事：那条管
+# "综合排序多少分能上榜"，这条管"盘中信号多强才配拿加分"。
+INTRADAY_BONUS_SCORE_FLOOR = max(
+    0.0, min(100.0, float(os.getenv("LYNX_INTRADAY_BONUS_FLOOR", "90"))))
 # 门槛保底：一只都够不上门槛时，仍给当日最强的这几只，但标明「未达标·仅供跟踪」。
 # 空名单在产品上是死路（用户不知道是没货还是系统坏了），给最强几只 + 说清没达标，
 # 既不假装达标也不让用户对着空白页猜。设 0 = 不给保底，真空着。
@@ -1096,6 +1102,14 @@ def _merge_intraday_quality(
             timing_status = "unconfirmed"
             timing_label = "等待量价确认"
 
+        # 盘中信号分门槛：不到 INTRADAY_BONUS_SCORE_FLOOR 的确认不给加分。
+        # 只归零加分、保留状态与标签 —— 用户仍看得到「盘中曾触发但强度不足」，
+        # 信息不丢，只是不参与排序。涨停/近板本来就是 0 分调整，不受影响。
+        signal_score = float(signal.get("score") or 0) if signal else 0.0
+        if adjustment > 0 and signal_score < INTRADAY_BONUS_SCORE_FLOOR:
+            adjustment = 0.0
+            timing_label = f"{timing_label}·强度不足{INTRADAY_BONUS_SCORE_FLOOR:.0f}分不加分"
+
         structure_score = float(item.get("smart_score") or item.get("score") or 0)
         confluence_bonus = float(item.get("confluence_bonus") or 0)
         live_base_score = float(
@@ -1843,9 +1857,11 @@ async def _compute_lite_smart_pool_unlocked(
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     cache_key = (
-        # v16：industry_heat 由「昨收阶段分」改为「昨收阶段分 × 当日实时主题分位」融合
-        # （2026-08-05）。评分输入变了就必须换 key，否则旧公式算出的名单会继续被端上来。
-        f"smart-pool:factor-v16-live-theme:{daily_as_of}:"
+        # v17（2026-08-28）：板块阶段分系数重配（量能扩张主导 → 20日动量主导，实测那个
+        # 系数 40 的主导项没有 alpha），外加地量加分项。评分输入变了就必须换 key，
+        # 否则旧公式算出的名单会继续被端上来。
+        # v16（2026-08-05）：industry_heat 由「昨收阶段分」改为叠加当日实时主题分位。
+        f"smart-pool:factor-v17-sector-mom20:{daily_as_of}:"
         f"{strategy}:{safe_limit}:{safe_universe}"
     )
     _smart_pool_task_update(
@@ -2325,7 +2341,13 @@ async def _compute_lite_smart_pool(
 @app.get("/api/lite/smart-pool")
 async def lite_smart_pool(strategy: str = "balanced", limit: int = 20, universe_limit: int = 10000,
                           cache_only: bool = False):
-    return await _compute_lite_smart_pool(strategy, limit, universe_limit, cache_only=cache_only)
+    data = await _compute_lite_smart_pool(strategy, limit, universe_limit, cache_only=cache_only)
+    # 供前端判断要不要自动跑一次全量扫描。用「今天有没有留痕」而不是「有没有名单」：
+    # cache_only 端上来的可能是昨天底池按今日实时重排的结果 —— 有名单，但今天并没有
+    # 真正扫过。留痕是每日首次扫描才写的，正好等价于「今天跑过一键智能推荐」。
+    if isinstance(data, dict):
+        data["scanned_today"] = _pool_recorded_today("smart")
+    return data
 
 
 _shadow_scan_lock = asyncio.Lock()

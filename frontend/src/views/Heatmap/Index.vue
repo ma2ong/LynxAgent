@@ -230,24 +230,43 @@ const backToIndustry = () => load('')
 
 const onResize = () => chart?.resize()
 
+// 容器自己变矮时也要重算：概览行（v-if="ov"）和顶部 MacroBar 都是数据回来后才出现的，
+// 而 echarts.init 早在那之前就按更高的容器把画布尺寸定死了。少了这一步，
+// 多出来的那截画布会被 .heatmap-page 的 overflow:hidden 剪掉，且不计入滚动高度——
+// 用户拉到底也看不见最后一两行瓦片（2026-08-27 反馈）。
+let ro: ResizeObserver | null = null
+
 onMounted(() => {
   load()
   window.addEventListener('resize', onResize)
+  if (chartEl.value) {
+    // keep-alive 切走时容器会脱离文档、尺寸变 0，此时 resize 会把画布压没，
+    // 回来再 resize 才恢复——直接跳过零尺寸即可。
+    ro = new ResizeObserver(([e]) => {
+      const box = e.contentRect
+      if (box.width > 0 && box.height > 0) chart?.resize()
+    })
+    ro.observe(chartEl.value)
+  }
 })
 // keep-alive：从详情页返回时组件被重新激活，treemap 若在隐藏期间容器尺寸变过需重算
 onActivated(() => nextTick(() => chart?.resize()))
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onResize)
+  ro?.disconnect()
+  ro = null
   chart?.dispose()
   chart = null
 })
 </script>
 
 <style scoped lang="scss">
-/* 整页不出滚动条：外层锁死视口高度，中间那块图吃掉全部剩余空间。
+/* 整页不出滚动条：外层吃掉 el-main 的剩余空间，中间那块图再吃掉本页的剩余空间。
+   这里必须是 flex:1 而不是 height:100% —— el-main 里还有一条 MacroBar，
+   100% 会把它的高度重复占一遍，整页多出一截滚动条。
    min-height 一旦写死（原来是 520px），窗口矮一点就把页面撑出滚动条，
    而这一页的全部价值就是「一屏看完全市场」。 */
-.heatmap-page { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
+.heatmap-page { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 .page-head {
   display: flex; align-items: baseline; flex-wrap: nowrap; gap: 10px; margin-bottom: 6px;
 

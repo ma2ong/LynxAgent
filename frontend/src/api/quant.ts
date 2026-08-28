@@ -156,6 +156,9 @@ export interface RiskCheckResult {
 }
 
 export interface QuantSmartPoolResult {
+  /** 今天是否已经真正跑过一次全量扫描（后端按 picks_history 当日留痕判定）。
+   *  cache_only 端上来的名单可能是昨天底池按今日实时重排的，有名单不等于扫过。 */
+  scanned_today?: boolean | null
   strategy?: string
   source: string
   universe_size: number
@@ -475,6 +478,7 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     intraday_candidate_count: raw?.intraday_candidate_count,
     position_gate: raw?.position_gate,
     list_basis: raw?.list_basis,
+    scanned_today: raw?.scanned_today ?? null,
     list_profile: raw?.list_profile ?? null,
     dual_confirm_count: raw?.dual_confirm_count,
     triple_confirm_count: raw?.triple_confirm_count,

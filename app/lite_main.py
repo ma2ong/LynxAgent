@@ -2345,8 +2345,13 @@ async def lite_smart_pool(strategy: str = "balanced", limit: int = 20, universe_
     # 供前端判断要不要自动跑一次全量扫描。用「今天有没有留痕」而不是「有没有名单」：
     # cache_only 端上来的可能是昨天底池按今日实时重排的结果 —— 有名单，但今天并没有
     # 真正扫过。留痕是每日首次扫描才写的，正好等价于「今天跑过一键智能推荐」。
+    #
+    # 必须写进 data 内层：正常路径返回的已经是包成 {"success","data","message"} 的响应，
+    # 而前端 unwrap() 只取 data —— 写在包装层前端永远读不到，自动扫描会静默失效
+    # （2026-08-28 上线后端到端验证抓到）。warming 分支返回的是裸 dict，两种都要兼容。
     if isinstance(data, dict):
-        data["scanned_today"] = _pool_recorded_today("smart")
+        target = data["data"] if isinstance(data.get("data"), dict) else data
+        target["scanned_today"] = _pool_recorded_today("smart")
     return data
 
 

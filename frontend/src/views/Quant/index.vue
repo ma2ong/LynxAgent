@@ -257,17 +257,19 @@
             <div v-if="smartPoolResult.list_profile" class="profile-note">
               <b>入选位置</b>
               <span>
-                本名单近 20 日涨幅中位
+                近 20 日涨幅中位
                 <b :class="profileTone">{{ signedPercent(smartPoolResult.list_profile.median_ret20) }}</b>
                 <template v-if="smartPoolResult.list_profile.median_dist_high20 != null">
-                  · 离 20 日高点中位
+                  · 离 20 日高点
                   <b>{{ signedPercent(smartPoolResult.list_profile.median_dist_high20) }}</b>
                 </template>
-                · 其中
-                <b>{{ Math.round(smartPoolResult.list_profile.chased_share * 100) }}%</b>
-                的票入选时近 20 日已涨超 15%
+                · <b>{{ Math.round(smartPoolResult.list_profile.chased_share * 100) }}%</b>
+                已涨超 15%
               </span>
-              <span class="profile-tip">
+              <a class="desc-toggle" @click="showProfileTip = !showProfileTip">
+                {{ showProfileTip ? '收起' : '这意味着什么' }}
+              </a>
+              <span v-show="showProfileTip" class="profile-tip">
                 这是追涨型选股：买的是已经启动的强势股，不是低位埋伏。强势可能延续，
                 也可能你买在这一段的末尾——务必配合价位参考里的失效价，别重仓单票。
               </span>
@@ -785,6 +787,9 @@ const riskAlert = ref<RiskAlert | null>(null)
 const showPoolDesc = ref(false)
 const showHealthDetail = ref(false)
 const showBasketEvidence = ref(false)
+// 名单画像的解释文字默认收起：那段披露必须留着（不标注等于让人以为买的是「低位
+// 机会」），但它天天不变，长期占掉榜单上方一整块。收起后表头那行数字仍在。
+const showProfileTip = ref(false)
 // 每行最多铺多少个标签，其余折进「+N」（悬停可看全）。目的是在一屏里多显示几只票 ——
 // 标签是佐证不是排序依据，全部铺开会把单行撑到 200px 以上，一屏只剩三四只。
 const MAX_PATTERN_TAGS = 4
@@ -1711,7 +1716,9 @@ const openChart = async (row: any) => {
   .profile-mild { color: var(--el-text-color-primary); }
   .profile-tip {
     flex-basis: 100%; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5;
+    margin-top: 2px;
   }
+  .desc-toggle { margin-left: auto; flex-shrink: 0; }
 }
 .basket-usage {
   margin-bottom: 8px; padding: 6px 10px; border-radius: 6px; line-height: 1.6;

@@ -1683,7 +1683,7 @@ const openChart = async (row: any) => {
 .env-gate.env-warm { background: rgba(14,159,90,.10); border-left-color: #0e9f5a; }
 .env-gate.env-warm .env-gate-head { color: #0e9f5a; }
 .basket-note {
-  grid-column: 1 / -1;
+  /* 不再跨列：与「入选位置」并排占第二行右列，省掉一整行高度。 */
   margin: 0; padding: 6px 10px; border-radius: 8px; font-size: 13px;
   background: rgba(64,158,255,.08); border-left: 4px solid var(--el-color-primary);
 }
@@ -1911,10 +1911,6 @@ const openChart = async (row: any) => {
 
   .smart-summary .table-actions,
   .summary-meta,
-  .basket-note {
-    grid-column: 1;
-  }
-
   .table-actions,
   .basket-head,
   .basis-note,

@@ -133,6 +133,17 @@
       </div>
     </el-card>
 
+    <!-- 用户管理并入本页（2026-08-28）：它原本是侧栏一个独立菜单，和「用户设置」
+         并排放着，两个都叫「用户」，管理员之外的人还看不到——重复且占位。
+         放在「账号」之前：先管别人，再管自己（退出登录是整页最后一步）。 -->
+    <el-card v-if="currentUser?.is_admin" class="card">
+      <div class="card-title">
+        <h3>用户管理</h3>
+        <span class="card-hint">全站账号的套餐与启用状态，仅管理员可见</span>
+      </div>
+      <AdminUsers />
+    </el-card>
+
     <!-- 退出登录从侧栏底部收到这里：低频且不可撤销，常驻侧栏只会被误点。
          放在整页最后、且要二次确认——避免用户想改 API Key 却顺手把自己登出了。 -->
     <el-card class="card">
@@ -161,6 +172,7 @@ import { SwitchButton } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ApiClient } from '@/api/request'
 import { currentUser, clearCurrentUser } from '@/stores/user'
+import AdminUsers from '@/views/Admin/Users.vue'
 import {
   fetchBillingMe,
   fetchRuntimeValidation,
@@ -368,6 +380,7 @@ onMounted(() => { loadPage(); loadKey() })
 .pay-qr { width: 180px; height: 180px; object-fit: contain; border: 1px solid var(--el-border-color-light); border-radius: 8px; }
 .card-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .card-title h3 { margin: 0; }
+.card-hint { font-size: 12px; color: var(--el-text-color-secondary); }
 .muted { color: var(--el-text-color-secondary); line-height: 1.7; }
 .push-form { margin-top: 14px; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; }

@@ -1,6 +1,5 @@
 <template>
   <div class="admin-users">
-    <h2>用户管理</h2>
     <el-table :data="users" v-loading="loading" stripe>
       <el-table-column prop="username" label="用户名" width="140" />
       <el-table-column prop="email" label="邮箱" min-width="180" />
@@ -105,6 +104,5 @@ onMounted(load)
 </script>
 
 <style scoped lang="scss">
-.admin-users { padding: 16px; }
 .sub { font-size: 11px; color: #909399; }
 </style>

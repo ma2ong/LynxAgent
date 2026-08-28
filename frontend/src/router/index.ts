@@ -25,7 +25,6 @@ const routes: RouteRecordRaw[] = [
       { path: 'favorites', name: 'favorites', component: () => import('@/views/Favorites/index.vue') },
       { path: 'data-center', name: 'data-center', component: () => import('@/views/DataCenter/Index.vue') },
       { path: 'account/membership', name: 'membership', component: () => import('@/views/Account/Membership.vue') },
-      { path: 'admin/users', name: 'admin-users', component: () => import('@/views/Admin/Users.vue'), meta: { requiresAdmin: true } },
     ],
   },
   // 兜底回盘面总览：它是唯一一屏看全的入口，未知路径丢到选股页会让人以为「首页就是选股」

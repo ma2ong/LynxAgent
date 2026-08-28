@@ -1582,6 +1582,15 @@ def _confluence_enrich_items(items: list[dict[str, Any]]) -> None:
                 "above_ema8": sm["above_ema8"], "above_ema21": sm["above_ema21"],
                 "ema_stack": sm["ema_stack"],
             }
+            # 2026-08-28 修：这四行原先缩进落在下面 entry_position 的 except 块里，
+            # 只有位置标注抛异常时才会执行 —— 也就是强度加分从上线起就没生效过：
+            # 「强度」标签几乎不出现，而 triple_confirm 要求 tags 里同时有形态和强度，
+            # 于是三重确认计数长期恒为 0。归位到 if sm 内，顺带避免 sm 为 None 时下标报错。
+            if sm["above_ema8"] and sm["above_ema21"]:
+                tags.append("强度")
+                bonus += 1.0
+                if sm["ema_stack"]:
+                    bonus += 0.5
         # 入场位置：近20日已经涨了多少、离阶段高点还有多远。
         # 回放实测本池选股的近20日涨幅中位是 +25%、离20日高点仅 −3.7%，也就是说它
         # 本质上是追涨型选股。这个事实改不掉（七个闸门变体全部未通过验证），
@@ -1597,11 +1606,6 @@ def _confluence_enrich_items(items: list[dict[str, Any]]) -> None:
                 }
         except Exception:  # noqa: BLE001 — 位置标注失败不影响选股主流程
             pass
-            if sm["above_ema8"] and sm["above_ema21"]:
-                tags.append("强度")
-                bonus += 1.0
-                if sm["ema_stack"]:
-                    bonus += 0.5
         if matched and sm and sm.get("above_ema8") and sm.get("above_ema21"):
             bonus += 1.0  # 结构 + 形态 + 强度三重共振
         if bonus:
@@ -1857,11 +1861,13 @@ async def _compute_lite_smart_pool_unlocked(
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     cache_key = (
+        # v18（2026-08-28）：修好共振加成里的「强度」分支——它的缩进原先落在 except 块内，
+        # 从上线起就没生效过，排序因此会变（详见 _confluence_enrich_items 的注释）。
         # v17（2026-08-28）：板块阶段分系数重配（量能扩张主导 → 20日动量主导，实测那个
-        # 系数 40 的主导项没有 alpha），外加地量加分项。评分输入变了就必须换 key，
-        # 否则旧公式算出的名单会继续被端上来。
+        # 系数 40 的主导项没有 alpha），外加地量加分项。
         # v16（2026-08-05）：industry_heat 由「昨收阶段分」改为叠加当日实时主题分位。
-        f"smart-pool:factor-v17-sector-mom20:{daily_as_of}:"
+        # 评分输入变了就必须换 key，否则旧公式算出的名单会继续被端上来。
+        f"smart-pool:factor-v18-strength-bonus:{daily_as_of}:"
         f"{strategy}:{safe_limit}:{safe_universe}"
     )
     _smart_pool_task_update(

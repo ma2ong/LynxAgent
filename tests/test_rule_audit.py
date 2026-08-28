@@ -63,22 +63,49 @@ def test_matched_control_keeps_a_real_within_bucket_edge():
     assert sum(inc_ret) / len(inc_ret) == pytest.approx(6.0)
 
 
-def test_tail_gate_rejects_a_rule_carried_by_its_best_few():
-    """平均为正但全靠少数大涨股撑着的规则，必须倒在「去右尾」这一关。"""
-    rows = []
+def _tail_panel(control_also_spikes: bool):
+    """40 天 × (25 只信号票 + 25 只对照票)，同一分层。
+
+    信号票里每天 1 只暴涨（4% < TAIL_DROP，砍右尾时会被完整砍掉），其余小亏。
+    `control_also_spikes` 决定对照票是否有同样的暴涨结构 —— 有就是零 alpha。
+    """
+    rows, flags = [], []
     for d in range(40):
         day = f"2026-02-{d + 1:02d}"
-        for i in range(20):
-            # 19 只小亏，1 只暴涨 -> 平均为正、去掉最好的 5% 就转负
-            ex = 60.0 if i == 0 else -1.0
-            rows.append((day, f"6000{i:02d}", 0, ex))
+        for i in range(25):
+            rows.append((day, f"6000{i:02d}", 0, 60.0 if i == 0 else -1.0))
+            flags.append(True)
+        for i in range(25):
+            ex = (60.0 if i == 0 else -1.0) if control_also_spikes else 0.0
+            rows.append((day, f"3000{i:02d}", 0, ex))
+            flags.append(False)
     panel = _panel(rows)
-    mask = pd.Series(True, index=panel.index)
+    return panel, pd.Series(flags, index=panel.index)
+
+
+def test_tail_gate_rejects_a_rule_carried_by_its_best_few():
+    """平均为正但全靠少数大涨股撑着的规则，必须倒在「去右尾」这一关。"""
+    panel, mask = _tail_panel(control_also_spikes=False)
 
     r = verdict(audit_one(panel, mask, "tail_driven", 5))
     assert r["avg_excess"] > 0
-    assert r["avg_excess_ex_tail"] < 0
+    assert r["inc_ex_tail"] < 0
     assert "去右尾仍为正" in r["failed_gates"]
+
+
+def test_tail_gate_passes_a_rule_whose_edge_is_not_the_tail():
+    """反向守卫：信号组和对照组分布一模一样（零 alpha）时，「去右尾」必须约等于 0
+    而不是负数。
+
+    2026-08-27 之前这一关拿「信号组去右尾后的绝对超额」跟 0 比，而 fwd_excess 以
+    全市场**中位**为基准、个股收益右偏，砍掉右尾后必然低于中位 —— 实测随机买入得
+    −0.39、线上 smart 池得 −0.53，也就是说这一关谁都过不了，等于把整把尺子废掉一格。
+    现在两组各自砍右尾再比，零 alpha 得 0。没有这个测试，那种死关会悄悄长回来。
+    """
+    panel, mask = _tail_panel(control_also_spikes=True)
+
+    r = audit_one(panel, mask, "no_edge", 5)
+    assert abs(r["inc_ex_tail"]) < 0.05
 
 
 def test_holm_tightens_the_bar_as_more_rules_are_submitted():

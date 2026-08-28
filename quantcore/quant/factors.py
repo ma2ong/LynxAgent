@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Dict
 
 import pandas as pd
@@ -252,6 +253,49 @@ def composite_score(factors: Dict[str, float]) -> float:
     return round(_clip_score(score), 2)
 
 
+# 地量加分：命中下面全部条件时给综合分加这么多。0 = 关闭本加分。
+# 幅度定在 3 分：综合分是 0-100、名单取 top-20，入选边缘的分差通常 1-3 分，
+# 所以 3 分足以把一只票推进名单，又不足以压过结构分明显更好的票。
+DRYUP_BONUS = float(os.getenv("LYNX_DRYUP_BONUS", "3.0"))
+
+
+def dryup_bonus(df: pd.DataFrame, industry_heat: float, amt_rank: float) -> float:
+    """Allen 口径的「地量埋伏」加分：地量 + 趋势在 + 有人气 + 热门板块。
+
+    **这是一个产品决定，不是实证结论。** rule_audit 六年全样本、次日开盘买入口径下，
+    这个口径的匹配对照增量是 T+5 +0.09（CI 下沿 −0.64，不显著）、T+10 −0.76、
+    T+20 −1.58，且门槛加得越多越差（剂量单调）：
+        地量+趋势            T+5 +0.04 / T+10 −0.32 / T+20 −0.72
+        ＋人气前30%          T+5 +0.11 / T+10 −0.53 / T+20 −0.57
+        ＋热门板块（本口径）  T+5 +0.09 / T+10 −0.76 / T+20 −1.58
+    也就是说它大概率会拉低名单质量，而且持有越久越明显。Allen 在看到这组数字之后
+    仍然要求接入排序（2026-08-27），所以做成**可关的小幅加分**而不是权重因子：
+    影响面被这套门槛限制在每天约 2 只，`LYNX_DRYUP_BONUS=0` 可随时关掉。
+
+    留痕里会带 `dryup` 标记，几个月后可以用
+    `rule_audit.py --pool smart` 拿真实线上数据复核，用它自己的表现说话。
+    """
+    if DRYUP_BONUS <= 0 or len(df) < 61:
+        return 0.0
+    amount = df["amount"].to_numpy()
+    close = df["close"].to_numpy()
+    # 地量：当日成交额在近 60 日里的分位 ≤ 10%
+    window = amount[-60:]
+    if float(window[-1]) <= 0:
+        return 0.0
+    if (window <= window[-1]).mean() > 0.10:
+        return 0.0
+    if close[-61] <= 0 or close[-1] / close[-61] - 1 < 0.20:   # 60 日涨幅 ≥ 20%
+        return 0.0
+    if close[-1] < close[-20:].mean():                          # 未破 20 日线
+        return 0.0
+    if amt_rank < 0.70:                       # 有人气：近20日均额全市场前 30%
+        return 0.0
+    if industry_heat < 80.0:                  # 热门板块：板块热度前 20%
+        return 0.0
+    return DRYUP_BONUS
+
+
 def intraday_strength_score(pct_chg: float, amount_percentile: float) -> float:
     """盘中强度：价格表现为主、成交活跃度为辅，输出 0-100。"""
     price_score = _clip_score(50.0 + float(pct_chg or 0) * 5.0)
@@ -279,6 +323,7 @@ def smart_factor_chunk(payload: Dict[str, object]) -> list:
     min_amount = float(payload["min_amount"])
     rt_amounts: Dict[str, float] = payload.get("rt_amounts") or {}
     industry_heat: Dict[str, float] = payload.get("industry_heat") or {}
+    amt_ranks: Dict[str, float] = payload.get("amt_ranks") or {}
     out = []
     for sym in payload["symbols"]:
         rows = conn.execute(
@@ -295,6 +340,9 @@ def smart_factor_chunk(payload: Dict[str, object]) -> list:
             factors = compute_factor_scores(df)
             factors["industry_heat"] = round(float(industry_heat.get(sym, 50.0)), 2)
             score = composite_score(factors)
+            bonus = dryup_bonus(df, factors["industry_heat"], float(amt_ranks.get(sym, 0.0)))
+            if bonus:
+                score = _clip_score(score + bonus)
         except Exception:
             continue
         # 七不买体检顺手做掉：worker 手里已有截断日线，零额外 IO（问题股/ST 由池级排除兜底）

@@ -785,6 +785,21 @@ class QuantEngine:
                 logger.info("smart_pool 主题强度已混入 %d 只（权重 %.2f）", len(live), w)
         except Exception as exc:  # noqa: BLE001
             logger.warning("smart_pool 当日主题强度混入失败，仅用昨收阶段分: %s", exc)
+
+        # 全市场近20日均额的横截面分位，供地量加分判「有没有人气」（剔垃圾股/仙股）。
+        # 复用上面已经加载的 stage_inputs，不额外查库；用分位而不是绝对金额门槛，
+        # 因为市场总成交额逐年变化，写死的「2.8 亿」几年后就不再是前 30%。
+        amt_ranks: Dict[str, float] = {}
+        try:
+            pairs = sorted(
+                ((s, float(r.get("amt20") or 0.0))
+                 for s, r in get_local_store().stage_inputs().items()),
+                key=lambda kv: kv[1])
+            if len(pairs) >= 100:
+                amt_ranks = {s: (i + 1) / len(pairs) for i, (s, _) in enumerate(pairs)}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("smart_pool 全市场成交额分位计算失败，地量加分本轮不生效: %s", exc)
+
         workers = min(6, max(1, os.cpu_count() or 4))
         chunk_size = max(1, (len(gated_symbols) + workers - 1) // workers)
         payloads = [{
@@ -792,6 +807,7 @@ class QuantEngine:
             "symbols": gated_symbols[i:i + chunk_size],
             "rt_amounts": {s: rt_amounts[s] for s in gated_symbols[i:i + chunk_size]},
             "industry_heat": {s: industry_heat.get(s, 50.0) for s in gated_symbols[i:i + chunk_size]},
+            "amt_ranks": {s: amt_ranks.get(s, 0.0) for s in gated_symbols[i:i + chunk_size]},
         } for i in range(0, len(gated_symbols), chunk_size)]
         scored_rows: List[Dict[str, object]] = []
         try:

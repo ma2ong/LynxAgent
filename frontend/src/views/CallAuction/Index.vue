@@ -112,10 +112,13 @@
         <!-- 竞价买入推荐 -->
         <section class="panel">
           <div class="panel-title">竞价买入候选 <em>近段强势板块 · 由强到弱排序，点击进深研</em></div>
-          <!-- 上榜口径按档位不按名次：够「强推荐」就给，不限只数。
-               但真实命中率照写——上榜不等于会涨停，最强档也只有六分之一。 -->
+          <!-- 上榜口径：先按档位挑出够「强推荐」的，再按名次取前 display_limit 只。
+               竞价只有几分钟可操作，给十几只等于没给（2026-09-01 Allen 定上限 5）。
+               被上限挡下的写进「另有 N 只」，别让用户以为今天就这点货。
+               真实命中率照写——上榜不等于会涨停，最强档也只有六分之一。 -->
           <div v-if="data.hit_stats" class="hit-note">
-            <b>凡达到「强推荐」档的全部上榜，不限只数（今日 {{ data.buy_candidates.length }} 只）。</b>
+            <b>达到「强推荐」档的按强弱最多取前 {{ data.display_limit || 5 }} 只（今日 {{ data.buy_candidates.length }} 只<span
+              v-if="data.hidden_candidates">，另有 {{ data.hidden_candidates }} 只未展示</span>）。</b>
             {{ data.hit_stats.sessions }} 个交易日 / {{ data.hit_stats.samples }} 条留痕实测：
             前 3 名当日涨停率 <b class="hit-good">{{ data.hit_stats.top3_limit_up_rate }}%</b>，
             第 4 名以后 {{ data.hit_stats.rest_limit_up_rate }}%——名次越靠后越要减仓位。

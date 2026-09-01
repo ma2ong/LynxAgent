@@ -109,7 +109,19 @@ async def _auction_with_live_prices(payload: dict[str, Any]) -> dict[str, Any]:
     名单和竞价口径的数字必须冻结（理由见下面的冻结逻辑），但卡片上只有 09:25 的竞价价时，
     用户没法判断现在还追不追得上。live_* 是每次请求现算的旁注，绝不写回冻结存档，
     也不参与排序和留痕。
+
+    展示只数上限也在这里套一次：名单一天只算一遍，改了上限若只在计算时生效，当天已经
+    冻结的名单会一直超限到明天。截断只动展示，冻结存档和留痕都不改。
     """
+    from quantcore.quant.call_auction import DISPLAY_LIMIT
+
+    body = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if isinstance(body, dict):
+        shown = body.get("buy_candidates")
+        if isinstance(shown, list) and len(shown) > DISPLAY_LIMIT:
+            body["hidden_candidates"] = int(body.get("hidden_candidates") or 0) + len(shown) - DISPLAY_LIMIT
+            body["buy_candidates"] = shown[:DISPLAY_LIMIT]
+        body.setdefault("display_limit", DISPLAY_LIMIT)
     data = payload.get("data") if isinstance(payload.get("data"), dict) else None
     candidates = (data or {}).get("buy_candidates") or []
     if not data or not candidates:

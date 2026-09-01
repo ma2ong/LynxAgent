@@ -52,6 +52,11 @@ HOT_TECH_INDUSTRY_KEYWORDS = (
 )
 
 
+# 买入推荐的展示只数上限。竞价窗口只有几分钟可操作，给十几只等于没给。
+# 定成模块常量而不是只做函数默认值：路由层要用同一条上限去截已经冻结的当日名单
+# （名单一天只算一次，改了上限不能等到明天才生效）。
+DISPLAY_LIMIT = 5
+
 # 推荐档位门槛：候选评分占当日最高分的比例。同时决定展示范围——达到强推荐档就上榜。
 TOP_TIER_RATIO = 0.9
 STRONG_TIER_RATIO = 0.78
@@ -72,7 +77,7 @@ def compute_call_auction(
     # 但档位口径没有上限，强势日会一口气给出十几只——竞价只有几分钟可操作，给这么多
     # 等于没给。2026-09-01 Allen 定：**最多推荐 5 只**，够格的多了就按名次取前 5。
     # 留痕不受这条限制，仍按 buy_limit 记满，否则以后无法继续验证名次与涨停率的关系。
-    display_limit: int = 5,
+    display_limit: int = DISPLAY_LIMIT,
     min_display: int = 3,
     industry_map: Dict[str, str] | None = None,
     hot_industries: Dict[str, float] | None = None,

@@ -75,6 +75,7 @@ interface Rotation {
   as_of: string
   ready: boolean
   message?: string
+  computing?: boolean
   mom_window: number
   norm_window: number
   items: RotationItem[]
@@ -84,6 +85,10 @@ interface Rotation {
 const router = useRouter()
 const data = ref<Rotation | null>(null)
 const loading = ref(false)
+// 后端首次算全市场聚合要十几秒，期间返回 computing。自动重试一次而不是让用户
+// 盯着「稍后刷新」自己猜时机——这类等待应该由系统承担，不是交给用户。
+let retryTimer: ReturnType<typeof setTimeout> | undefined
+
 const focus = ref('')
 // 轨迹默认全关。二十多条八点折线叠在一起是毛线团，既读不出轮动方向，还会把坐标轴
 // 撑到远超点云的范围，反过来把散点压成一小坨。轨迹是「选中某个板块后看它怎么走过来」
@@ -106,6 +111,10 @@ const load = async () => {
   loading.value = true
   try {
     data.value = await ApiClient.get('/api/lite/sector-rotation')
+    if (data.value?.computing) {
+      clearTimeout(retryTimer)
+      retryTimer = setTimeout(load, 20000)
+    }
     await nextTick()
     render()
   } finally {
@@ -217,6 +226,7 @@ onMounted(() => {
   window.addEventListener('resize', onResize)
 })
 onBeforeUnmount(() => {
+  clearTimeout(retryTimer)
   window.removeEventListener('resize', onResize)
   chart?.dispose()
   chart = null

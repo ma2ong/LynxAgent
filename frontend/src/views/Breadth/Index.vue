@@ -75,13 +75,17 @@ interface Row {
   median_ret: number
 }
 interface Breadth {
-  ready: boolean; message?: string; as_of: string
+  ready: boolean; message?: string; computing?: boolean; as_of: string
   temp: number; regime: string; latest: Row; series: Row[]
   freshness: Freshness
 }
 
 const data = ref<Breadth | null>(null)
 const loading = ref(false)
+// 后端首次算全市场聚合要十几秒，期间返回 computing。自动重试一次而不是让用户
+// 盯着「稍后刷新」自己猜时机——这类等待应该由系统承担，不是交给用户。
+let retryTimer: ReturnType<typeof setTimeout> | undefined
+
 const chartEl = ref<HTMLDivElement>()
 let chart: ECharts | null = null
 
@@ -94,6 +98,10 @@ const load = async () => {
   loading.value = true
   try {
     data.value = await ApiClient.get('/api/lite/breadth')
+    if (data.value?.computing) {
+      clearTimeout(retryTimer)
+      retryTimer = setTimeout(load, 20000)
+    }
     await nextTick()
     render()
   } finally {
@@ -156,6 +164,7 @@ const render = () => {
 const onResize = () => chart?.resize()
 onMounted(() => { load(); window.addEventListener('resize', onResize) })
 onBeforeUnmount(() => {
+  clearTimeout(retryTimer)
   window.removeEventListener('resize', onResize)
   chart?.dispose()
   chart = null

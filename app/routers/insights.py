@@ -802,6 +802,33 @@ def _prev_session_amount_yi(industry: str = "") -> float:
     return round(total / 1e8, 2)
 
 
+# 全市场重聚合（板块轮动 / 市场宽度）的并发闸：同一个缓存键同时只允许一个计算在跑。
+# 没有它，用户请求和 board_refresh 预热会各自启动一次十几秒的全市场扫描，一起挤占
+# lite_data_executor 的槽位，把彼此的排队时间推到超时——2026-09-01 上线当天 /breadth
+# 就是这么返回 500 的（计算本身 17 秒，排队后超过 60 秒上限）。
+_HEAVY_LOCKS: dict[str, asyncio.Lock] = {}
+
+# 计算本身约 10~17 秒，但盘中执行器繁忙时排队时间会翻几倍，所以上限给得宽。
+# 真正保证响应速度的是缓存 + 后台预热，这个上限只是兜底。
+_HEAVY_TIMEOUT = 240.0
+
+
+async def _cached_heavy(cache_key: str, ttl: int, fn, *args):
+    """命中缓存直接返；未命中则独占计算。已有人在算就返回 None，让调用方如实告知。"""
+    cached = _cache_get(cache_key, ttl)
+    if cached:
+        return cached
+    lock = _HEAVY_LOCKS.setdefault(cache_key, asyncio.Lock())
+    if lock.locked():
+        return None
+    async with lock:
+        # 拿到锁后再看一次：等锁期间别人可能已经算完并写进缓存了
+        cached = _cache_get(cache_key, ttl)
+        if cached:
+            return cached
+        return await _run_data_task(fn, *args, timeout=_HEAVY_TIMEOUT)
+
+
 @router.get("/api/lite/breadth")
 async def lite_breadth():
     """市场宽度：涨跌家数、站上均线占比、20 日新高新低、涨跌停。
@@ -822,11 +849,15 @@ async def lite_breadth():
     except Exception:  # noqa: BLE001  取不到只影响新鲜度判定，不该阻断
         latest_bar = ""
     cache_key = f"breadth:{latest_bar}"
-    cached = _cache_get(cache_key, 43200)
-    if cached:
-        return cached
-
-    data = await _run_data_task(build_breadth, store, timeout=60.0) or {}
+    try:
+        data = await _cached_heavy(cache_key, 43200, build_breadth, store)
+    except (asyncio.TimeoutError, TimeoutError):
+        data = None
+    if data is None:
+        # computing 与「样本不足」分开标：前者会自己好，值得自动重试一次；
+        # 后者重试多少遍都一样，前端不该空转。
+        return {"series": [], "ready": False, "computing": True,
+                "message": "正在计算全市场宽度（约 20 秒）…"}
     if not data:
         return {"series": [], "ready": False,
                 "message": "日线样本不足，宽度曲线暂不可用"}
@@ -858,11 +889,13 @@ async def lite_sector_rotation():
     except Exception:  # noqa: BLE001  取不到日期只影响缓存分代，不该阻断
         as_of = ""
     cache_key = f"sector-rotation:{as_of}"
-    cached = _cache_get(cache_key, 43200)
-    if cached:
-        return cached
-
-    data = await _run_data_task(build_rotation, store, timeout=60.0) or {}
+    try:
+        data = await _cached_heavy(cache_key, 43200, build_rotation, store)
+    except (asyncio.TimeoutError, TimeoutError):
+        data = None
+    if data is None:
+        return {"as_of": as_of, "items": [], "ready": False, "computing": True,
+                "message": "正在计算板块轮动（约 15 秒）…"}
     if not data:
         # 日线不足（新库/同步中）时如实说明，不要返回空图让前端画一张空白坐标系
         return {"as_of": as_of, "items": [], "ready": False,

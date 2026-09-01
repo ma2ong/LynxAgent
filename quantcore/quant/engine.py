@@ -286,7 +286,10 @@ def market_context(snapshot: Optional[Dict[str, Dict]] = None) -> Dict[str, obje
         store = get_local_store()
         daily = store.recent_daily_breadth(days=5)
         if not daily:
-            _MARKET_CTX_CACHE[snap_date] = (now, result)
+            # **不缓存失败**。这里原本把空结果按 10 分钟 TTL 存下来，于是取数抖一下
+            # （重启瞬间、执行器排队），后面十分钟所有请求都读到「环境数据不可用」——
+            # 而仓位闸门看到这个就熄灯、名单跟着空，用户看到的是「今日无达标个股」。
+            # 一次抖动不该变成十分钟的停摆；下次请求重算即可，代价只是多读一次日线。
             return result
 
         # as_of=最后一根真实日线（amount>0）

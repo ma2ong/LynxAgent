@@ -346,7 +346,7 @@
             v-if="smartPoolResult && !smartPoolResult.score_floor_fallback && smartPoolResult.items.length > 0 && smartPoolResult.items.length < 5"
             type="info" :closable="false" show-icon class="few-picks-tip"
             :title="`当前市场环境下达标标的仅 ${smartPoolResult.items.length} 只`"
-            description="评分阈值不随行情放宽（保持口径诚实）。弱市达标少是正常现象，可参考顶部大盘环境提示控制仓位，或等待市场转暖。"
+            description="名单按综合排序取前 N 只、不设分数线；不足 N 只说明部分候选被风控剔除了。可参考顶部大盘环境提示控制仓位。"
           />
           <el-table
             v-if="smartPoolResult?.items.length"
@@ -1002,17 +1002,27 @@ const pollSmartPoolTask = async (taskId: string) => {
       const _res = task.result
       const _exc = _res.excluded_severe_count || 0
       if (!_res.items.length) {
-        // ③a 弱市/风控清空 → 说明为什么没有推荐。
-        // 标题不再写死「今日高风险」：那和盘面总览的风险档位是两码事，写死会出现
-        // 「这里说高风险、总览说安全」的自相矛盾。空池的真实原因是没有个股达标。
+        // ③a 空池 → 必须分清是哪一种空。标题不写死「今日高风险」：那和盘面总览的
+        // 风险档位是两码事，写死会出现「这里说高风险、总览说安全」的自相矛盾。
+        // 最常见的其实是**实时行情取不到**：行情为 0 →
+        // 环境算不出 → 名单排不出来。把取数故障说成「今天没有够格的票」，用户会去
+        // 调策略，而真正该做的是重试。2026-09-01 现场：行情 0/5525，弹窗却在讲
+        // 评分阈值——那条门槛当天早些时候就已经关掉了。
+        const dataDown = _res.realtime_status === 'unavailable' || !_res.market_context?.state
         const parts = [] as string[]
-        if (_res.position_gate?.note) parts.push(_res.position_gate.note)
-        if (_exc) parts.push(`另有 ${_exc} 只候选命中「七不买」重度风险，已被风控剔除（宁可没得选也不给雷票）。`)
-        if (_res.score_floor_note) parts.push(_res.score_floor_note + '。')
-        parts.push('评分阈值不随行情放宽、风控不给雷票——今日暂无达标推荐，建议观望或等市场转暖。')
-        ElMessageBox.alert(parts.join('\n\n'), '今日无达标个股 · 暂无推荐', {
-          confirmButtonText: '知道了', type: 'warning',
-        }).catch(() => {})
+        if (dataDown) {
+          parts.push('实时行情或全市场环境数据暂时取不到，名单无法生成——这不是「今天没有够格的票」，是取数故障。')
+          parts.push('稍后点「一键智能推荐」重试即可；持续不恢复请到数据中心检查行情源。')
+        } else {
+          if (_res.position_gate?.note) parts.push(_res.position_gate.note)
+          if (_exc) parts.push(`另有 ${_exc} 只候选命中「七不买」重度风险，已被风控剔除（宁可没得选也不给雷票）。`)
+          parts.push('候选全部被风控剔除，今日暂无可推荐标的——名单按综合排序取前 N 只、不设分数线，空池只会来自风控。')
+        }
+        ElMessageBox.alert(
+          parts.join('\n\n'),
+          dataDown ? '数据暂时不可用 · 请稍后重试' : '风控清空 · 暂无推荐',
+          { confirmButtonText: '知道了', type: 'warning' },
+        ).catch(() => {})
       } else {
         ElMessage.success(`智能推荐完成：${_res.items.length} 只` + (_exc ? `（已剔除 ${_exc} 只雷票）` : ''))
       }

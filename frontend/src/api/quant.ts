@@ -166,6 +166,9 @@ export interface QuantSmartPoolResult {
   daily_as_of?: string
   realtime_as_of?: string
   realtime_status?: 'live' | 'partial' | 'snapshot' | 'unavailable'
+  // 大盘环境。取数失败时后端返回空对象（没有 state），前端据此区分
+  // 「取数故障」和「风控清空」两种空名单——两者该给用户的下一步动作完全不同。
+  market_context?: { state?: string; temp?: number }
   realtime_market_phase?: string
   realtime_quote_count?: number
   realtime_quote_total?: number

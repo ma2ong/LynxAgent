@@ -18,7 +18,7 @@
          普涨日里所有点几乎不动——那不是没人涨，是它们相对彼此没拉开差距。 -->
     <div class="caveat">
       坐标是<b>相对</b>量，不能当收益读：全板块同步涨跌时点的位置几乎不变。
-      要看赚了多少，看右侧「20 日超额」那一列。
+      要看涨了多少，看右侧列表的「20 日涨幅」。
     </div>
 
     <div v-if="data && !data.ready" class="empty">{{ data.message || '暂不可用' }}</div>
@@ -28,8 +28,11 @@
 
       <div class="side">
         <div class="side-head">
-          按 20 日强度排序
-          <span class="hint">前 20% 这一档是审计里唯一站得住的信号</span>
+          按 20 日涨幅排序
+          <span class="hint">
+            板块成分股日涨幅中位数的 20 日累计（不是超额，未减基准）；
+            右侧百分数是它在全市场板块里的分位，前 20% 那一档是审计里唯一站得住的信号
+          </span>
         </div>
         <div
           v-for="it in ranked"
@@ -175,7 +178,7 @@ const render = () => {
           ? '<span style="color:#e0402c">命中强板块档（前 20%）</span>'
           : ''
         return `<b>${it.industry}</b>（${it.members} 只）<br/>${it.quadrant}<br/>` +
-          `20 日超额 ${it.mom20 > 0 ? '+' : ''}${it.mom20}% · 全市场第 ` +
+          `20 日涨幅 ${it.mom20 > 0 ? '+' : ''}${it.mom20}% · 全市场第 ` +
           `${Math.round(it.mom20_pct * 100)} 分位<br/>${hot}`
       },
     },

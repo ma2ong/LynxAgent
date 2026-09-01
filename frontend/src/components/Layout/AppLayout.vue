@@ -26,6 +26,8 @@
         <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
         <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
         <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
+        <el-menu-item index="/rotation"><el-icon><Refresh /></el-icon><span>板块轮动</span></el-menu-item>
+        <el-menu-item index="/breadth"><el-icon><Grid /></el-icon><span>市场宽度</span></el-menu-item>
         <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
         <el-menu-item index="/risk-alert"><el-icon><Warning /></el-icon><span>风险预警</span></el-menu-item>
         <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
@@ -61,7 +63,7 @@ import { useRoute } from 'vue-router'
 import {
   TrendCharts, Star,
   DocumentChecked, Menu,
-  MagicStick, Tools, DataLine, Sunrise, DataAnalysis, Histogram, Warning, Odometer,
+  MagicStick, Tools, DataLine, Sunrise, DataAnalysis, Histogram, Warning, Odometer, Refresh, Grid,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'

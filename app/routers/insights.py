@@ -802,6 +802,77 @@ def _prev_session_amount_yi(industry: str = "") -> float:
     return round(total / 1e8, 2)
 
 
+@router.get("/api/lite/breadth")
+async def lite_breadth():
+    """市场宽度：涨跌家数、站上均线占比、20 日新高新低、涨跌停。
+
+    这页是大盘温度标签的证据面：标签答「今天冷不冷」，这里答「凭什么」以及「冷了几天、
+    在变好还是变坏」。温度分与 regime 模块同源，同一天不允许两处口径打架。
+
+    与轮动图同样按最新 bar 日期缓存、由 board_refresh 预热：全市场逐日聚合约 17 秒，
+    不能改成请求时同步现算。
+    """
+    from quantcore.quant.breadth import build_breadth
+    from quantcore.quant.freshness import mark
+    from quantcore.quant.local_store import get_local_store
+
+    store = get_local_store()
+    try:
+        latest_bar = store.latest_real_bar_date() or ""
+    except Exception:  # noqa: BLE001  取不到只影响新鲜度判定，不该阻断
+        latest_bar = ""
+    cache_key = f"breadth:{latest_bar}"
+    cached = _cache_get(cache_key, 43200)
+    if cached:
+        return cached
+
+    data = await _run_data_task(build_breadth, store, timeout=60.0) or {}
+    if not data:
+        return {"series": [], "ready": False,
+                "message": "日线样本不足，宽度曲线暂不可用"}
+    data["ready"] = True
+    data["freshness"] = mark(str(data.get("as_of") or ""), latest_bar=latest_bar)
+    _cache_set(cache_key, data)
+    return data
+
+
+@router.get("/api/lite/sector-rotation")
+async def lite_sector_rotation():
+    """板块相对轮动（RRG）：相对强度 × 强度变化，四象限 + 最近八周轨迹。
+
+    与热力图的分工：热力图答「今天谁涨」，本端点答「资金这几周在往哪挪」。后者才是
+    审计里唯一站得住的那个量（20 日板块动量），mom20_pct ≥ 0.8 即 sector_hot 命中档。
+
+    整套坐标只依赖日线，一个交易日只会变一次，所以缓存按最新 bar 日期作键、TTL 给足
+    半天，由 board_refresh 每日预热一次。计算本身约 14 秒（读 60 万行日线 + 逐日
+    横截面标准化），**不能**改成用户请求时同步现算 —— 这是既有的「端点别同步现算」
+    约束，涨停热点当年就是栽在这上面。
+    """
+    from quantcore.quant.freshness import mark
+    from quantcore.quant.local_store import get_local_store
+    from quantcore.quant.rotation import build_rotation
+
+    store = get_local_store()
+    try:
+        as_of = store.latest_real_bar_date() or ""
+    except Exception:  # noqa: BLE001  取不到日期只影响缓存分代，不该阻断
+        as_of = ""
+    cache_key = f"sector-rotation:{as_of}"
+    cached = _cache_get(cache_key, 43200)
+    if cached:
+        return cached
+
+    data = await _run_data_task(build_rotation, store, timeout=60.0) or {}
+    if not data:
+        # 日线不足（新库/同步中）时如实说明，不要返回空图让前端画一张空白坐标系
+        return {"as_of": as_of, "items": [], "ready": False,
+                "message": "日线样本不足 115 个交易日，轮动图暂不可用"}
+    data["ready"] = True
+    data["freshness"] = mark(str(data.get("as_of") or ""), latest_bar=as_of)
+    _cache_set(cache_key, data)
+    return data
+
+
 @router.get("/api/lite/heatmap")
 async def lite_heatmap(level: str = "industry", industry: str = "", nested: bool = False):
     """行业/个股热力图：面积=A股市值（亿，成交额兜底），颜色=当日涨跌幅。60s 缓存。

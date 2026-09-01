@@ -291,6 +291,15 @@ async def _refresh_cycle() -> None:
         return
     await _safe("heatmap", ins.lite_heatmap("industry"))
 
+    # 4.5) 板块轮动（RRG）：纯日线，一个交易日只变一次，所以命中当日缓存就直接返回，
+    #      真正的重算每天只发生一次。放在热力图之后，两者共用同一批日线页缓存。
+    if not _has_memory_budget("sector-rotation"):
+        return
+    await _safe("sector-rotation", ins.lite_sector_rotation())
+    if not _has_memory_budget("breadth"):
+        return
+    await _safe("breadth", ins.lite_breadth())
+
     # 5) 一键智选的结构因子基于完整日 K，每个交易日只需预热一次。
     #    盘中实时价与时机层由用户请求刷新；后台每 60 秒进入推荐锁会让用户点击无谓排队。
     today = datetime.now(_TZ).strftime("%Y-%m-%d")

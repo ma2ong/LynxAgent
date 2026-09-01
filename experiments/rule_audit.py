@@ -643,6 +643,25 @@ RULES = {
     #   1) --by-regime 分层，问「某条选股规则的 alpha 在什么环境下还在」；
     #   2) --replay <池> --variant "base,-regime_cold"，问「这个闸门装上去池子会不会变好」，
     #      此时该看的是「较基线」那一列的同日配对差，不是对照增量。
+    # ---- 开盘区间族（2026-09-01）。答的是「该不该在竞价就动手」。
+    # 竞价池的名单 09:25 就定了、开盘即可买；另一种做法是等当天把方向走出来再买。
+    # 手上没有分钟数据（intraday_snapshots 每天只有一张下午的快照），所以「开盘 30
+    # 分钟不破竞价价」的字面版本做不了，这里用日线能表达的最接近口径：
+    # 当天收盘有没有守住开盘价。配 --entry close 使用 —— 这个条件要到收盘才知道，
+    # 所以只能收盘买，不能拿它去筛开盘买入的名单（那是未来函数）。
+    # 2026-09-01 结论：**否决，别再重跑日线版本**。全市场 1590 个交易日：
+    #   守住开盘价 +0.02 / 跌破开盘价 +0.01 —— 正反两面都贴着零且同号，
+    #   典型的双向检验失败，说明这个维度没有区分力（同 chop 族那次）。
+    #   held_open_firm 的 +0.04 也远低于 0.312 的摩擦线。
+    #   竞价池上曾出现 +0.46/+0.78（t=1.0~1.2），是 36 天样本的噪音。
+    # 注意边界：被否的是**日线口径**。真正的开盘区间突破用开盘头 15~30 分钟的区间，
+    # 本地没有分钟数据（intraday_snapshots 每天只有一张下午快照），那个版本仍未检验。
+    "held_open": ("当天守住开盘价（收盘≥开盘）", lambda d: d["close"] >= d["open"]),
+    "held_open_firm": ("守住开盘价且盘中没深跌（最低价不低于开盘 2%）",
+                       lambda d: (d["close"] >= d["open"]) & (d["low"] >= d["open"] * 0.98)),
+    "lost_open": ("当天跌破开盘价（收盘<开盘）——上面那条的反面",
+                  lambda d: d["close"] < d["open"]),
+
     "regime_cold": ("选出日大盘偏冷", lambda d: d["regime"] == "偏冷"),
     "regime_warm": ("选出日大盘偏暖", lambda d: d["regime"] == "偏暖"),
     # 大样本里唯一呈单调剂量反应的组合：追高型选股的增量随环境转冷单调恶化
@@ -830,8 +849,10 @@ def main() -> None:
         return
     if not args.rule and not args.pool and not args.replay:
         ap.error("至少给一个 --rule / --pool / --replay")
-    if args.variant and not args.replay:
-        ap.error("--variant 需要配合 --replay 指定基线池")
+    if args.variant and not (args.replay or args.pool):
+        ap.error("--variant 需要配合 --replay 或 --pool 指定基线池")
+    if args.variant and args.replay and args.pool:
+        ap.error("--variant 一次只能挂在一个基线上：--replay 或 --pool 二选一")
 
     print(f"载入面板 since={args.since} horizon=T+{args.horizon} entry={args.entry} …")
     panel = build_panel(args.db, args.since, args.horizon, args.entry)
@@ -853,9 +874,29 @@ def main() -> None:
         r["desc"] = desc
         results.append(r)
     for pool in args.pool:
-        r = audit_one(panel, pool_mask(panel, args.db, pool), f"pool:{pool}", args.horizon)
-        r["desc"] = f"线上 {pool} 池的真实留痕"
-        results.append(r)
+        base_mask = pool_mask(panel, args.db, pool)
+        # 不带 --variant 时照旧只审这个池本身
+        specs = args.variant if (args.variant and not args.replay) else []
+        if not specs:
+            r = audit_one(panel, base_mask, f"pool:{pool}", args.horizon)
+            r["desc"] = f"线上 {pool} 池的真实留痕"
+            results.append(r)
+            continue
+        # 带 --variant 时用**真实留痕**当基线跑闸门对照。比 --replay 更可信：
+        # 留痕是用户当时真看到的名单，回放是事后按同一套评分重建的。
+        print(f"留痕基线 {pool}: {int(base_mask.sum())} 笔 · "
+              f"{panel[base_mask]['date'].nunique()} 个交易日")
+        for spec in specs:
+            _, gates = parse_variant(spec)
+            mask = base_mask.copy()
+            for sign, name in gates:
+                gate = RULES[name][1](panel)
+                mask &= (~gate) if sign == "-" else gate
+            r = audit_one(panel, mask, f"{pool}:{spec}", args.horizon)
+            r["desc"] = f"留痕 {pool} 池 + 闸门 {spec}"
+            r.update(paired_vs_base(panel, base_mask, mask))
+            r["kept_share"] = round(float(mask.sum()) / max(1, float(base_mask.sum())), 3)
+            results.append(r)
 
     if args.replay:
         base_mask = replay_mask(panel, args.db, args.replay)

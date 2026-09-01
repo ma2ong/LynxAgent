@@ -340,12 +340,19 @@ async def health():
 
 # 一键智选最终名单的条数上限。原先在 safe_limit / _finalize_intraday_quality /
 # structure_shadow 三处各写死 10，导致前端「推荐上限」控件调了也没用——改这里一处即可。
-SMART_POOL_MAX_ITEMS = 20
-# 一键智选最终名单的分数门槛：综合排序分（quality_score = 日K结构分与盘中量价融合后的
-# 0~100 刻度 + 时机层加分）达到这条线就上榜，不再按名次砍到 20 只。
-# 2026-08-20 Allen 定：名次上限两头都不对——强势日第 21 只 92 分被砍掉，弱市又要拿
-# 80 分的凑满 20 只。设 LYNX_SMART_SCORE_FLOOR=0 可退回旧的 SMART_POOL_MAX_ITEMS 名次制。
-SMART_POOL_SCORE_FLOOR = max(0.0, min(100.0, float(os.getenv("LYNX_SMART_SCORE_FLOOR", "90"))))
+# 2026-09-01 Allen 定：给满 10 只。20 只太多，看不过来。
+SMART_POOL_MAX_ITEMS = 10
+# 一键智选最终名单的分数门槛：达到这条线才上榜。
+#
+# 口径变过两轮，这里记全，免得再来回改：
+#   2026-08-06  名次制，给满 20 只；
+#   2026-08-20  改门槛制（≥90 分，不限只数）—— 理由是名次上限两头都不对：强势日
+#               第 21 只 92 分被砍掉，弱市又要拿 80 分的凑满 20 只；
+#   2026-09-01  Allen 定：**回到名次制，取前 10 只，不设分数线**。门槛制的代价是
+#               名单只数每天飘忽，弱市甚至只剩保底的几只 —— 产品上宁可稳定给 10 只
+#               让用户自己筛，也不要今天 3 只明天 17 只。
+# 设 LYNX_SMART_SCORE_FLOOR=90 可退回门槛制（届时 SMART_POOL_MAX_ITEMS 不生效）。
+SMART_POOL_SCORE_FLOOR = max(0.0, min(100.0, float(os.getenv("LYNX_SMART_SCORE_FLOOR", "0"))))
 # 时机层加分的**盘中信号分**门槛（2026-08-28 Allen 定）：盘中信号分不到这条线的，
 # 状态标签照常显示，但一分不加。此前只看状态（entry/watch）不看强度，一个 60 分的
 # 弱确认和一个 95 分的强确认拿到同样的 +8。与上面的名单门槛是两回事：那条管
@@ -1478,7 +1485,8 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
                 item["radar_signal"]["actionable"] = False
             if item.get("timing_status") == "confirmed":
                 item["timing_label"] = "环境数据不足·暂停入场"
-    # 用户最终看到的名单在这里定稿：按综合排序分门槛过滤，不限只数。
+    # 用户最终看到的名单在这里定稿：现按综合排序取前 SMART_POOL_MAX_ITEMS 只
+    # （门槛制已于 2026-09-01 关闭，见 SMART_POOL_SCORE_FLOOR 处的口径沿革）。
     _finalize_intraday_quality(
         data,
         int(data.get("requested_limit") or len(items) or SMART_POOL_MAX_ITEMS),
@@ -2304,7 +2312,13 @@ async def _compute_lite_smart_pool_unlocked(
             "universe": ai_factor_pool.get("universe"),
         },
         "items": items,
-        "source_note": f"结构候选叠加 AI 因子、形态强度和盘中量价时机确认，只输出综合排序≥{SMART_POOL_SCORE_FLOOR:.0f}分的标的；时机层正在独立留痕验证，仅供研究。",
+        "source_note": (
+            "结构候选叠加 AI 因子、形态强度和盘中量价时机确认，"
+            + (f"只输出综合排序≥{SMART_POOL_SCORE_FLOOR:.0f}分的标的"
+               if SMART_POOL_SCORE_FLOOR > 0
+               else f"按综合排序取前 {SMART_POOL_MAX_ITEMS} 只")
+            + "；时机层正在独立留痕验证，仅供研究。"
+        ),
     }
     response = {"success": True, "data": data, "message": "ok"}
     await _apply_confluence(response)
@@ -2319,7 +2333,7 @@ async def _compute_lite_smart_pool_unlocked(
 
 async def _compute_lite_smart_pool(
     strategy: str = "balanced",
-    limit: int = 20,
+    limit: int = SMART_POOL_MAX_ITEMS,
     universe_limit: int = 10000,
     task_id: str | None = None,
     force_refresh: bool = False,
@@ -2345,7 +2359,8 @@ async def _compute_lite_smart_pool(
 
 
 @app.get("/api/lite/smart-pool")
-async def lite_smart_pool(strategy: str = "balanced", limit: int = 20, universe_limit: int = 10000,
+async def lite_smart_pool(strategy: str = "balanced", limit: int = SMART_POOL_MAX_ITEMS,
+                          universe_limit: int = 10000,
                           cache_only: bool = False):
     data = await _compute_lite_smart_pool(strategy, limit, universe_limit, cache_only=cache_only)
     # 供前端判断要不要自动跑一次全量扫描。用「今天有没有留痕」而不是「有没有名单」：

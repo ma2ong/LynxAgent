@@ -116,7 +116,7 @@ async def quant_data_sources():
 
 
 @router.get("/smart-pool")
-async def quant_smart_pool(limit: int = 20, universe_limit: int = 300):
+async def quant_smart_pool(limit: int = 10, universe_limit: int = 300):
     try:
         # 原始量化接口只返回结构池，不应抢先写入用户最终看到的 smart 留痕；
         # 最终留痕由 lite 层完成七不买、时机和可买性过滤后统一记录。

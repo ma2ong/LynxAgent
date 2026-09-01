@@ -68,9 +68,11 @@ def compute_call_auction(
     *,
     buy_limit: int = 15,
     # 展示口径按「档位」而不是按名次：凡是评分达到当日最高分 78%（即『强推荐』及以上）
-    # 的候选全部上榜，多少只给多少只。旧口径固定砍到前 3 名，强弱本来相近的第 4、5 名
-    # 被无差别丢掉；档位口径让"今天到底有几只够强"由盘面自己决定。
-    # 留痕仍按 buy_limit 记满，否则以后无法继续验证名次与涨停率的关系。
+    # 的候选都够格上榜，让"今天到底有几只够强"由盘面自己决定，而不是固定砍到前 3 名。
+    # 但档位口径没有上限，强势日会一口气给出十几只——竞价只有几分钟可操作，给这么多
+    # 等于没给。2026-09-01 Allen 定：**最多推荐 5 只**，够格的多了就按名次取前 5。
+    # 留痕不受这条限制，仍按 buy_limit 记满，否则以后无法继续验证名次与涨停率的关系。
+    display_limit: int = 5,
     min_display: int = 3,
     industry_map: Dict[str, str] | None = None,
     hot_industries: Dict[str, float] | None = None,
@@ -352,9 +354,10 @@ def compute_call_auction(
         except Exception:
             pass
 
-    # 展示与留痕分开：页面给出全部「强推荐」及以上的候选（不限只数），
-    # 留痕仍按 buy_limit 记满，复盘样本继续积累。
+    # 展示与留痕分开：页面给够格的前 display_limit 只，留痕仍按 buy_limit 记满，
+    # 复盘样本继续积累（把展示上限也套到留痕上，等于把历史样本砍掉三分之二）。
     shown = ranked[:strong_count] if strong_count else ranked[:max(1, min_display)]
+    shown = shown[:max(1, display_limit)]
 
     dynamic_hot = [
         {"name": name, "trend_pct": score}
@@ -365,7 +368,10 @@ def compute_call_auction(
         "overview": overview,
         "hot_sectors": hot_sectors[:8],
         "buy_candidates": shown,
+        # 未展示数 = 全部候选 − 实际展示。展示上限收紧后这个数会变大，正是本意：
+        # 用户需要知道「还有几只够格但没给出来」，而不是以为今天只有这么点货。
         "hidden_candidates": max(0, len(candidates) - len(shown)),
+        "display_limit": display_limit,
         "strong_tier_count": strong_count,
         # 留痕实测的真实命中率，直接端给前端——避免「上榜=会涨停」的误读
         "hit_stats": {

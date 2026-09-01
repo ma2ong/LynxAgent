@@ -144,6 +144,17 @@
       <AdminUsers />
     </el-card>
 
+    <!-- 规则生命周期同样并进本页：它和用户管理一样是仅管理员可见的内部视图，
+         再开一条侧栏菜单只会让每天要点的那些入口更挤。放在用户管理之后——
+         前者是运营，后者是研究，运营的事更常做。 -->
+    <el-card v-if="currentUser?.is_admin" class="card">
+      <div class="card-title">
+        <h3>规则生命周期</h3>
+        <span class="card-hint">每条选股规则审到哪一步、结论是什么，仅管理员可见</span>
+      </div>
+      <RuleLifecycle />
+    </el-card>
+
     <!-- 退出登录从侧栏底部收到这里：低频且不可撤销，常驻侧栏只会被误点。
          放在整页最后、且要二次确认——避免用户想改 API Key 却顺手把自己登出了。 -->
     <el-card class="card">
@@ -173,6 +184,7 @@ import { useRouter } from 'vue-router'
 import { ApiClient } from '@/api/request'
 import { currentUser, clearCurrentUser } from '@/stores/user'
 import AdminUsers from '@/views/Admin/Users.vue'
+import RuleLifecycle from '@/views/Admin/RuleLifecycle.vue'
 import {
   fetchBillingMe,
   fetchRuntimeValidation,

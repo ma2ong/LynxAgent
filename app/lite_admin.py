@@ -141,3 +141,21 @@ async def admin_handle_upgrade_request(
 async def admin_set_active(username: str, req: SetActiveRequest):
     admin_store.set_active(username, req.is_active)
     return {"success": True, "data": None, "message": "已更新"}
+
+
+@router.get("/rule-lifecycle")
+async def admin_rule_lifecycle():
+    """选股规则生命周期：每条规则处在哪一档、最近一次审计给了什么判定。
+
+    这是研究流程的内部视图，不是给终端用户的：它答的是「这个想法我们试过没有、
+    结论是什么」，防的是同一批规则被反复重新提出、重新验证。判定直接读
+    experiments/results/ 里的审计结果，档位读 rule_lifecycle.RULE_STAGES。
+
+    读文件可能慢（目录里几十份结果），放线程里，别占事件循环。
+    """
+    import asyncio
+
+    from quantcore.quant.rule_lifecycle import build_lifecycle
+
+    data = await asyncio.to_thread(build_lifecycle)
+    return {"success": True, "data": data, "message": ""}

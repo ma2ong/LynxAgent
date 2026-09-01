@@ -306,7 +306,14 @@ def build_panel(db: str, since: str, horizon: int, entry: str = "close") -> pd.D
     # 入场口径。信号在 T 日收盘后才产生，名单也是收盘后生成的 —— 所以 close 口径
     # 天然含一段用户吃不到的隔夜收益。缩量那轮的 +1pp 全长在这一段里（见模块开头），
     # 因此任何新规则都必须用 open 口径复核：T+1 开盘买入，T+horizon 收盘卖出。
-    if entry == "open":
+    if entry == "open0":
+        # 当日开盘买入。给集合竞价这类**信号在开盘前就成立**的池用：名单 09:25 由
+        # 集合竞价定出，而当日 open 正是那次竞价的成交价 —— 用它当买入价既不是未来
+        # 函数，也正好等于用户 09:30 能拿到的价。
+        # 另两种口径对竞价池都晚一天，量的不是同一个产品。
+        # 配合 --horizon 0 即「买开盘、当日收盘」，也就是竞价页写的那个日内口径。
+        df["fwd_ret"] = (g.shift(-horizon) / df["open"] - 1) * 100
+    elif entry == "open":
         buy = df.groupby("symbol", sort=False)["open"].shift(-1)
         df["fwd_ret"] = (g.shift(-horizon) / buy - 1) * 100
     else:
@@ -798,16 +805,18 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=DEFAULT_DB)
     ap.add_argument("--since", default="2019-01-01", help="面板起始日；越长时间稳定性越可信")
-    ap.add_argument("--horizon", type=int, default=5, help="持有交易日数（T+N）")
+    ap.add_argument("--horizon", type=int, default=5,
+                    help="持有交易日数（T+N）。配 --entry open0 时 0 = 买开盘、当日收盘")
     ap.add_argument("--rule", action="append", default=[], help="内置规则名，可重复")
     ap.add_argument("--pool", action="append", default=[], help="按线上留痕审计，可重复")
     ap.add_argument("--replay", default="", help="以最近一次回放的该池选股为基线，配合 --variant")
     ap.add_argument("--variant", action="append", default=[],
                     help='闸门变体，如 "base" / "base,-chase20" / "base,-chase20,+consolidate"，可重复')
     ap.add_argument("--list", action="store_true", help="列出内置规则")
-    ap.add_argument("--entry", choices=("close", "open"), default="close",
+    ap.add_argument("--entry", choices=("close", "open", "open0"), default="close",
                     help="入场口径：close=当日收盘买入（含用户吃不到的隔夜段）；"
-                         "open=次日开盘买入（产品口径，新规则必须用它复核）")
+                         "open=次日开盘买入（收盘后才产生的信号用这个复核）；"
+                         "open0=当日开盘买入（信号在开盘前就成立的池，如集合竞价）")
     ap.add_argument("--by-regime", action="store_true",
                     help="把每条 --rule 按大盘环境（偏暖/中性/偏冷）分层再审一遍，"
                          "同时给绝对收益——回答「这条规则在什么环境下还成立」")

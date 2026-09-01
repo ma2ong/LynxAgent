@@ -249,8 +249,12 @@ async def lite_call_auction(
     # 而且要几千次请求。盘后照样能算，不依赖后端在竞价窗口在线。
     try:
         from quantcore.quant.auction_tape import classify_symbols, tape_summary
+        # 判形态的范围要盖住「展示的」和「留痕的」两批：展示只有前几只，而留痕记满
+        # buy_limit 只，后者才是日后做匹配对照的样本。多判十来只只是多一轮盘前分时
+        # 请求，一天一次，换来的是这个信号将来可被检验。
         codes = [str(c.get("code") or "") for c in (result.get("buy_candidates") or [])]
-        patterns = await asyncio.to_thread(classify_symbols, codes)
+        codes += [str(c) for c in (result.get("recorded_codes") or [])]
+        patterns = await asyncio.to_thread(classify_symbols, list(dict.fromkeys(codes)))
         tape = tape_summary(patterns)
         result["auction_tape"] = {
             "available": tape["available"], "tracked": tape["tracked"],
@@ -264,6 +268,22 @@ async def lite_call_auction(
             pat = patterns.get(str(c.get("code") or "").zfill(6))
             if pat and pat.get("pattern") != "insufficient":
                 c["auction_pattern"] = pat
+        # 形态回填留痕：只在本轮真的写过留痕时做，且只填空值。这一步是「诱多出货
+        # 到底更差多少」将来能被审计的唯一前提 —— 在此之前 auction 池的 patterns
+        # 字段是全空的，等于每天算一个从不验证的信号。
+        recorded = [str(c).zfill(6) for c in (result.get("recorded_codes") or [])]
+        if recorded:
+            # 存英文 slug（grab/lure/washout/divergence）而不是中文标签：留痕是给
+            # rule_audit 过滤用的，中文串一旦改文案历史数据就对不上了。
+            # "insufficient" 是「拉不到盘前分时」，不是一种形态，不能入库。
+            labels = {}
+            for code in recorded:
+                slug = str((patterns.get(code) or {}).get("pattern") or "")
+                if slug and slug != "insufficient":
+                    labels[code] = slug
+            if labels:
+                await asyncio.to_thread(
+                    get_local_store().update_pick_patterns, "auction", today, labels)
     except Exception:
         pass
 

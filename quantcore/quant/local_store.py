@@ -893,6 +893,31 @@ class LocalQuantStore:
                 "VALUES(?,?,?,?,?,?,?,?,?)", latest_rows)
         return len(rows)
 
+    def update_pick_patterns(self, pool: str, pick_date: str,
+                             patterns: Dict[str, str]) -> int:
+        """把当日留痕行的 patterns 补上。只填空值，不覆盖已有内容。
+
+        为什么要单独一步：竞价的盘口四形态要额外拉一次盘前分时才算得出来，留痕发生在
+        那之前。不回填的话 picks_history.patterns 对 auction 池恒为空 —— 系统每天算
+        一个形态标签给用户看，却没有任何数据能回答它有没有预测力。
+        """
+        if not patterns:
+            return 0
+        conn = self._conn()
+        n = 0
+        with conn:
+            for symbol, label in patterns.items():
+                code = str(symbol).zfill(6)
+                if not label or not code.isdigit():
+                    continue
+                cur = conn.execute(
+                    "UPDATE picks_history SET patterns=? "
+                    "WHERE pick_date=? AND pool=? AND symbol=? "
+                    "AND (patterns IS NULL OR patterns='')",
+                    (str(label)[:200], pick_date, pool, code))
+                n += cur.rowcount
+        return n
+
     def record_first_seen(self, pool: str, items: List[Dict[str, object]]) -> int:
         """记下每只票当日首次上榜的价格（INSERT OR IGNORE，只有第一次生效）。
 

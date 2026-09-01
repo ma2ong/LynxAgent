@@ -1,0 +1,61 @@
+{
+  "since": "2020-01-02",
+  "horizon": 1,
+  "entry": "open0",
+  "generated_at": "2026-09-01T10:45:50",
+  "thresholds": {
+    "MIN_SAMPLES": 200,
+    "MIN_CLUSTERS": 30,
+    "MIN_STABLE_YEARS": 3,
+    "TAIL_DROP": 0.05,
+    "FRICTION_PP": 0.312,
+    "ALPHA": 0.05
+  },
+  "results": [
+    {
+      "rule": "pool:auction",
+      "horizon": 1,
+      "samples": 447,
+      "clusters": 36,
+      "avg_excess": 0.427,
+      "avg_excess_by_pick": 0.619,
+      "median_excess": 0.323,
+      "win_rate": 0.519,
+      "t": 0.88,
+      "p_raw": 0.3806776830576517,
+      "net_of_friction": 0.115,
+      "weighting_conflict": false,
+      "matched_n": 447,
+      "inc_excess": 0.037,
+      "inc_ci_lo": -0.769,
+      "inc_ci_hi": 0.843,
+      "inc_win": 0.0062,
+      "inc_win_ci_lo": -0.0481,
+      "p_inc": 0.9284676946840689,
+      "inc_ex_tail": 0.561,
+      "avg_excess_ex_tail": -0.299,
+      "by_year": {
+        "2026": 0.427
+      },
+      "stable_years": 1,
+      "desc": "线上 auction 池的真实留痕",
+      "p_holm_threshold": 0.05,
+      "pass_holm": false,
+      "gates": {
+        "样本量": true,
+        "超额为正": true,
+        "对照增量为正": false,
+        "去右尾仍为正": true,
+        "时间稳定": false,
+        "多重检验": false,
+        "扣摩擦为正": true
+      },
+      "passed": false,
+      "failed_gates": [
+        "对照增量为正",
+        "时间稳定",
+        "多重检验"
+      ]
+    }
+  ]
+}

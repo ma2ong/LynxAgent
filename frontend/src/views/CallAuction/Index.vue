@@ -116,6 +116,9 @@
                竞价只有几分钟可操作，给十几只等于没给（2026-09-01 Allen 定上限 5）。
                被上限挡下的写进「另有 N 只」，别让用户以为今天就这点货。
                真实命中率照写——上榜不等于会涨停，最强档也只有六分之一。 -->
+          <!-- 档位是相对当日最高分算的，弱势日照样会有「最强」。这条提示在整场都不强时
+               出现，如实说明这是矮子里拔将军——名单照给，但不让标签替盘面吹牛。 -->
+          <div v-if="data.tier_note" class="tier-note">{{ data.tier_note }}</div>
           <div v-if="data.hit_stats" class="hit-note">
             <b>达到「强推荐」档的按强弱最多取前 {{ data.display_limit || 5 }} 只（今日 {{ data.buy_candidates.length }} 只<span
               v-if="data.hidden_candidates">，另有 {{ data.hidden_candidates }} 只未展示</span>）。</b>
@@ -201,7 +204,12 @@ const PAT_CLASS: Record<string, string> = {
   accumulation: 'p-acc', distribution: 'p-dist', shakeout: 'p-shake', divergence: 'p-div', neutral: 'p-neu',
 }
 const patClass = (p: string) => PAT_CLASS[p] || 'p-neu'
-const tierClass = (t: string) => (t === '最强推荐' ? 't-top' : t === '强推荐' ? 't-strong' : 't-mid')
+// 弱势日档位名会换成相对措辞（今日相对最强/较强），配色按同一梯度走，
+// 否则整块掉进灰色，反而看不出当日的强弱次序。
+const tierClass = (t: string) =>
+  (t === '最强推荐' || t === '今日相对最强') ? 't-top'
+    : (t === '强推荐' || t === '今日相对较强') ? 't-strong'
+      : 't-mid' 
 const fmtAmt = (yi: number) => (yi >= 10000 ? `${(yi / 10000).toFixed(2)} 万亿` : `${yi} 亿`)
 
 const openStock = (code: string) => {
@@ -319,6 +327,7 @@ onMounted(load)
 .cc-name { font-size: 14px; font-weight: 600; }
 .cc-code { font-size: 11px; color: var(--el-text-color-secondary); margin-left: 6px; font-variant-numeric: tabular-nums; }
 .theme-tag { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px; margin-left: 6px; color: var(--el-color-primary); background: var(--el-color-primary-light-9); border: 1px solid var(--el-color-primary-light-7); }
+.tier-note { background: #fff7e6; border: 1px solid #ffd591; color: #874d00; padding: 7px 10px; border-radius: 6px; font-size: 12px; line-height: 1.6; margin-bottom: 8px; }
 .tier { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-left: 6px; color: #fff; }
 .t-top { background: #b71c1c; }
 .t-strong { background: #ef232a; }

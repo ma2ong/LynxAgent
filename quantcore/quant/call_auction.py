@@ -60,6 +60,13 @@ DISPLAY_LIMIT = 5
 # 推荐档位门槛：候选评分占当日最高分的比例。同时决定展示范围——达到强推荐档就上榜。
 TOP_TIER_RATIO = 0.9
 STRONG_TIER_RATIO = 0.78
+# 档位是**相对当日最高分**算的，所以每天必然产出「最强推荐」——哪怕当日最强只是
+# 矮子里拔将军（实测：全场只高开 1.8~2.0% 的盘面，五只全被标成最强推荐）。
+# 加一条绝对参照：当日最强的开盘涨幅够不到「抢筹」档时，三档改用相对措辞并标明。
+# 只改标签、不改只数也不改排序 —— 2026-09-01 Allen 定：如实标注，不减信息。
+ABS_STRONG_OPEN_PCT = 3.0
+TIER_NAMES = ("最强推荐", "强推荐", "推荐")
+TIER_NAMES_RELATIVE = ("今日相对最强", "今日相对较强", "相对靠前")
 
 
 def _is_hot_tech(industry: str) -> bool:
@@ -335,6 +342,10 @@ def compute_call_auction(
     strong_count = sum(1 for c in candidates if best_score and c["score"] / best_score >= STRONG_TIER_RATIO)
     ranked = candidates[:max(buy_limit, strong_count)]
     top_candidates = ranked[:buy_limit]
+    # 当日最强够不够「抢筹」：够不到就说明今天整场都不强，档位名改成相对措辞
+    best_open = max((c["open_pct"] for c in candidates), default=0.0)
+    relative_only = bool(candidates) and best_open < ABS_STRONG_OPEN_PCT
+    tier_names = TIER_NAMES_RELATIVE if relative_only else TIER_NAMES
     if ranked:
         scores = [c["score"] for c in ranked]
         smax, smin = max(scores), min(scores)
@@ -343,8 +354,8 @@ def compute_call_auction(
             c["rank"] = idx + 1
             c["strength"] = round(40 + (c["score"] - smin) / span * 60)
             ratio = c["score"] / (smax or 1.0)
-            c["tier"] = ("最强推荐" if ratio >= TOP_TIER_RATIO
-                         else ("强推荐" if ratio >= STRONG_TIER_RATIO else "推荐"))
+            c["tier"] = (tier_names[0] if ratio >= TOP_TIER_RATIO
+                         else (tier_names[1] if ratio >= STRONG_TIER_RATIO else tier_names[2]))
 
     # 留痕当日竞价候选，供复盘页统计真实 T+N 胜率。record 由路由层控制：只在竞价
     # 冻结时刻记一次。旧行为是保温循环每 60 秒重算重记——盘中量比/成交额早已不是
@@ -378,6 +389,19 @@ def compute_call_auction(
         "hidden_candidates": max(0, len(candidates) - len(shown)),
         "display_limit": display_limit,
         "strong_tier_count": strong_count,
+        # 今天整场都不强：档位仍按相对强弱排，但名字已改成「今日相对最强」这类措辞，
+        # 免得「最强推荐」这四个字在弱势日照样出现、久而久之失去含义。
+        # 本次实际写进留痕的代码。路由层要在四形态判完之后把形态回填到这些行上——
+        # 形态是留痕当时还算不出来的（要额外拉盘前分时），但不落库就永远无法回答
+        # 「诱多出货是不是真的更差」，那等于每天算一个从不验证的信号给用户看。
+        "recorded_codes": [c["code"] for c in top_candidates] if (record and top_candidates) else [],
+        "relative_only": relative_only,
+        "best_open_pct": round(best_open, 2),
+        "tier_note": (
+            f"今日最强也只高开 +{best_open:.2f}%，够不到「抢筹」档（+{ABS_STRONG_OPEN_PCT:.0f}%），"
+            f"下面是矮子里拔将军，档位按当日相对强弱排，不代表绝对够强。"
+            if relative_only else ""
+        ),
         # 留痕实测的真实命中率，直接端给前端——避免「上榜=会涨停」的误读
         "hit_stats": {
             "sessions": 18, "samples": 314,

@@ -87,3 +87,35 @@ def test_record_sample_is_not_truncated_by_the_display_cap():
     assert ranked_positions == sorted(ranked_positions)
     # 候选池本身没有被展示上限裁掉
     assert out["hidden_candidates"] + len(out["buy_candidates"]) >= 15
+
+
+def test_weak_session_switches_to_relative_tier_names():
+    """整场都不强时档位改用相对措辞，名单只数不变。
+
+    档位算的是「占当日最高分的比例」，所以每天必然产出「最强推荐」——实测一个全场
+    只高开 1.75~2.0% 的盘面，五只全被标成最强推荐。名单照给（少给信息不是改进），
+    但标签不能替盘面吹牛。
+    """
+    weak = _run(5, opens=[2.0, 1.9, 1.85, 1.8, 1.75])
+    assert weak["relative_only"] is True
+    assert weak["tier_note"]
+    assert all(c["tier"].startswith("今日相对") or c["tier"] == "相对靠前"
+               for c in weak["buy_candidates"])
+    # 只改标签：只数与排序不受影响
+    assert len(weak["buy_candidates"]) == 5
+
+    strong = _run(5, opens=[5.0, 4.5, 4.0, 3.5, 3.2])
+    assert strong["relative_only"] is False
+    assert strong["tier_note"] == ""
+    assert strong["buy_candidates"][0]["tier"] == "最强推荐"
+
+
+def test_recorded_codes_are_exposed_for_pattern_backfill():
+    """留痕的代码要回传，否则路由层没法把盘口形态补进 picks_history。
+
+    形态要额外拉盘前分时才算得出，留痕发生在那之前；不回填的话 auction 池的
+    patterns 字段恒为空，「诱多出货是不是更差」就永远无法审计。
+    """
+    # _run 已固定 record=False（测试绝不写留痕），所以这里应当拿到空列表
+    out = _run(30)
+    assert out["recorded_codes"] == []

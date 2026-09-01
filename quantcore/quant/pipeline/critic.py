@@ -3,7 +3,18 @@
 - 有 LLM：把候选的量化因子 + 命中来源 + 指标快照投喂 chat_json，让模型打 0-10 分并给理由，
   同时参考 feedback_curator 的 avoid_tags（命中则倾向拒绝）。
 - 无 LLM：用 composite_score（0-100）/10 折算为 0-10 分，按规则模板生成拒绝理由
-  （RSI 极端 / 流动性枯竭 / 趋势走坏），并叠加 feedback factor_bias 对因子分加权。
+  （RSI 极端 / 流动性枯竭 / 趋势走坏）。
+
+历史反馈**只做上下文，不改分数**（2026-08-31）
+----------------------------------------------
+这里以前有一条 factor_bias 通路：T+5 复盘让 LLM 总结「哪个因子选错了」，折成乘数
+直接乘在因子分上；avoid_tags 命中还会把分数硬压到通过线以下。等于开了一个后门，
+让未经检验的结论直接改排序 —— 而 experiments/rule_audit.py 那七道闸存在的全部意义，
+就是不许任何规则绕过检验进排序。历史上按 IC 调权、搜权重都实测跑输，这条自动通路
+比它们更没有约束（连一次统计检验都没有）。
+现在的形态：历史教训照旧进 LLM 提示词（模型可以据此自己判断），命中的标签照旧写进
+候选的 history_tags 字段供展示，但**不再改任何分数、不再强制拒绝**。要动权重就走
+experiments/weight_ab.py，过闸再上。
 
 去重：同一 symbol 多来源在汇总阶段已合并 sources，这里只对 (symbol) 唯一打分。
 通过线：score >= keep_threshold 入 kept，否则 rejected。
@@ -18,12 +29,11 @@ from ..factors import compute_factor_scores
 KEEP_THRESHOLD = 6.0  # 0-10
 
 
-def _rule_score(factors: Dict[str, float], factor_bias: Dict[str, float]) -> float:
-    """规则降级打分：加权因子均值（0-100）折算 0-10，叠加 feedback 因子乘数。"""
+def _rule_score(factors: Dict[str, float]) -> float:
+    """规则降级打分：因子均值（0-100）折算 0-10。历史反馈不参与，见模块开头。"""
     if not factors:
         return 5.0
-    biased = {k: v * float(factor_bias.get(k, 1.0)) for k, v in factors.items()}
-    avg = sum(biased.values()) / max(1, len(biased))
+    avg = sum(factors.values()) / max(1, len(factors))
     return round(max(0.0, min(10.0, avg / 10.0)), 2)
 
 
@@ -41,17 +51,14 @@ def _rule_reject_reason(factors: Dict[str, float], snapshot: Dict[str, float]) -
     return None
 
 
-def _critique_one_rule(cand: Dict[str, object], factor_bias: Dict[str, float], avoid_tags: List[str]) -> Dict[str, object]:
+def _critique_one_rule(cand: Dict[str, object], avoid_tags: List[str]) -> Dict[str, object]:
     factors = cand.get("factors") or {}
     snapshot = cand.get("snapshot") or {}
-    score = _rule_score(factors, factor_bias)
+    score = _rule_score(factors)
     reason = _rule_reject_reason(factors, snapshot)
-    # feedback avoid_tags：候选理由命中即直接降级
+    # 命中的历史教训只做标注，不改分数也不强制拒绝（见模块开头）
     blob = str(cand.get("reason", "")) + " " + " ".join(cand.get("source_reasons", []))
-    for tag in avoid_tags:
-        if tag and tag in blob:
-            reason = reason or f"命中历史优汰标签「{tag}」"
-            score = min(score, KEEP_THRESHOLD - 0.5)
+    history_tags = [tag for tag in avoid_tags if tag and tag in blob]
     keep = score >= KEEP_THRESHOLD and reason is None
     return {
         "symbol": cand["symbol"],
@@ -61,6 +68,7 @@ def _critique_one_rule(cand: Dict[str, object], factor_bias: Dict[str, float], a
         "reject_reason": None if keep else (reason or "综合评分不足"),
         "sources": cand.get("sources", []),
         "factors": factors,
+        "history_tags": history_tags,
         "llm_comment": "",
     }
 
@@ -99,14 +107,12 @@ def _critique_batch_llm(cands: List[Dict[str, object]], avoid_tags: List[str]) -
 
 def run_critic(
     candidates: List[Dict[str, object]],
-    factor_bias: Optional[Dict[str, float]] = None,
     avoid_tags: Optional[List[str]] = None,
 ) -> Dict[str, object]:
     """对去重候选打分。candidates 每项需含 symbol/name/sources/factors/snapshot/reason。
 
     返回 {stage, llm_used, kept:[...], rejected:[...]}，按 score 降序。
     """
-    factor_bias = factor_bias or {}
     avoid_tags = avoid_tags or []
     llm_scores = _critique_batch_llm(candidates, avoid_tags) if (candidates and llm.available()) else None
 
@@ -127,7 +133,7 @@ def run_critic(
                 "llm_comment": ls["reason"],
             })
         else:
-            scored.append(_critique_one_rule(cand, factor_bias, avoid_tags))
+            scored.append(_critique_one_rule(cand, avoid_tags))
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     return {

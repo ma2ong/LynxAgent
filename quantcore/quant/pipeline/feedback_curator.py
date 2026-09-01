@@ -1,7 +1,11 @@
 """feedback_curator：流水线第一步。
 
 职责：读取历史反向优汰沉淀下来的"因子调整规则"（由 t5_feedback 写入的一个 JSON），
-转成本轮选股/打分要用的偏好（factor_bias）与提示语，回喂给后续 stage。
+转成本轮可用的**提示语**回喂给后续 stage。
+
+2026-08-31 起不再输出 factor_bias：那是一条让未经检验的 LLM 结论直接改因子权重的
+后门，绕过了 rule_audit 的七道闸。历史教训现在只以文字形式进 LLM 提示词和界面标注，
+权重要动就走 experiments/weight_ab.py。存储里遗留的 weight 字段保留但不再生效。
 
 存储：runtime/pipeline_runs/feedback_rules.json —— 一个简单 JSON，结构：
     {"updated_at": "...", "rules": [{"factor": "rsi", "direction": "down",
@@ -49,19 +53,13 @@ def run_feedback_curator() -> Dict[str, object]:
     """流水线 stage：把历史规则整理成本轮可用的偏好。
 
     输出：
-      - factor_bias: {factor: multiplier}  critic 打分时对该因子分数的乘数（<1 降权 / >1 加权）
-      - avoid_tags: [str]  命中这些拒绝标签的候选直接降级
+      - avoid_tags: [str]  历史上吃过亏的信号，进 LLM 提示词 + 命中时在候选上做标注
       - notes: [str]  人类可读的本轮选股指导
+    以上两项都不改任何分数，见模块开头。
     """
     raw = load_feedback_rules()
-    factor_bias: Dict[str, float] = {}
     notes: List[str] = []
     for rule in raw.get("rules", []):
-        factor = str(rule.get("factor") or "").strip()
-        if not factor:
-            continue
-        weight = float(rule.get("weight") or 1.0)
-        factor_bias[factor] = round(weight, 3)
         if rule.get("note"):
             notes.append(str(rule["note"]))
 
@@ -72,7 +70,6 @@ def run_feedback_curator() -> Dict[str, object]:
     return {
         "stage": "feedback_curator",
         "source_updated_at": raw.get("updated_at"),
-        "factor_bias": factor_bias,
         "avoid_tags": avoid_tags,
         "notes": notes,
     }

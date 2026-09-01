@@ -190,7 +190,7 @@ def run_pipeline(
     }
 
     # 5) critic 打分 + 拒绝
-    critic_out = run_critic(candidates, feedback.get("factor_bias"), feedback.get("avoid_tags"))
+    critic_out = run_critic(candidates, feedback.get("avoid_tags"))
     # 给 kept 标注 pick_date，供后续 T+5 复盘
     for item in critic_out["kept"]:
         item["pick_date"] = today

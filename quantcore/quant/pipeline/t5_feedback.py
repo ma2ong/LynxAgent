@@ -2,7 +2,11 @@
 
 读历史某轮 picks（kept），取每只 T+5（自选出日起 5 个交易日后）涨跌幅，
 投喂 LLM 分析"之前选的为什么跌"，反向总结因子优汰规则，写回 feedback 存储，
-供下一轮 feedback_curator 读取。无 LLM 时用规则：跌的多的来源/因子下调权重。
+供下一轮 feedback_curator 读取。无 LLM 时用规则：跌的多的来源/因子记一条教训。
+
+注意（2026-08-31）：规则里的 weight 字段**已不再影响任何分数**。它曾经被折成因子
+乘数直接改排序，等于让未经统计检验的结论绕过 rule_audit 的七道闸；现在教训只以文字
+形式进 LLM 提示词和界面标注。字段保留是为了不破坏历史存档，要动权重走 weight_ab。
 
 入口：run_t5_review(run_dir=None, picks=None) -> dict
 - run_dir：某次 pipeline run 目录（读其 critic.json 的 kept）。

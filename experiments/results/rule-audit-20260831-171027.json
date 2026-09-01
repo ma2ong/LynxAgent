@@ -1,0 +1,117 @@
+{
+  "since": "2020-01-02",
+  "horizon": 5,
+  "thresholds": {
+    "MIN_SAMPLES": 200,
+    "MIN_CLUSTERS": 30,
+    "MIN_STABLE_YEARS": 3,
+    "TAIL_DROP": 0.05,
+    "FRICTION_PP": 0.312,
+    "ALPHA": 0.05
+  },
+  "results": [
+    {
+      "rule": "chase_in_cold",
+      "horizon": 5,
+      "samples": 28785,
+      "clusters": 411,
+      "avg_excess": -1.254,
+      "avg_excess_by_pick": -0.636,
+      "median_excess": -2.127,
+      "win_rate": 0.4184,
+      "t": -4.86,
+      "p_raw": 1.1845212617433987e-06,
+      "net_of_friction": -1.566,
+      "weighting_conflict": false,
+      "matched_n": 28768,
+      "inc_excess": -1.051,
+      "inc_ci_lo": -1.461,
+      "inc_ci_hi": -0.64,
+      "inc_win": -0.0285,
+      "inc_win_ci_lo": -0.0412,
+      "p_inc": 5.358682571010576e-07,
+      "inc_ex_tail": 0.147,
+      "avg_excess_ex_tail": -2.483,
+      "by_year": {
+        "2020": 0.173,
+        "2021": -0.113,
+        "2022": -0.84,
+        "2023": -0.872,
+        "2024": -3.708,
+        "2025": -1.89,
+        "2026": -0.58
+      },
+      "stable_years": 1,
+      "desc": "冷环境里的追高票（近20日≥25% 且贴高点 且大盘偏冷）",
+      "p_holm_threshold": 0.05,
+      "pass_holm": true,
+      "gates": {
+        "样本量": true,
+        "超额为正": false,
+        "对照增量为正": false,
+        "去右尾仍为正": true,
+        "时间稳定": false,
+        "多重检验": true,
+        "扣摩擦为正": false
+      },
+      "passed": false,
+      "failed_gates": [
+        "超额为正",
+        "对照增量为正",
+        "时间稳定",
+        "扣摩擦为正"
+      ]
+    },
+    {
+      "rule": "chase_near_high",
+      "horizon": 5,
+      "samples": 196742,
+      "clusters": 1586,
+      "avg_excess": -0.368,
+      "avg_excess_by_pick": 0.166,
+      "median_excess": -1.275,
+      "win_rate": 0.438,
+      "t": -3.66,
+      "p_raw": 0.00025560216564102234,
+      "net_of_friction": -0.68,
+      "weighting_conflict": true,
+      "matched_n": 196710,
+      "inc_excess": -0.473,
+      "inc_ci_lo": -0.619,
+      "inc_ci_hi": -0.327,
+      "inc_win": -0.0104,
+      "inc_win_ci_lo": -0.0156,
+      "p_inc": 2.059725723313477e-10,
+      "inc_ex_tail": 0.319,
+      "avg_excess_ex_tail": -1.519,
+      "by_year": {
+        "2020": 0.556,
+        "2021": 0.206,
+        "2022": -0.597,
+        "2023": -0.982,
+        "2024": -1.808,
+        "2025": -0.166,
+        "2026": 0.676
+      },
+      "stable_years": 3,
+      "desc": "近20日≥25% 且贴着高点",
+      "p_holm_threshold": 0.025,
+      "pass_holm": true,
+      "gates": {
+        "样本量": true,
+        "超额为正": false,
+        "对照增量为正": false,
+        "去右尾仍为正": true,
+        "时间稳定": true,
+        "多重检验": true,
+        "扣摩擦为正": false
+      },
+      "passed": false,
+      "failed_gates": [
+        "超额为正",
+        "对照增量为正",
+        "扣摩擦为正"
+      ]
+    }
+  ]
+}

@@ -101,6 +101,91 @@ def _attach_stock_volume(df: pd.DataFrame) -> None:
     df["amt_ma20_q"] = amt_ma20.groupby(df["date"]).rank(pct=True)
 
 
+def _attach_shape(df: pd.DataFrame) -> None:
+    """K 线形态族：震荡度、ATR 通道方向、通道突破、天量那天的方向。
+
+    全部按公开标准定义实现，只吃截至当日的 OHLC —— 没有一列读到未来 bar。
+    它们的共同点是描述「价格走成什么形状」，而现有因子清一色是截面统计量
+    （涨了多少、量比多少、板块排第几）。信息基本不重叠，所以值得单独审一轮。
+    """
+    g = df.groupby("symbol", sort=False)
+    prev_close = g["close"].shift(1)
+    tr = pd.concat([
+        df["high"] - df["low"],
+        (df["high"] - prev_close).abs(),
+        (df["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    df["_tr"] = tr
+    bar_i = g.cumcount()
+
+    # --- Choppiness Index(14)：14 日真实波幅之和 / 同期高低区间，取 log 归一到 0~100。
+    # 低 = 单边趋势（走的路程≈位移），高 = 来回震荡（路程远但位移小）。常用分界
+    # 38.2 / 61.8。它和 ADX 问的不是同一件事：ADX 问「方向有多强」，它问「到底有
+    # 没有方向」，两者可以同时低。系统现在没有任何「震荡 vs 趋势」的判别维度。
+    tr_sum = df.groupby("symbol", sort=False)["_tr"].transform(
+        lambda s: s.rolling(14, min_periods=14).sum())
+    hh14 = g["high"].transform(lambda s: s.rolling(14, min_periods=14).max())
+    ll14 = g["low"].transform(lambda s: s.rolling(14, min_periods=14).min())
+    rng14 = (hh14 - ll14).replace(0, np.nan)
+    df["chop14"] = 100 * np.log10(tr_sum / rng14) / np.log10(14)
+
+    # --- Donchian 突破：收盘价超过**前** N 日的最高价。shift(1) 排除当日，否则
+    # 「今天创今天的新高」恒真。这是「N 日新高」的规范定义，比现有 dist_high20
+    # （用收盘价滚动最大、且含当日）严格：那个衡量「离高点多近」，这个是「破没破」。
+    for n in (20, 55):
+        prior_hi = g["high"].transform(
+            lambda s, w=n: s.rolling(w, min_periods=w).max().shift(1))
+        df[f"donchian{n}"] = df["close"] > prior_hi
+
+    # --- Supertrend(10, 3)：ATR 通道加一道只能朝有利方向收紧的棘轮，价格穿过就翻向。
+    # 定义是递归的，只能逐行推 —— 下面是全文件唯一一处显式循环，走 numpy 数组。
+    # 与现有 chandelier_long 的区别：那个只是个静态止损位，这个带方向状态和翻转时点。
+    atr10 = df.groupby("symbol", sort=False)["_tr"].transform(
+        lambda s: s.ewm(alpha=1 / 10, adjust=False).mean())
+    hl2 = (df["high"] + df["low"]) / 2
+    ub = (hl2 + 3 * atr10).to_numpy()
+    lb = (hl2 - 3 * atr10).to_numpy()
+    close = df["close"].to_numpy()
+    sym = df["symbol"].to_numpy()
+    n_rows = len(df)
+    direction = np.zeros(n_rows, dtype=np.int8)
+    fu = np.empty(n_rows)
+    fl = np.empty(n_rows)
+    for i in range(n_rows):
+        if i == 0 or sym[i] != sym[i - 1]:
+            fu[i], fl[i], direction[i] = ub[i], lb[i], 1
+            continue
+        fu[i] = ub[i] if (ub[i] < fu[i - 1] or close[i - 1] > fu[i - 1]) else fu[i - 1]
+        fl[i] = lb[i] if (lb[i] > fl[i - 1] or close[i - 1] < fl[i - 1]) else fl[i - 1]
+        if direction[i - 1] > 0:
+            direction[i] = -1 if close[i] < fl[i] else 1
+        else:
+            direction[i] = 1 if close[i] > fu[i] else -1
+    # 前 30 根是 ATR 的热身段，方向不作数（否则每只票上市头一个月都白送一个"多头"）
+    warm = (bar_i < 30).to_numpy()
+    direction[warm] = 0
+    same_sym = np.empty(n_rows, dtype=bool)
+    same_sym[0] = False
+    same_sym[1:] = sym[1:] == sym[:-1]
+    prev_dir = np.roll(direction, 1)
+    df["st_dir"] = direction
+    df["st_flip_up"] = (direction == 1) & (prev_dir == -1) & same_sym
+
+    # --- 天量那天的方向：近 60 日成交额最高的那根 K 线，是阴线还是阳线。
+    # 不用逐行找 argmax：把阳线/阴线的成交额分成两路各取滚动最大，谁大谁就是那根
+    # 天量。天量收阴 = 有人在最活跃的一天派发筹码，这是筹码结构的判据，现有
+    # 因子里没有任何一个看得到它（vol_pct60 只看量的大小，不看那天的方向）。
+    up_amt = df["amount"].where(df["close"] >= df["open"], -1.0)
+    dn_amt = df["amount"].where(df["close"] < df["open"], -1.0)
+    roll_max = lambda s: s.rolling(60, min_periods=40).max()
+    up_max = up_amt.groupby(df["symbol"], sort=False).transform(roll_max)
+    dn_max = dn_amt.groupby(df["symbol"], sort=False).transform(roll_max)
+    df["maxvol60_valid"] = up_max.notna()
+    df["maxvol60_down"] = df["maxvol60_valid"] & (dn_max > up_max)
+
+    df.drop(columns=["_tr"], inplace=True)
+
+
 def _attach_sector(df: pd.DataFrame) -> None:
     """挂上板块归属，以及板块层面的强弱、个股在板块内的位置。
 
@@ -152,6 +237,32 @@ def _attach_sector(df: pd.DataFrame) -> None:
     grp = df[ok].groupby(["date", "industry"], sort=False)
     df.loc[ok, "in_sec_q5"] = grp["prior_ret5"].rank(pct=True)
     df.loc[ok, "in_sec_q20"] = grp["prior_ret20"].rank(pct=True)
+
+
+def _attach_regime(df: pd.DataFrame) -> None:
+    """挂上每个交易日的大盘环境标签（偏暖 / 中性 / 偏冷）。
+
+    口径直接复用生产的 regime 模块，不在这里另写一套 —— 线上横幅、回放分层、
+    本审计三处必须同源，否则「冷环境该不该出手」的结论跟用户屏幕上看到的标签对不上。
+
+    环境是**择时**维度：同一天全市场共享一个标签，所以它不能当选股规则塞进匹配对照
+    （那样每天所有票同时命中，增量恒为 0）。它的正确用法是**分层**：把同一条规则
+    分别在冷/中/暖三个子样本里各审一遍，问「这条规则的 alpha 在什么环境下还在」。
+    """
+    from quantcore.quant.regime import blend_temp, classify
+    day = df.groupby("date", sort=False).agg(
+        med=("ret1", "median"), up=("ret1", lambda s: float((s > 0).mean())))
+    day = day.dropna().sort_index()
+    dates = list(day.index)
+    med = day["med"].to_numpy()
+    up = day["up"].to_numpy()
+    temp = {}
+    for i, d in enumerate(dates):
+        lo = max(0, i - 4)
+        hist = [(med[j], up[j]) for j in range(i, lo - 1, -1)]   # 最新一日在前
+        temp[d] = blend_temp(hist)
+    df["mkt_temp"] = df["date"].map(temp)
+    df["regime"] = df["mkt_temp"].map(lambda t: classify(t) if t == t else None)
 
 
 def _market_env(df: pd.DataFrame) -> pd.DataFrame:
@@ -217,6 +328,8 @@ def build_panel(db: str, since: str, horizon: int, entry: str = "close") -> pd.D
 
     _attach_stock_volume(df)
     _attach_sector(df)
+    _attach_shape(df)
+    _attach_regime(df)
 
     df = df[df["fwd_excess"].notna()]
     df = df[(df["amount"] >= MIN_AMOUNT) & (df["close"] >= MIN_PRICE)]
@@ -454,10 +567,10 @@ RULES = {
     # ---- 板块族（2026-08-27）。这是 Lucas 那套的可提取内核：先定主线板块，
     # 再在板块里挑位置。系统现在完全没有板块维度，这批是空白检验。
     "sector_hot": ("所属板块20日强度前20%", lambda d: d["sec_mom20_q"] >= 0.8),
-    # 生产的 industry_heat 因子用的是板块近 5 日涨幅分位。这条是它的等价规则，
-    # 与 sector_hot 头对头，回答「窗口该用 5 日还是 20 日」。
-    "sector_hot5": ("所属板块5日强度前20%（= 生产现行 industry_heat 的口径）",
-                    lambda d: d["sec_mom5_q"] >= 0.8),
+    # 5 日窗口。这条曾标注为「生产现行口径」，2026-08-28 重配系数后已经不是了
+    # （现行是 mom20 主导的 sector_stage_new），描述留着会误导下一次决策。
+    # 2026-08-31 六条同批复核：5 日 +0.11 < 20 日 +0.14 < 现行 +0.17，窗口不用改。
+    "sector_hot5": ("所属板块5日强度前20%", lambda d: d["sec_mom5_q"] >= 0.8),
     # 生产现行 industry_heat 的两个成分，各自单独审：量能扩张（系数40，主导项）
     # 和复现出来的完整阶段分。与 sector_hot(mom20) 头对头决定要不要换口径。
     "sector_volexp": ("板块量能扩张前20%（生产阶段分的主导项）",
@@ -488,6 +601,48 @@ RULES = {
     "dryup_allen_nosec": ("同上但不要求热门板块（拆开看板块那一条的贡献）",
                           lambda d: (d["vol_pct60"] <= DRYUP_PCT) & (d["prior_ret60"] >= 20)
                                     & (d["dist_ma20"] >= 0) & (d["amt_ma20_q"] >= 0.7)),
+
+    # ---- 形态族（2026-08-31）。**八条全否，别再重跑。** 结论记在下面，留着是为了
+    # 后来的人不用再试一遍，不是因为它们还在候选里。
+    # 系统现有因子全是截面统计量，没有一个描述 K 线形状，所以这批值得审一轮 —— 审完了，
+    # 形态维度在 T+5 横截面上没有可用的独立 alpha：
+    #   · Donchian 突破是又一个「隔夜段」案例：close 口径增量 −0.09，产品口径 −0.47。
+    #     突破日的收益整个长在收盘→次日开盘的跳空里，追开盘是明确亏钱的。
+    #   · Choppiness 双向都是负增量（趋势态 −0.04 / 震荡态 −0.09），不是方向选反，
+    #     是这个维度本身没区分力。KAMA 的效率比与它数学同源，不用再测。
+    #   · 天量方向符号一致但幅度不值钱（收阳 +0.02 / 收阴 −0.01），扣不动 0.312 摩擦。
+    #   · Supertrend 存量方向和翻转时点都为负，翻转那条去右尾 −0.28。
+    #   · chop_trend 当闸门装在 smart 池上出过 +1.74pp/t=2.07，看着像发现 —— 装到
+    #     pattern 池只剩 +0.11pp/t=0.23，不复现，且留存率 22%→49%（两个池里咬的
+    #     根本不是同一批票）。这是「t≈2 是多重检验产物」的又一个标本。
+    # 这批四个概念各带一条对照，一次提交一起过 Holm：只报好看的那条等于自己绕过校正。
+    #   震荡度  chop_trend / chop_range   —— 反向对照，两边都为正就说明是噪音
+    #   通道方向 supertrend_up / _flip     —— 存量状态 vs 翻转时点，分开问「哪一段有用」
+    #   通道突破 donchian20 / 55           —— 剂量对照，只有一档灵多半是噪音
+    #   天量方向 maxvol_down / _up         —— 派发判据的两侧，预期一负一正
+    "chop_trend": ("处在单边趋势态（Choppiness ≤ 38.2）", lambda d: d["chop14"] <= 38.2),
+    "chop_range": ("处在震荡态（Choppiness ≥ 61.8）", lambda d: d["chop14"] >= 61.8),
+    "supertrend_up": ("Supertrend(10,3) 方向为多", lambda d: d["st_dir"] == 1),
+    "supertrend_flip": ("Supertrend 当日刚翻多（新信号）", lambda d: d["st_flip_up"]),
+    "donchian20": ("突破前 20 日最高价（20 日新高）", lambda d: d["donchian20"]),
+    "donchian55": ("突破前 55 日最高价（55 日新高）", lambda d: d["donchian55"]),
+    "maxvol_down": ("近 60 日天量那天收阴（疑似派发）", lambda d: d["maxvol60_down"]),
+    "maxvol_up": ("近 60 日天量那天收阳（派发判据的另一侧）",
+                  lambda d: d["maxvol60_valid"] & ~d["maxvol60_down"]),
+
+    # ---- 环境族（2026-08-31）。这些是**择时**谓词：同一天全市场共享一个值，
+    # 所以它们的「对照增量」没有意义（每天所有票同时命中，增量恒为 0），单独 --rule
+    # 审它们是误用。正确用法只有两种：
+    #   1) --by-regime 分层，问「某条选股规则的 alpha 在什么环境下还在」；
+    #   2) --replay <池> --variant "base,-regime_cold"，问「这个闸门装上去池子会不会变好」，
+    #      此时该看的是「较基线」那一列的同日配对差，不是对照增量。
+    "regime_cold": ("选出日大盘偏冷", lambda d: d["regime"] == "偏冷"),
+    "regime_warm": ("选出日大盘偏暖", lambda d: d["regime"] == "偏暖"),
+    # 大样本里唯一呈单调剂量反应的组合：追高型选股的增量随环境转冷单调恶化
+    # （偏暖 +0.01 / 中性 −0.34 / 偏冷 −1.05）。单调是它值得当闸门试的理由。
+    "chase_in_cold": ("冷环境里的追高票（近20日≥25% 且贴高点 且大盘偏冷）",
+                      lambda d: (d["prior_ret20"] >= 25) & (d["dist_high20"] >= -3)
+                                & (d["regime"] == "偏冷")),
 }
 
 
@@ -601,6 +756,44 @@ def report_market(panel: pd.DataFrame, horizon: int) -> None:
               f"{sel['fwd'].mean() - overall:>+9.2f}%{t:>9.2f}")
 
 
+def report_regime(panel: pd.DataFrame, rule_names: list[str], horizon: int) -> None:
+    """把每条规则按大盘环境分层再审一遍。
+
+    为什么绝对收益必须和超额一起看
+    ------------------------------
+    本文件其余部分一律用「相对全市场中位的超额」，因为审的是选股能力。但产品的用户
+    买的是股票，不是价差 —— 冷环境里「跑赢中位 +2pp」和「亏 5%」完全可以同时成立。
+    「今天该不该出手」这个问题只能用绝对收益回答，所以这张表两个都给。
+    """
+    print(f"\n按大盘环境分层（口径同生产 regime 模块）· T+{horizon}")
+    base = panel.groupby("regime")["fwd_ret"].agg(["mean", "size"])
+    print("  全市场基准：" + " | ".join(
+        f"{r} {base.loc[r, 'mean']:+.2f}%（{panel[panel['regime'] == r]['date'].nunique()} 天）"
+        for r in ("偏暖", "中性", "偏冷") if r in base.index))
+    print(f"  {'规则':22s}{'环境':>6s}{'样本':>8s}{'天数':>6s}{'绝对':>9s}{'超额':>8s}"
+          f"{'对照增量':>10s}{'CI下沿':>9s}")
+    for name in rule_names:
+        desc, fn = RULES[name]
+        mask = fn(panel)
+        for reg in ("偏暖", "中性", "偏冷"):
+            sub = panel[panel["regime"] == reg]
+            if sub.empty:
+                continue
+            m = mask.reindex(sub.index).fillna(False)
+            sel = sub[m]
+            if len(sel) < 50:
+                continue
+            inc, _base_v, clusters = matched_increment(sub, m)
+            if inc:
+                mean_inc, t_inc, _p, _n = _cluster_stats(inc, clusters)
+                lo, _hi = _ci95(inc, clusters)
+            else:
+                mean_inc = t_inc = lo = float("nan")
+            print(f"  {name:22s}{reg:>6s}{len(sel):>8d}{sel['date'].nunique():>6d}"
+                  f"{sel['fwd_ret'].mean():>+8.2f}%{sel['fwd_excess'].mean():>+8.2f}"
+                  f"{mean_inc:>10.2f}{lo:>9.2f}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=DEFAULT_DB)
@@ -615,6 +808,9 @@ def main() -> None:
     ap.add_argument("--entry", choices=("close", "open"), default="close",
                     help="入场口径：close=当日收盘买入（含用户吃不到的隔夜段）；"
                          "open=次日开盘买入（产品口径，新规则必须用它复核）")
+    ap.add_argument("--by-regime", action="store_true",
+                    help="把每条 --rule 按大盘环境（偏暖/中性/偏冷）分层再审一遍，"
+                         "同时给绝对收益——回答「这条规则在什么环境下还成立」")
     ap.add_argument("--market", action="store_true",
                     help="额外输出全市场量能环境的择时统计（不参与规则审计）")
     args = ap.parse_args()
@@ -636,6 +832,8 @@ def main() -> None:
 
     if args.market:
         report_market(panel, args.horizon)
+    if args.by_regime and args.rule:
+        report_regime(panel, args.rule, args.horizon)
 
     results = []
     for name in args.rule:
@@ -676,6 +874,10 @@ def main() -> None:
     out_path = os.path.join(RESULTS, f"rule-audit-{stamp}.json")
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump({"since": args.since, "horizon": args.horizon,
+                   # 入场口径必须落盘：同一条规则 close 与 open 的结论可以完全相反
+                   # （donchian20 是 −0.09 对 −0.47），不记就等于这份结果无法复述。
+                   "entry": args.entry,
+                   "generated_at": datetime.now().isoformat(timespec="seconds"),
                    "thresholds": {"MIN_SAMPLES": MIN_SAMPLES, "MIN_CLUSTERS": MIN_CLUSTERS,
                                   "MIN_STABLE_YEARS": MIN_STABLE_YEARS, "TAIL_DROP": TAIL_DROP,
                                   "FRICTION_PP": FRICTION_PP, "ALPHA": ALPHA},

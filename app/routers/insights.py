@@ -12,6 +12,8 @@ app/core/board_refresh 后台保温，端点命中热缓存即返回。不要把
 from __future__ import annotations
 
 import asyncio
+import logging
+from functools import partial
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -45,6 +47,8 @@ from app.core.news_events import (
     ensure_recent_lite_news,
     refresh_lite_news_events,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["insights"])
 
@@ -802,31 +806,44 @@ def _prev_session_amount_yi(industry: str = "") -> float:
     return round(total / 1e8, 2)
 
 
-# 全市场重聚合（板块轮动 / 市场宽度）的并发闸：同一个缓存键同时只允许一个计算在跑。
-# 没有它，用户请求和 board_refresh 预热会各自启动一次十几秒的全市场扫描，一起挤占
-# lite_data_executor 的槽位，把彼此的排队时间推到超时——2026-09-01 上线当天 /breadth
-# 就是这么返回 500 的（计算本身 17 秒，排队后超过 60 秒上限）。
+# 全市场重聚合（板块轮动 / 市场宽度）的取数闸。
+#
+# 规矩只有一条：**请求线程永远不等计算**。这两个聚合要扫全市场十几秒，盘中执行器
+# 繁忙时排队还会翻几倍——2026-09-01 上线当天 /breadth 就是这么先 500（撞 60 秒上限）
+# 再变成 40 秒不返回的。缓存冷的时候在后台起一个计算并立刻如实告知「正在算」，
+# 前端 20 秒后自取；同一个键同时只允许一个计算在跑，用户请求和 board_refresh 预热
+# 因此不会各扫一遍全市场、互相把对方的排队时间推穿。
 _HEAVY_LOCKS: dict[str, asyncio.Lock] = {}
 
-# 计算本身约 10~17 秒，但盘中执行器繁忙时排队时间会翻几倍，所以上限给得宽。
-# 真正保证响应速度的是缓存 + 后台预热，这个上限只是兜底。
+# 计算本身约 10~17 秒，盘中排队会翻几倍。这个上限只是兜底防止任务永远挂着，
+# 真正保证响应速度的是缓存 + 后台预热。
 _HEAVY_TIMEOUT = 240.0
 
 
-async def _cached_heavy(cache_key: str, ttl: int, fn, *args):
-    """命中缓存直接返；未命中则独占计算。已有人在算就返回 None，让调用方如实告知。"""
+async def _heavy_fill(cache_key: str, ttl: int, lock: asyncio.Lock, build, shape) -> None:
+    """后台算一次并写缓存。失败只记日志——这两块挂了不该影响任何其他板块。"""
+    async with lock:
+        if _cache_get(cache_key, ttl):
+            return
+        try:
+            raw = await _run_data_task(build, timeout=_HEAVY_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001  后台任务，异常没有调用方可抛
+            logger.warning("heavy aggregate %s failed: %s", cache_key, exc)
+            return
+        payload = shape(raw or {})
+        if payload:
+            _cache_set(cache_key, payload)
+
+
+async def _heavy_cached(cache_key: str, ttl: int, build, shape):
+    """命中缓存就返回结果；否则触发后台计算并返回 None，由调用方如实告知用户。"""
     cached = _cache_get(cache_key, ttl)
     if cached:
         return cached
     lock = _HEAVY_LOCKS.setdefault(cache_key, asyncio.Lock())
-    if lock.locked():
-        return None
-    async with lock:
-        # 拿到锁后再看一次：等锁期间别人可能已经算完并写进缓存了
-        cached = _cache_get(cache_key, ttl)
-        if cached:
-            return cached
-        return await _run_data_task(fn, *args, timeout=_HEAVY_TIMEOUT)
+    if not lock.locked():
+        asyncio.create_task(_heavy_fill(cache_key, ttl, lock, build, shape))
+    return None
 
 
 @router.get("/api/lite/breadth")
@@ -848,22 +865,21 @@ async def lite_breadth():
         latest_bar = store.latest_real_bar_date() or ""
     except Exception:  # noqa: BLE001  取不到只影响新鲜度判定，不该阻断
         latest_bar = ""
-    cache_key = f"breadth:{latest_bar}"
-    try:
-        data = await _cached_heavy(cache_key, 43200, build_breadth, store)
-    except (asyncio.TimeoutError, TimeoutError):
-        data = None
+    def shape(raw: dict) -> dict:
+        # 「样本不足」也要落缓存并且**不带** computing：它重试多少遍都一样，
+        # 前端不该为此空转。只有正在算的那一档才值得自动重来。
+        if not raw:
+            return {"series": [], "ready": False,
+                    "message": "日线样本不足，宽度曲线暂不可用"}
+        raw["ready"] = True
+        raw["freshness"] = mark(str(raw.get("as_of") or ""), latest_bar=latest_bar)
+        return raw
+
+    data = await _heavy_cached(f"breadth:{latest_bar}", 43200,
+                               partial(build_breadth, store), shape)
     if data is None:
-        # computing 与「样本不足」分开标：前者会自己好，值得自动重试一次；
-        # 后者重试多少遍都一样，前端不该空转。
         return {"series": [], "ready": False, "computing": True,
                 "message": "正在计算全市场宽度（约 20 秒）…"}
-    if not data:
-        return {"series": [], "ready": False,
-                "message": "日线样本不足，宽度曲线暂不可用"}
-    data["ready"] = True
-    data["freshness"] = mark(str(data.get("as_of") or ""), latest_bar=latest_bar)
-    _cache_set(cache_key, data)
     return data
 
 
@@ -888,21 +904,20 @@ async def lite_sector_rotation():
         as_of = store.latest_real_bar_date() or ""
     except Exception:  # noqa: BLE001  取不到日期只影响缓存分代，不该阻断
         as_of = ""
-    cache_key = f"sector-rotation:{as_of}"
-    try:
-        data = await _cached_heavy(cache_key, 43200, build_rotation, store)
-    except (asyncio.TimeoutError, TimeoutError):
-        data = None
+    def shape(raw: dict) -> dict:
+        # 日线不足（新库/同步中）时如实说明，不要返回空图让前端画一张空白坐标系
+        if not raw:
+            return {"as_of": as_of, "items": [], "ready": False,
+                    "message": "日线样本不足 115 个交易日，轮动图暂不可用"}
+        raw["ready"] = True
+        raw["freshness"] = mark(str(raw.get("as_of") or ""), latest_bar=as_of)
+        return raw
+
+    data = await _heavy_cached(f"sector-rotation:{as_of}", 43200,
+                               partial(build_rotation, store), shape)
     if data is None:
         return {"as_of": as_of, "items": [], "ready": False, "computing": True,
                 "message": "正在计算板块轮动（约 15 秒）…"}
-    if not data:
-        # 日线不足（新库/同步中）时如实说明，不要返回空图让前端画一张空白坐标系
-        return {"as_of": as_of, "items": [], "ready": False,
-                "message": "日线样本不足 115 个交易日，轮动图暂不可用"}
-    data["ready"] = True
-    data["freshness"] = mark(str(data.get("as_of") or ""), latest_bar=as_of)
-    _cache_set(cache_key, data)
     return data
 
 

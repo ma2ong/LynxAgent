@@ -53,54 +53,102 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["insights"])
 
 
+def _rotation_cache_args():
+    """轮动数据的缓存键 + 构建器 + 定型函数。
+
+    赛道浏览和轮动图用的是同一份数据，必须共享同一个缓存键 —— 否则同一次约 20 秒的
+    全市场扫描会被算两遍，而这两个端点还都由 board_refresh 预热，等于每轮多烧一次。
+    """
+    from quantcore.quant.freshness import mark
+    from quantcore.quant.local_store import get_local_store
+    from quantcore.quant.rotation import build_rotation
+
+    store = get_local_store()
+    try:
+        as_of = store.latest_real_bar_date() or ""
+    except Exception:  # noqa: BLE001  取不到日期只影响缓存分代，不该阻断
+        as_of = ""
+
+    def shape(raw: dict) -> dict:
+        # 日线不足（新库/同步中）时如实说明，不要返回空图让前端画一张空白坐标系
+        if not raw:
+            return {"as_of": as_of, "items": [], "ready": False,
+                    "message": "日线样本不足 115 个交易日，轮动图暂不可用"}
+        raw["ready"] = True
+        raw["freshness"] = mark(str(raw.get("as_of") or ""), latest_bar=as_of)
+        return raw
+
+    return f"sector-rotation:{as_of}", 43200, partial(build_rotation, store), shape
+
+
 @router.get("/api/lite/sector-leaders")
 async def lite_sector_leaders():
-    """个股深研「按赛道浏览龙头股」：策划赛道 + 龙头实时行情，点击即进深研报告。"""
-    from quantcore.quant.sector_leaders import SECTOR_LEADERS, all_leader_codes
+    """个股深研「按赛道浏览龙头股」：热门板块 + 板块内龙头，点击即进深研报告。
 
-    cache_key = "sector-leaders:v1"
-    cached = _cache_get(cache_key, 30)
-    if cached:
-        return cached
+    2026-09-02 从人工策划改为跟着板块轮动走。原来是 12 个手写赛道 × 6 只手写龙头，
+    一共 72 只票要跟着轮动手工维护 —— 半年后它会变成一份过时的清单，而且看不出过时
+    （`sector_leaders.py` 里 603501 还写着「韦尔股份」，公司早已改名豪威集团）。
 
-    quotes = await _realtime_quotes(all_leader_codes(), allow_snapshot_fallback=True)
-    sectors = []
-    for sector in SECTOR_LEADERS:
-        items = []
-        for code, name in sector["leaders"]:
-            code = str(code).zfill(6)
-            q = quotes.get(code) or {}
-            price = q.get("price")
-            if price is None:
-                price = q.get("close")
-            pct = q.get("change_percent")
-            if pct is None:
-                pct = q.get("pct_chg")
-            items.append({
-                "code": code,
-                "name": q.get("name") or name,
-                "price": round(float(price), 2) if price is not None else None,
-                "pct_chg": round(float(pct), 2) if pct is not None else None,
-            })
-        sectors.append({
-            "key": sector["key"],
-            "name": sector["name"],
-            "en": sector["en"],
-            "subtitle": sector["subtitle"],
-            "items": items,
-        })
+    排序只用 20 日板块涨幅：那是审计里唯一过全部七闸的信号。**成交额只做准入不进排序** ——
+    板块量能扩张实测无 alpha（rule_audit 的 sector_volexp），拿它排序等于把一个证伪过
+    的因子塞回来。
 
-    payload = {
-        "success": True,
-        "data": {
-            "sectors": sectors,
-            "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
-            "note": "赛道与龙头为人工策划，实时行情每 30 秒刷新；点击个股进入深研报告。",
-        },
-        "message": "ok",
-    }
-    _cache_set(cache_key, payload)
-    return payload
+    两道准入：板块 20 日涨幅 ≥ MIN_MOM20，且板块人气（近 5 日成交额分位）过半 ——
+    后者滤掉无人问津的板块，那种票涨得再好也买不进。不达标的不丢弃，收进 others
+    交给前端折叠：弱市可能一个都不达标，硬隐藏会让整页空掉。
+    """
+    from quantcore.quant.rotation import SECTOR_MIN_AMOUNT_PCT
+
+    MIN_MOM20 = 5.0
+    rot = await _heavy_cached(*_rotation_cache_args())
+    if rot is None or not rot.get("items"):
+        return {"success": True, "message": "ok", "data": {
+            "sectors": [], "others": [], "computing": rot is None,
+            "note": "板块数据正在计算（约 15 秒），稍后刷新即可。" if rot is None
+                    else "日线样本不足，赛道浏览暂不可用。"}}
+
+    def shape(sec: dict) -> dict:
+        return {
+            "key": sec["industry"], "name": sec["industry"], "en": "",
+            # 副标题不重复 20 日涨幅 —— 前端已经把它做成徽标了，写两遍是噪音
+            "subtitle": (f"全市场第 {round(sec['mom20_pct'] * 100)} 分位 · "
+                         f"近 5 日成交 {sec['amount_5d']:.0f} 亿"),
+            "mom20": sec["mom20"], "mom20_pct": sec["mom20_pct"],
+            "amount_5d": sec["amount_5d"], "amount_pct": sec["amount_pct"],
+            "quadrant": sec.get("quadrant"),
+            "items": list(sec.get("leaders") or []),
+        }
+
+    hot, others = [], []
+    for sec in rot["items"]:
+        if not sec.get("leaders"):
+            continue                   # 板块里一只票都过不了流动性下限，展示它没有意义
+        (hot if (sec["mom20"] >= MIN_MOM20 and sec["amount_pct"] >= SECTOR_MIN_AMOUNT_PCT)
+         else others).append(shape(sec))
+
+    codes = [it["code"] for sec in hot + others for it in sec["items"]]
+    quotes = await _realtime_quotes(codes, allow_snapshot_fallback=True)
+    for sec in hot + others:
+        for it in sec["items"]:
+            q = quotes.get(it["code"]) or {}
+            price = q.get("price") if q.get("price") is not None else q.get("close")
+            pct = q.get("change_percent") if q.get("change_percent") is not None else q.get("pct_chg")
+            it["name"] = q.get("name") or it["name"]
+            it["price"] = round(float(price), 2) if price is not None else None
+            it["pct_chg"] = round(float(pct), 2) if pct is not None else None
+
+    return {"success": True, "message": "ok", "data": {
+        "sectors": hot,
+        "others": others[:20],
+        "as_of": rot.get("as_of"),
+        "min_mom20": MIN_MOM20,
+        "min_amount_pct": SECTOR_MIN_AMOUNT_PCT,
+        "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+        "note": (f"板块按近 20 日涨幅排序，只列涨幅≥{MIN_MOM20:.0f}%、"
+                 f"且成交额居全市场板块前 {round((1 - SECTOR_MIN_AMOUNT_PCT) * 100)}% 的；"
+                 "龙头为板块内 20 日涨幅最高、且日均成交额≥1 亿的个股。"
+                 "成交额只做准入不参与排序。"),
+    }}
 
 
 def _auction_freshness(snap_date: str, snap_time: str, today: str, now_cn: Any) -> dict[str, Any]:
@@ -969,26 +1017,9 @@ async def lite_sector_rotation():
     横截面标准化），**不能**改成用户请求时同步现算 —— 这是既有的「端点别同步现算」
     约束，涨停热点当年就是栽在这上面。
     """
-    from quantcore.quant.freshness import mark
-    from quantcore.quant.local_store import get_local_store
-    from quantcore.quant.rotation import build_rotation
-
-    store = get_local_store()
-    try:
-        as_of = store.latest_real_bar_date() or ""
-    except Exception:  # noqa: BLE001  取不到日期只影响缓存分代，不该阻断
-        as_of = ""
-    def shape(raw: dict) -> dict:
-        # 日线不足（新库/同步中）时如实说明，不要返回空图让前端画一张空白坐标系
-        if not raw:
-            return {"as_of": as_of, "items": [], "ready": False,
-                    "message": "日线样本不足 115 个交易日，轮动图暂不可用"}
-        raw["ready"] = True
-        raw["freshness"] = mark(str(raw.get("as_of") or ""), latest_bar=as_of)
-        return raw
-
-    data = await _heavy_cached(f"sector-rotation:{as_of}", 43200,
-                               partial(build_rotation, store), shape)
+    key, ttl, build, shape = _rotation_cache_args()
+    as_of = key.split(":", 1)[1]
+    data = await _heavy_cached(key, ttl, build, shape)
     if data is None:
         return {"as_of": as_of, "items": [], "ready": False, "computing": True,
                 "message": "正在计算板块轮动（约 15 秒）…"}

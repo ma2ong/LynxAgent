@@ -43,6 +43,18 @@ MOM_WINDOW = 20
 TAIL_POINTS = 8
 TAIL_STEP = 5
 
+# —— 龙头股与「热门板块」准入（供个股深研的赛道浏览用）——
+# 每个板块挂几只龙头
+LEADERS_PER_SECTOR = 6
+# 个股流动性下限：日均成交额低于这个数的不当龙头。没有这条会推出来一堆看着涨得凶、
+# 实际几百万成交、根本买不进的小票。
+LEADER_MIN_AMOUNT = 1e8
+# 板块人气下限：板块总成交额在当日全部板块里的分位。用分位不用绝对金额，
+# 市场整体放量缩量时门槛自动跟着走，不用隔段时间回来改数字。
+# **只做准入，不进排序**——板块量能扩张已实测无 alpha（见 rule_audit 的 sector_volexp），
+# 拿成交额去排序等于把一个证伪过的因子塞回来。排序始终只用 20 日涨幅。
+SECTOR_MIN_AMOUNT_PCT = 0.5
+
 
 def _quadrant(rs: float, mom: float) -> str:
     if rs >= 100 and mom >= 100:
@@ -93,7 +105,7 @@ def build_rotation(store: Any, lookback: int = 125) -> Dict[str, object]:
         return {}
     since = min(dates)
     df = pd.read_sql_query(
-        "SELECT date, symbol, close FROM daily_kline WHERE date>=? AND amount>0",
+        "SELECT date, symbol, close, amount FROM daily_kline WHERE date>=? AND amount>0",
         conn, params=(since,))
     if df.empty:
         return {}
@@ -147,12 +159,48 @@ def build_rotation(store: Any, lookback: int = 125) -> Dict[str, object]:
     mom20_pct = mom20.rank(axis=1, pct=True)
 
     idx = list(rs_ratio.index)
+    idx_20 = idx[-1 - MOM_WINDOW] if len(idx) > MOM_WINDOW else None
     tail_idx = [idx[-1 - i * TAIL_STEP] for i in range(TAIL_POINTS)
                 if len(idx) > 1 + i * TAIL_STEP][::-1]
     last = idx[-1]
 
     # 成分数按板块取一次，别在下面的循环里对整张 sec 反复做布尔筛选
     members = sec[sec["date"] == last].set_index("industry")["n"].to_dict()
+
+    # —— 板块人气：近 5 日总成交额，以及它在当日全部板块里的分位 ——
+    sec_amt = df.groupby(["date", "industry"], sort=False)["amount"].sum().rename("amt").reset_index()
+    sec_amt = sec_amt.sort_values(["industry", "date"])
+    sec_amt["amt5"] = sec_amt.groupby("industry", sort=False)["amt"].transform(
+        lambda x: x.rolling(5, min_periods=1).mean())
+    today_amt = sec_amt[sec_amt["date"] == last].set_index("industry")
+    amt_pct = today_amt["amt5"].rank(pct=True)
+
+    # —— 龙头股：板块内按 20 日涨幅排序，先过流动性下限 ——
+    # 「龙头」取的是**正在带动这个板块的票**，不是市值最大的那只。所以按 20 日涨幅排，
+    # 但必须先卡流动性：不然推出来的常是几百万成交、买不进也卖不掉的小票。
+    last_rows = df[df["date"] == last].set_index("symbol")
+    close_20 = df[df["date"] == idx_20].set_index("symbol")["close"] if idx_20 else None
+    amt20 = df.groupby("symbol", sort=False)["amount"].mean()
+    names = {}
+    try:
+        names = {str(m.get("symbol")): str(m.get("name") or "") for m in store.load_meta()}
+    except Exception:  # noqa: BLE001  名字只是展示项，取不到就用代码
+        names = {}
+
+    leaders_by_sector: Dict[str, list] = {}
+    if close_20 is not None:
+        lead = last_rows.join(close_20.rename("c20"), how="inner")
+        lead = lead.join(amt20.rename("amt20"), how="left")
+        lead = lead[(lead["c20"] > 0) & (lead["amt20"] >= LEADER_MIN_AMOUNT)]
+        lead["mom20"] = (lead["close"] / lead["c20"] - 1) * 100
+        for name, grp in lead.groupby("industry", sort=False):
+            top = grp.nlargest(LEADERS_PER_SECTOR, "mom20")
+            leaders_by_sector[str(name)] = [
+                {"code": str(sym), "name": names.get(str(sym)) or str(sym),
+                 "mom20": round(float(r["mom20"]), 2),
+                 "amount": round(float(r["amt20"]) / 1e8, 2)}
+                for sym, r in top.iterrows()
+            ]
 
     items: List[Dict[str, object]] = []
     for name in wide.columns:
@@ -169,6 +217,10 @@ def build_rotation(store: Any, lookback: int = 125) -> Dict[str, object]:
             "mom20_pct": round(float(mom20_pct.at[last, name]), 3),
             "sector_hot": bool(mom20_pct.at[last, name] >= 0.8),
             "members": int(members.get(name, 0)),
+            # 人气：近 5 日总成交额（亿）与它在当日全部板块里的分位。只做准入，不进排序。
+            "amount_5d": round(float(today_amt["amt5"].get(name, 0.0)) / 1e8, 1),
+            "amount_pct": round(float(amt_pct.get(name, 0.0)), 3),
+            "leaders": leaders_by_sector.get(str(name), []),
             "tail": [
                 {"date": str(d), "x": round(float(rs_ratio.at[d, name]), 2),
                  "y": round(float(rs_mom.at[d, name]), 2)}

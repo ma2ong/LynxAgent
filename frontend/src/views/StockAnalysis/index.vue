@@ -71,12 +71,19 @@
       </div>
 
       <div v-if="sectorsLoading && !sectors.length" class="loading-hint">正在加载赛道行情…</div>
+      <div v-else-if="sectorsComputing" class="loading-hint">板块数据正在计算（约 15 秒），稍后刷新即可。</div>
+      <p v-if="sectorsNote" class="sector-note">{{ sectorsNote }}</p>
+      <p v-if="!sectorsComputing && !sectors.length && otherSectors.length" class="sector-note warn">
+        今日没有板块同时满足「20 日涨幅≥5%」和「成交额居前」，展开下方可看其余板块。
+      </p>
 
       <div v-for="sector in sectors" :key="sector.key" class="sector-block">
         <div class="sector-head">
           <span class="sec-accent" />
           <b>{{ sector.name }}</b>
-          <em>{{ sector.en }}</em>
+          <span v-if="sector.mom20 != null" class="sec-mom" :class="sector.mom20 >= 0 ? 'up' : 'down'">
+            20日 {{ sector.mom20 > 0 ? '+' : '' }}{{ sector.mom20.toFixed(2) }}%
+          </span>
           <span class="sector-sub">{{ sector.subtitle }}</span>
           <span class="sector-count">{{ sector.items.length }} 只</span>
         </div>
@@ -98,8 +105,47 @@
                 {{ stk.pct_chg == null ? '—' : (stk.pct_chg >= 0 ? '+' : '') + stk.pct_chg.toFixed(2) + '%' }}
               </span>
             </div>
+            <!-- 当日涨跌是噪音，20 日涨幅才是它上榜的理由：一眼看出是刚启动还是已经涨完 -->
+            <div v-if="stk.mom20 != null" class="lc-mom" :class="stk.mom20 >= 0 ? 'up' : 'down'">
+              近20日 {{ stk.mom20 > 0 ? '+' : '' }}{{ stk.mom20.toFixed(1) }}%
+            </div>
           </button>
         </div>
+      </div>
+      <div v-if="otherSectors.length" class="others-fold">
+        <button type="button" class="fold-btn" @click="showOthers = !showOthers">
+          {{ showOthers ? '收起' : '展开' }}其余 {{ otherSectors.length }} 个板块（未达 20 日涨幅或成交额门槛）
+        </button>
+        <template v-if="showOthers">
+          <div v-for="sector in otherSectors" :key="sector.key" class="sector-block dim">
+            <div class="sector-head">
+              <span class="sec-accent" />
+              <b>{{ sector.name }}</b>
+              <span v-if="sector.mom20 != null" class="sec-mom" :class="sector.mom20 >= 0 ? 'up' : 'down'">
+                20日 {{ sector.mom20 > 0 ? '+' : '' }}{{ sector.mom20.toFixed(2) }}%
+              </span>
+              <span class="sector-sub">{{ sector.subtitle }}</span>
+              <span class="sector-count">{{ sector.items.length }} 只</span>
+            </div>
+            <div class="leader-grid">
+              <button v-for="stk in sector.items" :key="stk.code" type="button" class="leader-card" @click="analyze(stk.code)">
+                <div class="lc-top">
+                  <span class="lc-name">{{ stk.name }}</span>
+                  <span class="lc-code">{{ stk.code }}</span>
+                </div>
+                <div class="lc-bottom">
+                  <span class="lc-price">{{ stk.price != null ? stk.price.toFixed(2) : '—' }}</span>
+                  <span class="lc-pct" :class="stk.pct_chg == null ? 'flat' : (stk.pct_chg >= 0 ? 'up' : 'down')">
+                    {{ stk.pct_chg == null ? '—' : (stk.pct_chg >= 0 ? '+' : '') + stk.pct_chg.toFixed(2) + '%' }}
+                  </span>
+                </div>
+                <div v-if="stk.mom20 != null" class="lc-mom" :class="stk.mom20 >= 0 ? 'up' : 'down'">
+                  近20日 {{ stk.mom20 > 0 ? '+' : '' }}{{ stk.mom20.toFixed(1) }}%
+                </div>
+              </button>
+            </div>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -608,17 +654,28 @@ function loadHistory(): HistItem[] {
 const history = ref<HistItem[]>(loadHistory())
 
 // 赛道龙头入口
-type LeaderItem = { code: string; name: string; price: number | null; pct_chg: number | null }
-type SectorItem = { key: string; name: string; en: string; subtitle: string; items: LeaderItem[] }
+type LeaderItem = { code: string; name: string; price: number | null; pct_chg: number | null; mom20?: number; amount?: number }
+type SectorItem = {
+  key: string; name: string; en: string; subtitle: string; items: LeaderItem[]
+  mom20?: number; mom20_pct?: number; amount_5d?: number; quadrant?: string
+}
 const sectors = ref<SectorItem[]>([])
+// 不达标的板块不丢弃，收进折叠区：弱市可能一个板块都到不了 5%，硬隐藏会让整页空掉。
+const otherSectors = ref<SectorItem[]>([])
+const showOthers = ref(false)
+const sectorsNote = ref('')
+const sectorsComputing = ref(false)
 const sectorsLoading = ref(false)
 const sectorsUpdatedAt = ref('')
 const loadSectors = async () => {
-  if (sectors.value.length) return
+  if (sectors.value.length && !sectorsComputing.value) return
   sectorsLoading.value = true
   try {
     const res: any = await ApiClient.get('/api/lite/sector-leaders', { _ts: Date.now() }, { timeout: 20000 })
     sectors.value = res?.data?.sectors || []
+    otherSectors.value = res?.data?.others || []
+    sectorsNote.value = res?.data?.note || ''
+    sectorsComputing.value = !!res?.data?.computing
     sectorsUpdatedAt.value = res?.data?.updated_at || ''
   } catch {
     // 静默降级：拉取失败时入口区为空，不影响搜索分析

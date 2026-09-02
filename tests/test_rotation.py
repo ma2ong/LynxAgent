@@ -97,3 +97,62 @@ def test_returns_empty_when_history_too_short(store, monkeypatch):
     """样本不够就返回空 dict，让端点如实说明，而不是画一张没有意义的坐标系。"""
     _seed_sectors(store, monkeypatch, n=40)
     assert build_rotation(store) == {}
+
+
+def test_leaders_backfill_to_a_full_row(store, monkeypatch):
+    """够流动性的不足一行时，用板块内成交额最大的剩余个股补满。
+
+    窄板块（酒店餐饮、房地产服务这类）里日均成交额过 1 亿的常常只有三四只，不补的话
+    卡片会被拉成超宽的一条，和别的板块参差不齐。补位按成交额取——补的目的是让这一行
+    是完整的板块面貌，不是硬凑几只涨得好的。
+    """
+    from quantcore.quant.rotation import LEADERS_PER_SECTOR, build_rotation as _b
+
+    mapping = _seed_sectors(store, monkeypatch)
+    # 再塞一个只有 2 只「够流动性」、其余都是小额票的窄板块
+    n = 150
+    closes = [10.0]
+    for _ in range(n - 1):
+        closes.append(closes[-1] * 1.003)
+    for i in range(7):
+        sym = f"9000{i:02d}"
+        df = pd.DataFrame({
+            "date": _trading_dates(n), "open": closes, "high": closes, "low": closes,
+            "close": closes, "volume": [1e6] * n,
+            # 前两只 5 亿，其余 5000 万（过补位下限 3000 万、不过正选下限 1 亿）
+            "amount": [5e8 if i < 2 else 5e7] * n,
+        })
+        store.upsert_kline(sym, df)
+        mapping[sym] = "窄板块"
+    monkeypatch.setattr("quantcore.quant.industry.industry_map", lambda: mapping)
+
+    by = {it["industry"]: it for it in _b(store)["items"]}
+    leaders = by["窄板块"]["leaders"]
+    assert len(leaders) == min(LEADERS_PER_SECTOR, 7)
+    # 正选（≥1 亿）排在前面
+    assert leaders[0]["amount"] >= 1.0 and leaders[1]["amount"] >= 1.0
+
+
+def test_st_names_never_appear_as_leaders(store, monkeypatch):
+    """ST / 退市整理股不能出现在龙头卡片上。
+
+    补位是按成交额取的，不排掉的话窄板块会顶上来一只 *ST（实测房地产服务补进过
+    *ST皇庭）。集合竞价本来就把 ST 排除在候选之外，这里必须一致。
+    """
+    from quantcore.quant.rotation import build_rotation as _b
+
+    mapping = _seed_sectors(store, monkeypatch)
+    n = 150
+    closes = [10.0]
+    for _ in range(n - 1):
+        closes.append(closes[-1] * 1.01)          # 涨得最凶，不排除的话必进正选
+    store.upsert_kline("900999", pd.DataFrame({
+        "date": _trading_dates(n), "open": closes, "high": closes, "low": closes,
+        "close": closes, "volume": [1e6] * n, "amount": [9e8] * n,
+    }))
+    mapping["900999"] = "板块0"
+    store.upsert_meta([{"symbol": "900999", "name": "*ST测试"}])
+    monkeypatch.setattr("quantcore.quant.industry.industry_map", lambda: mapping)
+
+    names = {l["name"] for it in _b(store)["items"] for l in it["leaders"]}
+    assert not any("ST" in n.upper() for n in names)

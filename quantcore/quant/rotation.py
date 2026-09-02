@@ -47,9 +47,14 @@ TAIL_STEP = 5
 # 每个板块挂几只龙头。8 而不是 6：宽屏一行正好排满，且 8 能被 8/4/2 列布局整除，
 # 换到窄屏也不会剩下一排孤零零的卡片。板块里够格的不足 8 只就有几只给几只。
 LEADERS_PER_SECTOR = 8
-# 个股流动性下限：日均成交额低于这个数的不当龙头。没有这条会推出来一堆看着涨得凶、
+# 个股流动性下限：日均成交额低于这个数的不进「正选」。没有这条会推出来一堆看着涨得凶、
 # 实际几百万成交、根本买不进的小票。
 LEADER_MIN_AMOUNT = 1e8
+# 补位下限：正选不足 LEADERS_PER_SECTOR 时，从板块内**成交额最大**的剩余个股里补齐，
+# 这就是通常说的「板块龙头」。补位不看涨幅——补的目的是让这一行是完整的板块面貌，
+# 不是硬凑几只涨得好的。但仍有下限：低于这个数的票补上去也是买不进，宁可少给。
+# （酒店餐饮、房地产服务这类板块过 1 亿的只有四只，卡片被拉成超宽，很难看。）
+LEADER_BACKFILL_MIN_AMOUNT = 3e7
 # 板块人气下限：近 5 日总成交额（元）。低于这个数的不进主榜，收进「其余板块」。
 # 2026-09-02 Allen 定 100 亿。这里用**绝对金额**而不是横截面分位：分位会随大盘
 # 放量缩量自动漂移，看到「第 54 分位」判断不出这个板块到底有没有人交易；一个能直接
@@ -58,6 +63,12 @@ LEADER_MIN_AMOUNT = 1e8
 # **只做准入，不进排序**——板块量能扩张已实测无 alpha（见 rule_audit 的 sector_volexp），
 # 拿成交额去排序等于把一个证伪过的因子塞回来。排序始终只用 20 日涨幅。
 SECTOR_MIN_AMOUNT = 100e8
+
+
+def _is_st(name: str) -> bool:
+    """ST / *ST / 退市整理股。只看名字——本模块只读日线，拿不到状态字段。"""
+    upper = (name or "").upper().replace(" ", "")
+    return "ST" in upper or "退" in upper
 
 
 def _quadrant(rs: float, mom: float) -> str:
@@ -195,16 +206,30 @@ def build_rotation(store: Any, lookback: int = 125) -> Dict[str, object]:
     if close_20 is not None:
         lead = last_rows.join(close_20.rename("c20"), how="inner")
         lead = lead.join(amt20.rename("amt20"), how="left")
-        lead = lead[(lead["c20"] > 0) & (lead["amt20"] >= LEADER_MIN_AMOUNT)]
+        lead = lead[(lead["c20"] > 0) & (lead["amt20"] >= LEADER_BACKFILL_MIN_AMOUNT)]
+        # 排除 ST / 退市整理股：它们不该出现在「龙头股」卡片上。补位是按成交额取的，
+        # 不排掉的话窄板块里会顶上来一只 *ST（实测房地产服务补进了 *ST皇庭）——
+        # 系统别处（集合竞价）本来就把 ST 排除在候选之外，这里必须一致。
+        st = lead.index.map(lambda sym: _is_st(names.get(str(sym)) or ""))
+        lead = lead[~pd.Series(st, index=lead.index)]
         lead["mom20"] = (lead["close"] / lead["c20"] - 1) * 100
+
+        def _row(sym, r) -> dict:
+            return {"code": str(sym), "name": names.get(str(sym)) or str(sym),
+                    "mom20": round(float(r["mom20"]), 2),
+                    "amount": round(float(r["amt20"]) / 1e8, 2)}
+
         for name, grp in lead.groupby("industry", sort=False):
-            top = grp.nlargest(LEADERS_PER_SECTOR, "mom20")
-            leaders_by_sector[str(name)] = [
-                {"code": str(sym), "name": names.get(str(sym)) or str(sym),
-                 "mom20": round(float(r["mom20"]), 2),
-                 "amount": round(float(r["amt20"]) / 1e8, 2)}
-                for sym, r in top.iterrows()
-            ]
+            # 正选：过流动性下限的，按 20 日涨幅取前 N —— 正在带动这个板块的票。
+            liquid = grp[grp["amt20"] >= LEADER_MIN_AMOUNT]
+            top = liquid.nlargest(LEADERS_PER_SECTOR, "mom20")
+            rows = [_row(sym, r) for sym, r in top.iterrows()]
+            # 补位：正选不够一行时，用板块内成交额最大的剩余个股补满。窄板块（酒店餐饮、
+            # 房地产服务）过 1 亿的常常只有三四只，不补的话卡片会被拉成超宽的一条。
+            if len(rows) < LEADERS_PER_SECTOR:
+                rest = grp.drop(top.index).nlargest(LEADERS_PER_SECTOR - len(rows), "amt20")
+                rows += [_row(sym, r) for sym, r in rest.iterrows()]
+            leaders_by_sector[str(name)] = rows
 
     items: List[Dict[str, object]] = []
     for name in wide.columns:

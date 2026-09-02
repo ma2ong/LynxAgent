@@ -93,11 +93,11 @@ async def lite_sector_leaders():
     板块量能扩张实测无 alpha（rule_audit 的 sector_volexp），拿它排序等于把一个证伪过
     的因子塞回来。
 
-    两道准入：板块 20 日涨幅 ≥ MIN_MOM20，且板块人气（近 5 日成交额分位）过半 ——
+    两道准入：板块 20 日涨幅 ≥ MIN_MOM20，且近 5 日成交额 ≥ SECTOR_MIN_AMOUNT ——
     后者滤掉无人问津的板块，那种票涨得再好也买不进。不达标的不丢弃，收进 others
     交给前端折叠：弱市可能一个都不达标，硬隐藏会让整页空掉。
     """
-    from quantcore.quant.rotation import SECTOR_MIN_AMOUNT_PCT
+    from quantcore.quant.rotation import SECTOR_MIN_AMOUNT
 
     MIN_MOM20 = 5.0
     rot = await _heavy_cached(*_rotation_cache_args())
@@ -123,7 +123,7 @@ async def lite_sector_leaders():
     for sec in rot["items"]:
         if not sec.get("leaders"):
             continue                   # 板块里一只票都过不了流动性下限，展示它没有意义
-        (hot if (sec["mom20"] >= MIN_MOM20 and sec["amount_pct"] >= SECTOR_MIN_AMOUNT_PCT)
+        (hot if (sec["mom20"] >= MIN_MOM20 and sec["amount_5d"] * 1e8 >= SECTOR_MIN_AMOUNT)
          else others).append(shape(sec))
 
     codes = [it["code"] for sec in hot + others for it in sec["items"]]
@@ -142,10 +142,10 @@ async def lite_sector_leaders():
         "others": others[:20],
         "as_of": rot.get("as_of"),
         "min_mom20": MIN_MOM20,
-        "min_amount_pct": SECTOR_MIN_AMOUNT_PCT,
+        "min_amount_yi": round(SECTOR_MIN_AMOUNT / 1e8),
         "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
         "note": (f"板块按近 20 日涨幅排序，只列涨幅≥{MIN_MOM20:.0f}%、"
-                 f"且成交额居全市场板块前 {round((1 - SECTOR_MIN_AMOUNT_PCT) * 100)}% 的；"
+                 f"且近 5 日成交额≥{round(SECTOR_MIN_AMOUNT / 1e8)} 亿的；"
                  "龙头为板块内 20 日涨幅最高、且日均成交额≥1 亿的个股。"
                  "成交额只做准入不参与排序。"),
     }}

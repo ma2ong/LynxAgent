@@ -1066,7 +1066,10 @@ onUnmounted(() => {
   .sector-sub { font-size: 12px; color: var(--el-text-color-placeholder); }
   .sector-count { margin-left: auto; font-size: 12px; color: var(--el-text-color-secondary); background: var(--el-fill-color); border-radius: 10px; padding: 1px 9px; }
 }
-.leader-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 10px; }
+/* auto-fit 而不是 auto-fill：auto-fill 会把容器能容下的轨道全部创建出来，卡片不够时
+   末尾留一排空轨道 —— 表现就是右侧一大片死区（2026-09-02 Allen 指出）。
+   auto-fit 会把空轨道折叠掉，剩下的卡片自动撑满整行，不管这个板块有几只龙头。 */
+.leader-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(176px, 1fr)); gap: 10px; }
 .leader-card {
   text-align: left; cursor: pointer; padding: 12px 14px; border-radius: 10px;
   background: var(--el-bg-color); border: 1px solid var(--el-border-color-light);

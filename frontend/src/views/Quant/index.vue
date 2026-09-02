@@ -1008,7 +1008,11 @@ const pollSmartPoolTask = async (taskId: string) => {
         // 环境算不出 → 名单排不出来。把取数故障说成「今天没有够格的票」，用户会去
         // 调策略，而真正该做的是重试。2026-09-01 现场：行情 0/5525，弹窗却在讲
         // 评分阈值——那条门槛当天早些时候就已经关掉了。
-        const dataDown = _res.realtime_status === 'unavailable' || !_res.market_context?.state
+        // 判据只能用响应里**确实存在**的字段。smart-pool 的响应不带 market_context，
+        // 拿它做判断会让每一次空名单都被误报成取数故障；position_gate 才是环境算不出来
+        // 时唯一如实反映这件事的地方（state='数据不可用'）。
+        const dataDown = _res.realtime_status === 'unavailable'
+          || _res.position_gate?.state === '数据不可用' 
         const parts = [] as string[]
         if (dataDown) {
           parts.push('实时行情或全市场环境数据暂时取不到，名单无法生成——这不是「今天没有够格的票」，是取数故障。')

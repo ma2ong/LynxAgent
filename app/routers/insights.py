@@ -103,6 +103,42 @@ async def lite_sector_leaders():
     return payload
 
 
+def _auction_freshness(snap_date: str, snap_time: str, today: str, now_cn: Any) -> dict[str, Any]:
+    """这份竞价名单属于哪个交易日。
+
+    为什么必须报：盘前打开页面时，行情快照还停在上一交易日，页面照样算得出一份完整
+    名单——数字齐全、却是昨天的。2026-09-02 09:08 实测，概览与名单和前一日完全一致
+    （高开比 32.4%、平均开盘 −0.02%）。不标出来，习惯早上看的人会一直把前一天的票
+    当成今日推荐，然后觉得"推荐质量差"。名单照给（盘前看上一交易日的强势票有参考
+    价值），但不能让它冒充今天的。
+
+    快照日期取快照自报的时间戳，不用本机日期：休市时快照停在上一交易日，
+    按本机日期算会把那天的收盘当成「今天盘中」。
+    """
+    before_auction = now_cn.weekday() < 5 and (now_cn.hour * 60 + now_cn.minute) < 9 * 60 + 25
+    if not snap_date:
+        state = "unknown"
+        note = "行情快照没有自报日期，无法判断这份名单属于哪个交易日。"
+    elif snap_date == today and not before_auction:
+        state, note = "live", ""
+    elif before_auction:
+        state = "pre_auction"
+        note = (f"今日集合竞价 09:15 才开始，下面是最近一个交易日（{snap_date}）的竞价结果，"
+                "不是今天的推荐。09:25 之后刷新可看当日名单。")
+    else:
+        state = "stale"
+        note = f"行情快照停在 {snap_date}，不是今天的竞价数据；下面这份名单属于那一天。"
+    return {
+        "snapshot_date": snap_date or None,
+        "snapshot_time": snap_time or None,
+        "today": today,
+        "is_today": bool(snap_date and snap_date == today),
+        "before_auction": before_auction,
+        "state": state,
+        "note": note,
+    }
+
+
 async def _auction_with_live_prices(payload: dict[str, Any]) -> dict[str, Any]:
     """给冻结的竞价候选补一份「打开页面这一刻」的价格。
 
@@ -231,6 +267,9 @@ async def lite_call_auction(
             return set()
 
     bad_symbols = await asyncio.to_thread(_bad_forecast)
+    # 快照日期由快照自己的时间戳决定，不能用本机日期——休市时快照停在上一交易日，
+    # 按本机日期算会把上一交易日的收盘当成「今天」。这个判定 engine 已经写好了。
+    from quantcore.quant.engine import _snapshot_stamp
     # 留痕只在冻结时刻记一次（09:26 后的首次计算）。窗口内(09:15-09:25)名单还在
     # 逐分钟变化，窗口后重算已非竞价口径——两者都不该写复盘留痕。
     freeze_now = post_auction
@@ -243,6 +282,9 @@ async def lite_call_auction(
         industry_map=industry_map, hot_industries=hot_industries, exclude_symbols=bad_symbols,
         open_min=open_min, open_max_ratio=open_max_ratio, record=record_now,
     )
+
+    snap_date, snap_time = _snapshot_stamp(snapshot)
+    result["data_freshness"] = _auction_freshness(snap_date, snap_time, today, now_cn)
 
     # 四形态：按需回溯拉东财盘前分时（09:15-09:25 逐分钟虚拟撮合价），给买入候选贴上盘口
     # 形态（抢筹/诱多/洗盘/分歧）。只算候选池这十几只——全市场形态计数对决策没有用处，

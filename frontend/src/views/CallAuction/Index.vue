@@ -7,6 +7,10 @@
       </div>
       <div class="head-ctrl">
         <span v-if="updatedAt" class="updated">更新于 {{ updatedAt }}</span>
+        <span v-if="data?.data_freshness?.snapshot_date" class="snap-date"
+              :class="{ old: data.data_freshness.state !== 'live' }">
+          行情 {{ data.data_freshness.snapshot_date }}<template v-if="data.data_freshness.snapshot_time"> {{ data.data_freshness.snapshot_time }}</template>
+        </span>
         <el-button text size="small" @click="showAuctionDetails = !showAuctionDetails">
           {{ showAuctionDetails ? '收起明细' : '展开明细' }}
         </el-button>
@@ -15,6 +19,17 @@
     </div>
 
     <div v-if="loading && !data" class="loading-hint">正在读取全市场竞价快照…</div>
+
+    <!-- 这份名单是哪一天的，必须写在最上面。盘前打开时快照还停在上一交易日，页面会
+         照常算出一份完整名单——数字齐全、却是昨天的。不标出来，习惯早上看的人会一直
+         把前一天的票当成今日推荐（2026-09-02 09:08 实测：概览与名单和前一日完全一致）。 -->
+    <el-alert
+      v-if="data?.data_freshness && data.data_freshness.state !== 'live'"
+      :title="data.data_freshness.state === 'pre_auction' ? '今日竞价尚未开始' : '数据不是今天的'"
+      :description="data.data_freshness.note"
+      :type="data.data_freshness.state === 'pre_auction' ? 'info' : 'warning'"
+      :closable="false" show-icon style="margin-bottom:12px"
+    />
 
     <el-alert
       v-if="data && data.available === false"
@@ -289,6 +304,8 @@ onMounted(load)
 
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .panel { background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter); border-radius: 10px; padding: 14px 16px; }
+.snap-date { font-size: 12px; color: var(--el-text-color-secondary); }
+.snap-date.old { color: #d0a050; font-weight: 600; }
 .panel-title { font-size: 15px; font-weight: 700; margin-bottom: 10px; em { font-style: normal; font-size: 12px; font-weight: 400; color: var(--el-text-color-secondary); margin-left: 6px; } }
 .empty { color: var(--el-text-color-secondary); font-size: 13px; padding: 16px 0; }
 .hit-note {

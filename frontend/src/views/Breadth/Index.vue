@@ -137,24 +137,24 @@ const render = () => {
     series: [
       {
         name: '站上 20 日线', type: 'line', showSymbol: false, smooth: true,
-        lineStyle: { color: '#e0902c' },
-        itemStyle: { color: '#e0902c' },
+        lineStyle: { color: '#d48806', width: 2 },
+        itemStyle: { color: '#d48806' },
         data: s.map(r => (r.above_ma20 == null ? null : +(r.above_ma20 * 100).toFixed(1))),
       },
       {
         name: '站上 60 日线', type: 'line', showSymbol: false, smooth: true,
-        lineStyle: { color: '#5b8fb5' },
-        itemStyle: { color: '#5b8fb5' },
+        lineStyle: { color: '#2f6fa8', width: 2 },
+        itemStyle: { color: '#2f6fa8' },
         data: s.map(r => (r.above_ma60 == null ? null : +(r.above_ma60 * 100).toFixed(1))),
       },
       {
         name: '20 日新高', type: 'bar', yAxisIndex: 1,
-        itemStyle: { color: 'rgba(224,64,44,.45)' },
+        itemStyle: { color: 'rgba(212,56,13,.8)' },
         data: s.map(r => r.new_high20),
       },
       {
         name: '20 日新低', type: 'bar', yAxisIndex: 1,
-        itemStyle: { color: 'rgba(30,158,99,.45)' },
+        itemStyle: { color: 'rgba(11,138,75,.8)' },
         data: s.map(r => -r.new_low20),
       },
     ],
@@ -198,6 +198,8 @@ onBeforeUnmount(() => {
 .s { font-size: 11px; color: var(--el-text-color-placeholder); }
 .chart { flex: 1; min-height: 260px; margin-top: 10px; background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter); border-radius: 8px; }
-.up { color: var(--el-color-danger); }
-.down { color: var(--el-color-success); }
+/* 涨跌专用红绿：Element 的 danger/success 在浅底上偏淡（#F56C6C/#67C23A），
+   用作涨跌色时数字和柱子都发虚。这两个变量只给「方向」用，其余仍走 Element 变量。 */
+.up { color: #d4380d; }
+.down { color: #0b8a4b; }
 </style>

@@ -157,18 +157,18 @@ const render = () => {
       name: '中期强度 →',
       nameLocation: 'middle',
       nameGap: 24,
-      nameTextStyle: { color: '#909399' },
-      splitLine: { lineStyle: { color: 'rgba(0,0,0,.07)' } },
-      axisLabel: { color: '#909399' },
+      nameTextStyle: { color: '#7d8698' },
+      splitLine: { lineStyle: { color: '#252932' } },
+      axisLabel: { color: '#9aa3b5' },
     },
     yAxis: {
       scale: true,
       name: '近期强度 →',
       nameLocation: 'middle',
       nameGap: 40,
-      nameTextStyle: { color: '#909399' },
-      splitLine: { lineStyle: { color: 'rgba(0,0,0,.07)' } },
-      axisLabel: { color: '#909399' },
+      nameTextStyle: { color: '#7d8698' },
+      splitLine: { lineStyle: { color: '#252932' } },
+      axisLabel: { color: '#9aa3b5' },
     },
     tooltip: {
       formatter: (p: any) => {
@@ -193,7 +193,7 @@ const render = () => {
           raw: it,
           itemStyle: {
             color: Q_COLOR[it.quadrant] || '#888',
-            borderColor: it.sector_hot ? '#303133' : 'transparent',
+            borderColor: it.sector_hot ? '#fff' : 'transparent',
             borderWidth: it.sector_hot ? 1.5 : 0,
             opacity: focus.value && it.industry !== focus.value ? 0.3 : 0.9,
           },
@@ -205,14 +205,14 @@ const render = () => {
           show: true,
           position: 'right',
           fontSize: 10,
-          color: '#606266',
+          color: '#d5dbe6',
           formatter: (p: any) => (p.data?.raw?.sector_hot ? p.data.name : ''),
         },
         labelLayout: { hideOverlap: true },
         markLine: {
           silent: true,
           symbol: 'none',
-          lineStyle: { color: '#c0c4cc', type: 'dashed' },
+          lineStyle: { color: '#4f5563', type: 'dashed' },
           label: { show: false },
           data: [{ xAxis: 100 }, { yAxis: 100 }],
         },
@@ -237,8 +237,10 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-/* 配色一律走 Element 变量，不写死颜色：内容区是浅色主题，硬编码深色会让这两页
-   从整站里跳出来（2026-09-02 Allen 指出）。图表里的轴线/网格同理，见 render()。 */
+/* 页头浅色（跟应用一致），图表画布与右侧列表深色 —— 这不是我随便定的，行业热力图
+   就是这么处理的：密集的彩色图形在白底上互相冲淡、四象限的结构看不出来，深底才
+   压得住。2026-09-02 Allen 试过全浅色版本，明确说不如深色。
+   要点是只让「画布」深，页头/说明留在浅色框架里，页面才不会整块从 app 里跳出来。 */
 /* flex:1 而不是 height:100%：外层 .content 是列式弹性容器且上面还有 MacroBar，
    写 100% 会把 MacroBar 的高度重复占一遍，多出一截滚动条、把坐标轴名裁掉。 */
 .rotation-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -249,21 +251,20 @@ onBeforeUnmount(() => {
 .caveat { margin: 8px 0; font-size: 12px; color: var(--el-text-color-secondary); }
 .empty { padding: 40px; text-align: center; color: var(--el-text-color-secondary); }
 .body { flex: 1; min-height: 0; display: flex; gap: 12px; }
-.chart { flex: 1; min-width: 0; background: var(--el-fill-color-blank);
-  border: 1px solid var(--el-border-color-lighter); border-radius: 8px; }
-.side { width: 264px; overflow-y: auto; background: var(--el-fill-color-blank);
-  border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 8px; }
-.side-head { font-size: 12px; color: var(--el-text-color-primary); padding: 4px 6px 8px; font-weight: 600; }
-.hint { display: block; color: var(--el-text-color-placeholder); font-size: 11px; margin-top: 3px; font-weight: 400; line-height: 1.5; }
+.chart { flex: 1; min-width: 0; background: #12141a; border-radius: 8px; }
+.side { width: 264px; overflow-y: auto; background: #12141a; border-radius: 8px; padding: 8px; }
+.side-head { font-size: 12px; color: #dfe5f0; padding: 4px 6px 8px; font-weight: 600; }
+.hint { display: block; color: #7d8698; font-size: 11px; margin-top: 3px; font-weight: 400; line-height: 1.5; }
 .row { display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-.row:hover, .row.active { background: var(--el-fill-color-light); }
-.row.hot .nm { color: var(--el-text-color-primary); font-weight: 600; }
-.nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--el-text-color-regular); }
+.row:hover, .row.active { background: #1e222b; }
+.row.hot .nm { color: #fff; font-weight: 600; }
+.nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b9c1d1; }
 .q { font-size: 11px; }
-.q.warm { color: var(--el-color-warning); }
-.q.cool { color: var(--el-color-info); }
+.q.warm { color: #e8a33d; }
+.q.cool { color: #6fa8d6; }
 .mom { width: 58px; text-align: right; }
-.pct { width: 36px; text-align: right; color: var(--el-text-color-placeholder); }
-.up { color: var(--el-color-danger); }
-.down { color: var(--el-color-success); }
+.pct { width: 36px; text-align: right; color: #7d8698; }
+/* 深底上的涨跌色要比浅底更亮，否则暗红暗绿糊在背景里 */
+.up { color: #ff6b52; }
+.down { color: #3ecf8e; }
 </style>

@@ -35,10 +35,10 @@ const title = computed(() => {
 </script>
 
 <style scoped>
-.freshness { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #8b93a3; cursor: default; }
+.freshness { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--el-text-color-secondary); cursor: default; }
 .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.freshness.fresh { color: #1e9e63; }
-.freshness.aging { color: #d0a050; }
-.freshness.stale { color: #e0402c; }
-.detail { color: #6f7889; }
+.freshness.fresh { color: var(--el-color-success); }
+.freshness.aging { color: var(--el-color-warning); }
+.freshness.stale { color: var(--el-color-danger); }
+.detail { color: var(--el-text-color-placeholder); }
 </style>

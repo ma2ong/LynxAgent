@@ -18,6 +18,7 @@ import asyncio
 import logging
 import multiprocessing
 import os
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -135,6 +136,11 @@ def _in_active_window() -> bool:
     return 9 * 60 <= minutes <= 15 * 60 + 40
 
 
+# 单步阻塞事件循环超过这个秒数就告警。watchdog 的 health 探测容忍度是秒级，
+# 0.5s 已经足以在高频探测下造成一次失败。
+LOOP_STALL_WARN = float(os.getenv("LYNX_LOOP_STALL_WARN", "0.5"))
+
+
 async def _loop() -> None:
     await asyncio.sleep(float(os.getenv("BOARD_REFRESH_WARMUP", "4")))
     active_interval = float(os.getenv("BOARD_REFRESH_INTERVAL", "60"))
@@ -148,10 +154,40 @@ async def _loop() -> None:
 
 
 async def _safe(name: str, coro) -> None:
+    """跑一步保温，并记下它**占用事件循环**多久。
+
+    这里量的不是「这一步花了多少墙上时间」，而是「循环被它连续占住多久」：
+    每 0.2 秒插一次探测，两次探测之间的实际间隔一旦明显超过 0.2 秒，就说明中间有一段
+    同步代码没让出控制权。/api/health 只有一行 return，它超时只可能是这个原因。
+    这是常驻仪表，不是临时调试 —— 「port open but health failed」从 2026-08 起每天
+    出现 6~106 次，之前两次都是靠事后猜才找到那段没放线程的循环。
+    """
+    started = time.monotonic()
+    worst = 0.0
+    task = asyncio.ensure_future(coro)
+
+    async def _watch() -> None:
+        nonlocal worst
+        last = time.monotonic()
+        while not task.done():
+            await asyncio.sleep(0.2)
+            now = time.monotonic()
+            worst = max(worst, now - last - 0.2)
+            last = now
+
+    watcher = asyncio.ensure_future(_watch())
     try:
-        await coro
+        await task
     except Exception as exc:  # noqa: BLE001
         logger.warning("board refresh [%s] failed: %s", name, exc)
+    finally:
+        watcher.cancel()
+    total = time.monotonic() - started
+    if worst >= LOOP_STALL_WARN:
+        logger.warning("board refresh [%s] 占用事件循环 %.1fs（本步共 %.1fs）—— "
+                       "这一步里有同步代码没放线程", name, worst, total)
+    elif total >= 5.0:
+        logger.info("board refresh [%s] %.1fs（循环最长阻塞 %.1fs）", name, total, worst)
 
 
 def _capture_intraday_snapshot(snapshot: dict) -> None:

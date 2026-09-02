@@ -129,48 +129,56 @@ onMounted(load)
 </script>
 
 <style scoped>
+/* 这块嵌在「用户设置」页的 el-card 里，那是浅色底 —— 原先整片深色卡片从页面里跳出来。
+   配色统一走 Element 变量。 */
 .lifecycle-page { padding: 4px; }
 .page-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .page-head .el-button { margin-left: auto; }
-.sub { margin: 0; color: #8b93a3; font-size: 12px; }
+.sub { margin: 0; color: var(--el-text-color-secondary); font-size: 12px; }
 .counts { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
-.chip { padding: 3px 10px; border-radius: 12px; font-size: 12px; cursor: pointer; background: #1b1e26; color: #b9c1d1; border: 1px solid transparent; }
-.chip.on { border-color: #5b8fb5; color: #fff; }
-.chip.production { color: #e0402c; }
-.chip.observation { color: #e0902c; }
-.chip.unassigned { color: #f0c040; }
-.chip.rejected { color: #6f7889; }
-.todo { background: #2a2413; border: 1px solid #5c4d1a; color: #e8d9a0; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px; }
+.chip { padding: 3px 10px; border-radius: 12px; font-size: 12px; cursor: pointer;
+  background: var(--el-fill-color-light); color: var(--el-text-color-regular);
+  border: 1px solid transparent; }
+.chip.on { border-color: var(--el-color-primary); color: var(--el-color-primary); }
+.chip.production { color: var(--el-color-danger); }
+.chip.observation { color: var(--el-color-warning); }
+.chip.unassigned { color: #b8860b; }
+.chip.rejected { color: var(--el-text-color-placeholder); }
+.todo { background: var(--el-color-warning-light-9); border: 1px solid var(--el-color-warning-light-5);
+  color: var(--el-text-color-primary); padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px; }
+.cross-run { background: var(--el-color-primary-light-9); border: 1px solid var(--el-color-primary-light-5);
+  color: var(--el-text-color-primary); padding: 8px 12px; border-radius: 6px; font-size: 12px;
+  margin-bottom: 12px; line-height: 1.6; }
+.cross-run code { background: var(--el-fill-color); padding: 1px 5px; border-radius: 3px; }
 .list { display: flex; flex-direction: column; gap: 8px; }
-.card { background: #12141a; border-radius: 6px; padding: 10px 12px; border-left: 3px solid #2a2e38; }
-.card.production { border-left-color: #e0402c; }
-.card.observation { border-left-color: #e0902c; }
-.card.unassigned { border-left-color: #f0c040; }
-/* 用显式配色而不是 opacity：opacity 会把整张卡（含文字）一起冲淡，
-   在浅色的设置页背景上糊成灰块。已否决的卡要「退后」但仍要读得清。 */
-.card.rejected { border-left-color: #333842; background: #0e1015; }
-.card.rejected .name { color: #97a0b0; }
-.card.rejected .row2, .card.rejected .note { color: #767f8f; }
+.card { background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter);
+  border-left: 3px solid var(--el-border-color); border-radius: 8px; padding: 10px 12px; }
+.card.production { border-left-color: var(--el-color-danger); }
+.card.observation { border-left-color: var(--el-color-warning); }
+.card.unassigned { border-left-color: #d4a017; }
+/* 已否决的用底色后退，不用 opacity——opacity 会把文字一起冲淡、糊成一团。 */
+.card.rejected { background: var(--el-fill-color-lighter); border-left-color: var(--el-border-color-light); }
+.card.rejected .name, .card.rejected .row2, .card.rejected .note { color: var(--el-text-color-secondary); }
 .row1 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.stage { font-size: 11px; padding: 1px 7px; border-radius: 3px; background: #1b1e26; color: #b9c1d1; }
-.stage.production { background: #3a1a16; color: #ff8a72; }
-.stage.observation { background: #3a2c16; color: #f0b264; }
-.stage.unassigned { background: #3a3416; color: #f0d264; }
-.name { font-family: ui-monospace, Menlo, Consolas, monospace; color: #dfe5f0; }
+.stage { font-size: 11px; padding: 1px 7px; border-radius: 3px;
+  background: var(--el-fill-color); color: var(--el-text-color-regular); }
+.stage.production { background: var(--el-color-danger-light-9); color: var(--el-color-danger); }
+.stage.observation { background: var(--el-color-warning-light-9); color: var(--el-color-warning); }
+.stage.unassigned { background: #fdf6e3; color: #b8860b; }
+.name { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--el-text-color-primary); }
 .verdict { font-size: 12px; }
-.verdict.pass { color: #1e9e63; }
-.verdict.fail { color: #9aa3b5; }
-.verdict.muted { color: #6f7889; }
-.cmp { font-size: 11px; color: #5b8fb5; border: 1px solid #2f4a5e; border-radius: 3px; padding: 0 5px; cursor: default; }
-.run { color: #5a616f; font-family: ui-monospace, Menlo, Consolas, monospace; cursor: default; }
-.cross-run { background: #12202a; border: 1px solid #24455c; color: #a9c6da; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px; line-height: 1.6; }
-.cross-run code { background: #0d1720; padding: 1px 5px; border-radius: 3px; }
-.audits { margin-left: auto; font-size: 11px; color: #6f7889; }
-.row2 { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; color: #8b93a3; }
-.row2 b { font-weight: 600; color: #c7cede; }
-.entry.warn { color: #d0a050; }
-.when { color: #6f7889; }
-.note { margin-top: 6px; font-size: 12px; color: #9aa3b5; line-height: 1.5; }
-.up { color: #e0402c; }
-.down { color: #1e9e63; }
+.verdict.pass { color: var(--el-color-success); }
+.verdict.fail { color: var(--el-text-color-secondary); }
+.verdict.muted { color: var(--el-text-color-placeholder); }
+.cmp { font-size: 11px; color: var(--el-color-primary); border: 1px solid var(--el-color-primary-light-7);
+  border-radius: 3px; padding: 0 5px; cursor: default; }
+.run { color: var(--el-text-color-placeholder); font-family: ui-monospace, Menlo, Consolas, monospace; cursor: default; }
+.audits { margin-left: auto; font-size: 11px; color: var(--el-text-color-placeholder); }
+.row2 { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; color: var(--el-text-color-secondary); }
+.row2 b { font-weight: 600; color: var(--el-text-color-primary); }
+.entry.warn { color: var(--el-color-warning); }
+.when { color: var(--el-text-color-placeholder); }
+.note { margin-top: 6px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.5; }
+.up { color: var(--el-color-danger); }
+.down { color: var(--el-color-success); }
 </style>

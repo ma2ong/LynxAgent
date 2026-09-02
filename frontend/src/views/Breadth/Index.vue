@@ -116,19 +116,19 @@ const render = () => {
   const s = d.series
   chart.setOption({
     grid: { left: 46, right: 52, top: 30, bottom: 46 },
-    legend: { top: 0, textStyle: { color: '#8b93a3' } },
+    legend: { top: 0, textStyle: { color: '#606266' } },
     tooltip: { trigger: 'axis' },
-    xAxis: { type: 'category', data: s.map(r => r.date), axisLabel: { color: '#8b93a3' } },
+    xAxis: { type: 'category', data: s.map(r => r.date), axisLabel: { color: '#909399' } },
     yAxis: [
       // 均线占比固定 0-100：不让 ECharts 自适应，否则 55%→60% 的窄幅波动会被拉成
       // 满屏大起大落，看着像市场天翻地覆，实际什么也没发生。
-      { min: 0, max: 100, axisLabel: { color: '#8b93a3', formatter: '{value}%' },
-        splitLine: { lineStyle: { color: '#23262e' } } },
+      { min: 0, max: 100, axisLabel: { color: '#909399', formatter: '{value}%' },
+        splitLine: { lineStyle: { color: 'rgba(0,0,0,.07)' } } },
       // 新高/新低是发散型柱（新低画成负值），右轴必须对零对称。让 ECharts 自适应会
       // 得到 +2000/−4000 这种范围，零线跑到上三分之一，视觉上「新低比新高多得多」
       // 的错觉全来自坐标轴而不是数据。
       {
-        axisLabel: { color: '#8b93a3' },
+        axisLabel: { color: '#909399' },
         splitLine: { show: false },
         min: (v: { min: number; max: number }) => -Math.max(Math.abs(v.min), Math.abs(v.max)),
         max: (v: { min: number; max: number }) => Math.max(Math.abs(v.min), Math.abs(v.max)),
@@ -172,27 +172,32 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 同 Rotation：配色走 Element 变量，内容区是浅色主题。 */
 /* flex:1 而不是 height:100%：外层 .content 是列式弹性容器且上面还有 MacroBar，
    写 100% 会把 MacroBar 的高度重复占一遍，多出一截滚动条、把坐标轴名裁掉。 */
 .breadth-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .page-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .page-head h2 { margin: 0; font-size: 18px; }
-.sub { margin: 0; color: #8b93a3; font-size: 12px; }
+.sub { margin: 0; color: var(--el-text-color-secondary); font-size: 12px; }
 .actions { margin-left: auto; display: flex; gap: 10px; align-items: center; }
-.empty { padding: 40px; text-align: center; color: #8b93a3; }
-.regime { display: flex; align-items: baseline; gap: 10px; margin: 10px 0; padding: 6px 12px; border-radius: 6px; background: #12141a; font-size: 13px; }
+.empty { padding: 40px; text-align: center; color: var(--el-text-color-secondary); }
+.regime { display: flex; align-items: baseline; gap: 10px; margin: 10px 0; padding: 8px 12px;
+  border-radius: 8px; background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-lighter); font-size: 13px; }
 .regime b { font-size: 15px; }
-.regime.warm b { color: #e0402c; }
-.regime.cold b { color: #1e9e63; }
-.regime.mid b { color: #c7cede; }
-.regime span { color: #8b93a3; font-size: 12px; }
-.regime .muted { margin-left: auto; color: #6f7889; }
+.regime.warm b { color: var(--el-color-danger); }
+.regime.cold b { color: var(--el-color-success); }
+.regime.mid b { color: var(--el-text-color-primary); }
+.regime span { color: var(--el-text-color-secondary); font-size: 12px; }
+.regime .muted { margin-left: auto; color: var(--el-text-color-placeholder); }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
-.tile { background: #12141a; border-radius: 6px; padding: 10px 12px; }
-.k { font-size: 12px; color: #8b93a3; }
-.v { font-size: 20px; font-weight: 600; margin: 2px 0; color: #dfe5f0; }
-.s { font-size: 11px; color: #6f7889; }
-.chart { flex: 1; min-height: 260px; margin-top: 10px; background: #12141a; border-radius: 6px; }
-.up { color: #e0402c; }
-.down { color: #1e9e63; }
+.tile { background: var(--el-fill-color-blank); border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px; padding: 10px 12px; }
+.k { font-size: 12px; color: var(--el-text-color-secondary); }
+.v { font-size: 20px; font-weight: 600; margin: 2px 0; color: var(--el-text-color-primary); }
+.s { font-size: 11px; color: var(--el-text-color-placeholder); }
+.chart { flex: 1; min-height: 260px; margin-top: 10px; background: var(--el-fill-color-blank);
+  border: 1px solid var(--el-border-color-lighter); border-radius: 8px; }
+.up { color: var(--el-color-danger); }
+.down { color: var(--el-color-success); }
 </style>

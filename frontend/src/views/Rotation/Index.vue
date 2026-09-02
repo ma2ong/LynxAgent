@@ -157,18 +157,18 @@ const render = () => {
       name: '中期强度 →',
       nameLocation: 'middle',
       nameGap: 24,
-      nameTextStyle: { color: '#6f7889' },
-      splitLine: { lineStyle: { color: '#23262e' } },
-      axisLabel: { color: '#8b93a3' },
+      nameTextStyle: { color: '#909399' },
+      splitLine: { lineStyle: { color: 'rgba(0,0,0,.07)' } },
+      axisLabel: { color: '#909399' },
     },
     yAxis: {
       scale: true,
       name: '近期强度 →',
       nameLocation: 'middle',
       nameGap: 40,
-      nameTextStyle: { color: '#6f7889' },
-      splitLine: { lineStyle: { color: '#23262e' } },
-      axisLabel: { color: '#8b93a3' },
+      nameTextStyle: { color: '#909399' },
+      splitLine: { lineStyle: { color: 'rgba(0,0,0,.07)' } },
+      axisLabel: { color: '#909399' },
     },
     tooltip: {
       formatter: (p: any) => {
@@ -193,7 +193,7 @@ const render = () => {
           raw: it,
           itemStyle: {
             color: Q_COLOR[it.quadrant] || '#888',
-            borderColor: it.sector_hot ? '#fff' : 'transparent',
+            borderColor: it.sector_hot ? '#303133' : 'transparent',
             borderWidth: it.sector_hot ? 1.5 : 0,
             opacity: focus.value && it.industry !== focus.value ? 0.3 : 0.9,
           },
@@ -205,14 +205,14 @@ const render = () => {
           show: true,
           position: 'right',
           fontSize: 10,
-          color: '#c7cede',
+          color: '#606266',
           formatter: (p: any) => (p.data?.raw?.sector_hot ? p.data.name : ''),
         },
         labelLayout: { hideOverlap: true },
         markLine: {
           silent: true,
           symbol: 'none',
-          lineStyle: { color: '#4a4f5c', type: 'dashed' },
+          lineStyle: { color: '#c0c4cc', type: 'dashed' },
           label: { show: false },
           data: [{ xAxis: 100 }, { yAxis: 100 }],
         },
@@ -237,29 +237,33 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 配色一律走 Element 变量，不写死颜色：内容区是浅色主题，硬编码深色会让这两页
+   从整站里跳出来（2026-09-02 Allen 指出）。图表里的轴线/网格同理，见 render()。 */
 /* flex:1 而不是 height:100%：外层 .content 是列式弹性容器且上面还有 MacroBar，
    写 100% 会把 MacroBar 的高度重复占一遍，多出一截滚动条、把坐标轴名裁掉。 */
 .rotation-page { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .page-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .page-head h2 { margin: 0; font-size: 18px; }
-.sub { margin: 0; color: #8b93a3; font-size: 12px; }
+.sub { margin: 0; color: var(--el-text-color-secondary); font-size: 12px; }
 .actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
-.caveat { margin: 8px 0; font-size: 12px; color: #9aa3b5; }
-.empty { padding: 40px; text-align: center; color: #8b93a3; }
+.caveat { margin: 8px 0; font-size: 12px; color: var(--el-text-color-secondary); }
+.empty { padding: 40px; text-align: center; color: var(--el-text-color-secondary); }
 .body { flex: 1; min-height: 0; display: flex; gap: 12px; }
-.chart { flex: 1; min-width: 0; background: #12141a; border-radius: 6px; }
-.side { width: 264px; overflow-y: auto; background: #12141a; border-radius: 6px; padding: 8px; }
-.side-head { font-size: 12px; color: #c7cede; padding: 4px 6px 8px; }
-.hint { display: block; color: #6f7889; font-size: 11px; margin-top: 2px; }
+.chart { flex: 1; min-width: 0; background: var(--el-fill-color-blank);
+  border: 1px solid var(--el-border-color-lighter); border-radius: 8px; }
+.side { width: 264px; overflow-y: auto; background: var(--el-fill-color-blank);
+  border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 8px; }
+.side-head { font-size: 12px; color: var(--el-text-color-primary); padding: 4px 6px 8px; font-weight: 600; }
+.hint { display: block; color: var(--el-text-color-placeholder); font-size: 11px; margin-top: 3px; font-weight: 400; line-height: 1.5; }
 .row { display: flex; align-items: center; gap: 6px; padding: 5px 6px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-.row:hover, .row.active { background: #1b1e26; }
-.row.hot .nm { color: #fff; font-weight: 600; }
-.nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b9c1d1; }
+.row:hover, .row.active { background: var(--el-fill-color-light); }
+.row.hot .nm { color: var(--el-text-color-primary); font-weight: 600; }
+.nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--el-text-color-regular); }
 .q { font-size: 11px; }
-.q.warm { color: #e0802c; }
-.q.cool { color: #5b8fb5; }
+.q.warm { color: var(--el-color-warning); }
+.q.cool { color: var(--el-color-info); }
 .mom { width: 58px; text-align: right; }
-.pct { width: 36px; text-align: right; color: #6f7889; }
-.up { color: #e0402c; }
-.down { color: #1e9e63; }
+.pct { width: 36px; text-align: right; color: var(--el-text-color-placeholder); }
+.up { color: var(--el-color-danger); }
+.down { color: var(--el-color-success); }
 </style>

@@ -168,11 +168,10 @@ def test_does_not_double_count_with_dryup_bonus():
 # ---------- 板块取数必须只读缓存 ----------
 
 def test_sector_lookup_never_triggers_a_rebuild(monkeypatch):
-    """回归：这里曾调 `_heavy_cached`，未命中时它会 create_task 去后台算 build_rotation。
+    """回归：这里最初调 `_heavy_cached`，未命中时它会 create_task 去后台算 build_rotation。
 
-    于是前端高频轮询的一键智选变成了那个 20 秒全市场扫描的触发源，而 board_refresh
-    调它之前有内存闸、这条路没有。2026-09-03 上线当天就在低内存下触发重算、拿回空
-    结果并写进 12 小时缓存，把轮动图和赛道浏览一起带塌。
+    于是前端高频轮询的一键智选成了那个 20 秒全市场扫描的触发源，而 board_refresh 调
+    同一个东西之前有内存闸（低于 3072MB 就跳过），这条路没有 —— 等于绕过了那道闸。
     预热是 board_refresh 的事；这里只准读。
     """
     import asyncio

@@ -1556,12 +1556,11 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
 async def _sector_mom_pct_map() -> dict[str, float]:
     """板块 → 20 日动量的全市场分位。给「地量点火」的板块闸用。
 
-    **只读缓存，绝不触发重算。** 这里曾经调 `_heavy_cached`，那个函数未命中时会
-    `create_task` 去后台算一遍 —— 于是一键智选（前端高频轮询）变成了 build_rotation
-    的触发源，而 board_refresh 调它之前有内存闸、这条路没有。2026-09-03 上线当天就
-    踩到：可用内存只剩 2GB、事件循环刚被 intraday-snapshot 占了 75 秒，这一路触发的
-    重算拿回空结果并写进了 12 小时缓存，把轮动图和赛道浏览一起带塌。
-    推荐主链路不该负责预热一个 20 秒的全市场扫描 —— 预热是 board_refresh 的事。
+    **只读缓存，绝不触发重算。** 这里最初调 `_heavy_cached`，那个函数未命中时会
+    `create_task` 去后台算一遍 build_rotation（约 20 秒全市场扫描）。于是前端高频
+    轮询的一键智选就成了那次重算的触发源，而 board_refresh 调同一个东西之前是有内存
+    闸把关的（`_has_memory_budget`，低于 3072MB 就跳过），这条路没有 —— 等于绕过了
+    那道闸。预热是 board_refresh 的职责，推荐主链路只该消费结果。
     缓存没有就返回空 dict，调用方按「拿不到板块 → 不加分」处理，宁可少给分也不
     在数据缺失时白送。
     """

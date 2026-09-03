@@ -163,3 +163,38 @@ def test_does_not_double_count_with_dryup_bonus():
     assert _ignite(df) is not None
     # 同一根 K 线喂给地量埋伏：人气/板块给到最宽松，仍然不该给分
     assert dryup_bonus(df, industry_heat=100.0, amt_rank=1.0) == 0.0
+
+
+# ---------- 板块取数必须只读缓存 ----------
+
+def test_sector_lookup_never_triggers_a_rebuild(monkeypatch):
+    """回归：这里曾调 `_heavy_cached`，未命中时它会 create_task 去后台算 build_rotation。
+
+    于是前端高频轮询的一键智选变成了那个 20 秒全市场扫描的触发源，而 board_refresh
+    调它之前有内存闸、这条路没有。2026-09-03 上线当天就在低内存下触发重算、拿回空
+    结果并写进 12 小时缓存，把轮动图和赛道浏览一起带塌。
+    预热是 board_refresh 的事；这里只准读。
+    """
+    import asyncio
+
+    import app.routers.insights as insights
+
+    def _boom(*a, **k):
+        raise AssertionError("推荐链路触发了板块重算：只准读缓存")
+
+    monkeypatch.setattr(insights, "_heavy_cached", _boom)
+    monkeypatch.setattr(insights, "_heavy_fill", _boom)
+    monkeypatch.setattr(insights, "_rotation_cache_args",
+                        lambda: ("sector-rotation:test", 43200, _boom, _boom))
+
+    # 缓存空 → 返回空 dict，且不炸
+    from app.core.market_data import lite_insights_cache
+    lite_insights_cache.pop("sector-rotation:test", None)
+    assert asyncio.run(lite_main._sector_mom_pct_map()) == {}
+
+    # 缓存有 → 读出来
+    from app.core.market_data import _cache_set
+    _cache_set("sector-rotation:test",
+               {"items": [{"industry": "测试板块", "mom20_pct": 0.9}]})
+    assert asyncio.run(lite_main._sector_mom_pct_map()) == {"测试板块": 0.9}
+    lite_insights_cache.pop("sector-rotation:test", None)

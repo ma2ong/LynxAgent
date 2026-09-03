@@ -1556,15 +1556,20 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
 async def _sector_mom_pct_map() -> dict[str, float]:
     """板块 → 20 日动量的全市场分位。给「地量点火」的板块闸用。
 
-    直接复用轮动图那份缓存（key `sector-rotation:{as_of}`，12h TTL，board_refresh
-    后台预热），不自己算：build_rotation 是约 20 秒的全市场扫描，放在推荐主链路里
-    现算等于每次请求多烧 20 秒 —— 板块保温缓存那条硬约束就是为这个立的。
-    缓存未就绪时返回空 dict，调用方按「拿不到板块 → 不加分」处理，宁可少给分也不
+    **只读缓存，绝不触发重算。** 这里曾经调 `_heavy_cached`，那个函数未命中时会
+    `create_task` 去后台算一遍 —— 于是一键智选（前端高频轮询）变成了 build_rotation
+    的触发源，而 board_refresh 调它之前有内存闸、这条路没有。2026-09-03 上线当天就
+    踩到：可用内存只剩 2GB、事件循环刚被 intraday-snapshot 占了 75 秒，这一路触发的
+    重算拿回空结果并写进了 12 小时缓存，把轮动图和赛道浏览一起带塌。
+    推荐主链路不该负责预热一个 20 秒的全市场扫描 —— 预热是 board_refresh 的事。
+    缓存没有就返回空 dict，调用方按「拿不到板块 → 不加分」处理，宁可少给分也不
     在数据缺失时白送。
     """
     try:
-        from app.routers.insights import _heavy_cached, _rotation_cache_args
-        rot = await _heavy_cached(*_rotation_cache_args())
+        from app.core.market_data import _cache_get
+        from app.routers.insights import _rotation_cache_args
+        key, ttl, _build, _shape = _rotation_cache_args()
+        rot = _cache_get(key, ttl)
     except Exception as exc:  # noqa: BLE001 — 板块数据拿不到只影响加分，不该阻断推荐
         print(f"ignite sector momentum unavailable: {exc}")
         return {}

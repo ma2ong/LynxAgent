@@ -101,6 +101,40 @@ def _attach_stock_volume(df: pd.DataFrame) -> None:
     df["amt_ma20_q"] = amt_ma20.groupby(df["date"]).rank(pct=True)
 
 
+def _attach_ignite(df: pd.DataFrame) -> None:
+    """地量「点火」族：先有极致缩量的沉寂期，再有一根放量阳线把它打醒。
+
+    跟已被否决的 dryup 族是**两个不同的假设**，区别只在入场时点：
+    dryup 是在地量当天买（赌它自己会醒），实测个股缩量侧没有信息；这里是等
+    「醒过来的那一根」出现之后才买，地量只作为前置状态，不作为买点。这一改
+    也顺带避开了 dryup 那轮「+1pp 全在隔夜段」的毛病——点火日收盘的量价已经
+    公开可见，不依赖第二天跳空。
+
+    字段都严格只看截至当日：dryup_min5 / dryup_days5 用 shift(1) 排除当日。
+    """
+    g = df.groupby("symbol", sort=False)
+    # 前 5 个交易日（不含当日）里最清淡的那天有多清淡
+    df["dryup_min5"] = g["vol_pct60"].transform(
+        lambda s: s.shift(1).rolling(5, min_periods=5).min())
+    # 前 5 日里够得上地量的天数：一天可能是偶然，连着三四天才是真沉寂
+    is_dry = (df["vol_pct60"] <= DRYUP_PCT).astype(float)
+    df["dryup_days5"] = is_dry.groupby(df["symbol"], sort=False).transform(
+        lambda s: s.shift(1).rolling(5, min_periods=5).sum())
+    # 点火倍量的分母用**沉寂期自己**（前 5 日均额），不用 20 日均额。
+    # 2026-09-03 实测踩坑：欢瑞 8/28 点火那天 amount/ma20 只有 0.95 —— 因为 20 日均额里
+    # 还含着 8 月初那波大量，分母被前期天量拉高，于是「放量」这件事在 ma20 口径下根本
+    # 看不见（真实的量是前 5 日均额的 2.16 倍）。这跟 vol_pct60 那处注释是同一个病的
+    # 镜像：凡是拿长窗口均值当分母去衡量「相对刚才放大了多少」，都会被窗口里的旧高量吃掉。
+    amt_ma5_prev = g["amount"].transform(
+        lambda s: s.shift(1).rolling(5, min_periods=5).mean())
+    df["vol_ratio5"] = df["amount"] / amt_ma5_prev
+
+    # 沉寂期的价格振幅：地量还得配「跌不动」，横住的缩量和阴跌的缩量不是一回事
+    hi5 = g["high"].transform(lambda s: s.shift(1).rolling(5, min_periods=5).max())
+    lo5 = g["low"].transform(lambda s: s.shift(1).rolling(5, min_periods=5).min())
+    df["quiet_range5"] = (hi5 / lo5 - 1) * 100
+
+
 def _attach_shape(df: pd.DataFrame) -> None:
     """K 线形态族：震荡度、ATR 通道方向、通道突破、天量那天的方向。
 
@@ -239,6 +273,26 @@ def _attach_sector(df: pd.DataFrame) -> None:
     df.loc[ok, "in_sec_q20"] = grp["prior_ret20"].rank(pct=True)
 
 
+def _attach_ignite_sector(df: pd.DataFrame) -> None:
+    """板块点火密度：当天同板块里有多大比例的票在同时点火。
+
+    这一列跟 sec_mom20_q 问的是相反的问题。动量分位问「这个板块过去强不强」，
+    可实际案例里（光纤三只 2026-08-04 同日点火）板块过去 20 日是一路阴跌到地量的，
+    动量分位低得很。密度问的是「今天这个板块里是不是一群票一起醒」——它是同期的
+    横截面事件，不是过去的趋势。资金是按板块进场的，一只票点火可能是个股消息，
+    一个板块里三四只同时点火才是板块级资金。
+    """
+    ig = ((df["dryup_days5"] >= 2) & (df["vol_ratio"] >= 1.8) & (df["ret1"] >= 3))
+    df["_ig"] = ig.astype(float)
+    ok = df["industry"].notna() & (df["sec_n"] >= SECTOR_MIN_MEMBERS)
+    grp = df[ok].groupby(["date", "industry"], sort=False)["_ig"]
+    cnt = grp.transform("sum")
+    df["sec_ignite_n"] = np.nan
+    df.loc[ok, "sec_ignite_n"] = cnt
+    df["sec_ignite_ratio"] = df["sec_ignite_n"] / df["sec_n"]
+    df.drop(columns=["_ig"], inplace=True)
+
+
 def _attach_regime(df: pd.DataFrame) -> None:
     """挂上每个交易日的大盘环境标签（偏暖 / 中性 / 偏冷）。
 
@@ -334,7 +388,9 @@ def build_panel(db: str, since: str, horizon: int, entry: str = "close") -> pd.D
     df["fwd_excess"] = df["fwd_ret"] - df["bench"]
 
     _attach_stock_volume(df)
+    _attach_ignite(df)
     _attach_sector(df)
+    _attach_ignite_sector(df)
     _attach_shape(df)
     _attach_regime(df)
 
@@ -570,6 +626,60 @@ RULES = {
     "dryup_washout": ("主升一后缩量洗盘（60日≥30%、离高点3~18%、地量）",
                       lambda d: (d["vol_pct60"] <= DRYUP_PCT) & (d["prior_ret60"] >= 30)
                                 & d["dist_high20"].between(-18, -3)),
+
+    # ---- 地量点火族（2026-09-03）。dryup 族被否的是「地量当天买」，这一族改成
+    # 「地量之后的第一根放量阳线才买」，地量退回去只当前置状态。前三条做剂量反应：
+    # 沉寂得越久、点火得越猛，效果该越强 —— 不单调就是噪音（追高闸门那轮的教训）。
+    # 后三条在同一档剂量上换形态：沉寂期横住 / 点火时位置不高 / 板块同步点火。
+    "ignite_weak": ("前5日≥1天地量 + 今日放量1.5倍阳线",
+                    lambda d: (d["dryup_days5"] >= 1) & (d["vol_ratio"] >= 1.5) & (d["ret1"] >= 2)),
+    "ignite": ("前5日≥2天地量 + 今日放量1.8倍、涨≥3%",
+               lambda d: (d["dryup_days5"] >= 2) & (d["vol_ratio"] >= 1.8) & (d["ret1"] >= 3)),
+    "ignite_strong": ("前5日≥3天地量 + 放量2倍、涨≥3%、收在上沿",
+                      lambda d: (d["dryup_days5"] >= 3) & (d["vol_ratio"] >= 2.0)
+                                & (d["ret1"] >= 3) & (d["clv"] >= 0.7)),
+    "ignite_flat": ("点火 + 沉寂期横住（前5日振幅≤8%）",
+                    lambda d: (d["dryup_days5"] >= 2) & (d["vol_ratio"] >= 1.8)
+                              & (d["ret1"] >= 3) & (d["quiet_range5"] <= 8)),
+    "ignite_low": ("点火 + 位置不高（未偏离20日线5%以上）",
+                   lambda d: (d["dryup_days5"] >= 2) & (d["vol_ratio"] >= 1.8)
+                             & (d["ret1"] >= 3) & (d["dist_ma20"] <= 5)),
+    "ignite_sector": ("点火 + 板块20日动量前30%（板块同步点火）",
+                      lambda d: (d["dryup_days5"] >= 2) & (d["vol_ratio"] >= 1.8)
+                                & (d["ret1"] >= 3) & (d["sec_mom20_q"] >= 0.7)),
+
+    # 2026-09-03 Allen 定：地量点火要进排序。前 9 个变体里只有 ignite_low（位置不高）
+    # 和 ignite_sector（板块动量在）的匹配增量不为负，取两者交集当生产口径的候选，
+    # 再加一条「点火后第2天」（欢瑞 8/28 点火、8/31 首板，用户实际能买到的是这一天）。
+    "ignite_best": ("点火 + 位置不高 + 板块动量前30%",
+                    lambda d: (d["dryup_days5"] >= 2) & (d["vol_ratio"] >= 1.8) & (d["ret1"] >= 3)
+                              & (d["dist_ma20"] <= 5) & (d["sec_mom20_q"] >= 0.7)),
+    "ignite_best_pack": ("点火 + 位置不高 + 板块动量 + 同板块≥3只共振",
+                         lambda d: (d["dryup_days5"] >= 2) & (d["vol_ratio"] >= 1.8) & (d["ret1"] >= 3)
+                                   & (d["dist_ma20"] <= 5) & (d["sec_mom20_q"] >= 0.7)
+                                   & (d["sec_ignite_n"] >= 3)),
+
+    # v2（2026-09-03）：点火倍量改用「相对沉寂期」的 vol_ratio5，其余不变。
+    # 这才是能抓到欢瑞/竞业达那一类的口径，v1 的 ma20 分母会把它们全漏掉。
+    "ig2": ("v2 点火：前5日≥2天地量 + 相对前5日放量2倍、涨≥3%",
+            lambda d: (d["dryup_days5"] >= 2) & (d["vol_ratio5"] >= 2.0) & (d["ret1"] >= 3)),
+    "ig2_low": ("v2 点火 + 位置不高（未偏离20日线5%以上）",
+                lambda d: (d["dryup_days5"] >= 2) & (d["vol_ratio5"] >= 2.0) & (d["ret1"] >= 3)
+                          & (d["dist_ma20"] <= 5)),
+    "ig2_best": ("v2 点火 + 位置不高 + 板块动量前30%",
+                 lambda d: (d["dryup_days5"] >= 2) & (d["vol_ratio5"] >= 2.0) & (d["ret1"] >= 3)
+                           & (d["dist_ma20"] <= 5) & (d["sec_mom20_q"] >= 0.7)),
+
+    # 板块点火密度：同板块当天≥3只/≥5只一起点火。做剂量反应，密度越高该越强。
+    "ignite_pack3": ("点火 + 同板块当天≥3只同时点火",
+                     lambda d: (d["dryup_days5"] >= 2) & (d["vol_ratio"] >= 1.8)
+                               & (d["ret1"] >= 3) & (d["sec_ignite_n"] >= 3)),
+    "ignite_pack5": ("点火 + 同板块当天≥5只同时点火",
+                     lambda d: (d["dryup_days5"] >= 2) & (d["vol_ratio"] >= 1.8)
+                               & (d["ret1"] >= 3) & (d["sec_ignite_n"] >= 5)),
+    "ignite_pack_ratio": ("点火 + 板块内≥15%成分同时点火",
+                          lambda d: (d["dryup_days5"] >= 2) & (d["vol_ratio"] >= 1.8)
+                                    & (d["ret1"] >= 3) & (d["sec_ignite_ratio"] >= 0.15)),
 
     # ---- 板块族（2026-08-27）。这是 Lucas 那套的可提取内核：先定主线板块，
     # 再在板块里挑位置。系统现在完全没有板块维度，这批是空白检验。

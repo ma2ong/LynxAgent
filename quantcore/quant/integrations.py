@@ -130,6 +130,75 @@ def _detect_pre_lift_patterns(data: pd.DataFrame) -> List[Dict[str, Any]]:
             ],
         ))
 
+    # --- 地量点火（2026-09-03）。与上面的「地量洗盘后放量阳线」是两条不同口径：
+    # 那条问「近 20 日曾不曾出现过地量」，宽松、且不看位置和板块，从未过审计；
+    # 这条是 experiments/rule_audit.py 里 ignite_best 的生产实现，四个条件缺一不可，
+    # 板块那一条在 lite_main 层补（这里拿不到横截面）。
+    #
+    # 审计结论必须连同口径一起记住，否则以后没人知道这些阈值是哪来的：
+    #   ig2_best，T+3、T+1 开盘买入口径，样本 6231 笔 / 1213 个交易日，
+    #   匹配对照增量 +0.16pp，7 个年份方向一致，但 **CI 下沿 −0.05、去右尾后 −0.02**
+    #   —— 也就是跟 0 分不开，七关里倒在「增量显著」和「去右尾」两关。
+    # 另有一版分母用 20 日均额的口径（ignite_best）统计上更好（增量 +0.25、CI 下沿 +0.01、
+    # 去右尾 +0.05），但它**抓不到欢瑞/竞业达这一类**（分母被前期天量污染，见下），
+    # 装上去等于挂着这个名字却选不出这个形态，所以取的是能抓到的这一版。
+    # 证据强度：「看着有、统计上分不清是不是挑出来的」。Allen
+    # 2026-09-03 拍板先上排序，靠上线后的独立留痕做样本外复判，届时再定去留。
+    if len(data) >= 70 and "amount" in data:
+        amt = data["amount"].astype(float)
+        # 「地量」用自身近 60 日的分位，不用量比：量比的分母会被前期一根天量拉高，
+        # 于是放量后的第二天自动成了「地量」（见 rule_audit 里同一处注释）。
+        rank60 = amt.rolling(60, min_periods=40).rank(pct=True)
+        closes = data["close"].astype(float)
+
+        def _ignition_at(k: int):
+            """第 -1-k 根 K 线是不是点火日；是则返回它的四个剂量值。k=0 即当日。"""
+            i = len(data) - 1 - k
+            if i < 66:
+                return None
+            quiet = int((rank60.iloc[i - 5:i] <= 0.10).sum())      # 前 5 日，不含该日
+            base = float(amt.iloc[i - 5:i].mean())                 # 分母是沉寂期自己
+            if base <= 0:
+                return None
+            ratio = float(amt.iloc[i]) / base
+            prev_c = float(closes.iloc[i - 1])
+            chg = (float(closes.iloc[i]) / prev_c - 1) * 100 if prev_c else 0.0
+            ma20_i = float(closes.iloc[i - 19:i + 1].mean())
+            dist = (float(closes.iloc[i]) / ma20_i - 1) * 100 if ma20_i else 999.0
+            if quiet >= 2 and ratio >= 2.0 and chg >= 3.0 and dist <= 5.0:
+                return {"quiet_days": quiet, "amount_ratio": round(ratio, 2),
+                        "pct_chg": round(chg, 2), "dist_ma20": round(dist, 1)}
+            return None
+
+        # 往回找最近一次点火。窗口取 3 天（审计有效窗口），第 4 天起不再标注 ——
+        # 标一个已经失效的形态比不标更糟，用户会以为它还成立。
+        for k in range(0, 4):
+            hit = _ignition_at(k)
+            if not hit:
+                continue
+            fresh = k == 0
+            _i = len(data) - 1 - k
+            patterns.append(_pattern(
+                "dryup_ignite",
+                "地量点火" if fresh else f"地量点火 D+{k}",
+                # 剂量映射到强度：沉寂越久、点火越猛、位置越低分越高；过了点火日逐日衰减。
+                (70 + min(hit["quiet_days"], 5) * 3 + min(hit["amount_ratio"], 4.0) * 4
+                 + max(0.0, 5.0 - hit["dist_ma20"])) - k * 6,
+                (f"前 5 日有 {hit['quiet_days']} 天成交额处在自身 60 日最低 10%（地量），"
+                 f"{'今日' if fresh else f'{k} 个交易日前'}成交额放大到沉寂期的 "
+                 f"{hit['amount_ratio']:.1f} 倍并收阳 {_signed_pct(hit['pct_chg'])}，"
+                 f"距 20 日线 {hit['dist_ma20']:+.1f}%（未追高）。"
+                 + ("有效窗口约 3 个交易日。" if fresh
+                    else f"已是点火后第 {k} 天，窗口还剩约 {3 - k} 天。")),
+                dict(hit, days_since=k, horizon_days=3, fresh=fresh),
+                [
+                    {"type": "box", "date1": _dt(_i - 5), "date2": _dt(_i - 1), "label": "地量沉寂"},
+                    {"type": "arrow", "date": _dt(_i), "price": float(data["high"].iloc[_i]),
+                     "label": "点火"},
+                ],
+            ))
+            break
+
     support = _safe_number(data.iloc[-12:-3]["low"].min())
     recent_dip = data.tail(6).iloc[:-1]
     if support > 0 and not recent_dip.empty:

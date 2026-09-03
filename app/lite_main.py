@@ -363,6 +363,21 @@ INTRADAY_BONUS_SCORE_FLOOR = max(
 # 空名单在产品上是死路（用户不知道是没货还是系统坏了），给最强几只 + 说清没达标，
 # 既不假装达标也不让用户对着空白页猜。设 0 = 不给保底，真空着。
 SMART_POOL_FLOOR_FALLBACK = max(0, int(float(os.getenv("LYNX_SMART_FLOOR_FALLBACK", "5"))))
+# 「地量点火」形态的排序加分（2026-09-03 Allen 定：这条形态要进排序，不只做标注）。
+#
+# 证据强度必须连着数字记在这里，否则三个月后没人说得清它凭什么在排序里：
+#   experiments/rule_audit.py 的 ig2_best，T+3、T+1 开盘买入口径，
+#   样本 6231 笔 / 1213 个交易日，匹配对照增量 +0.16pp，7 个年份方向一致，
+#   **但 CI 下沿 −0.05、去右尾后 −0.02** —— 七关里倒在「增量显著」和「去右尾」两关，
+#   也就是「看着有、但统计上跟 0 分不开」。T+5 口径完全失效，所以它是 3 日窗口的形态。
+#
+# 因此加分给得比形态共振（+1.5）略高但仍克制：它是这一族里唯一增量为正的口径，
+# 却没有强到可以主导排序。设 LYNX_IGNITE_BONUS=0 可整条关掉（形态照常显示、不加分），
+# 这是上线后复判为负时的回退路径。
+SMART_POOL_IGNITE_BONUS = max(0.0, min(10.0, float(os.getenv("LYNX_IGNITE_BONUS", "2.0"))))
+# 板块闸：板块 20 日动量的全市场分位低于这条线就只标注不加分。
+# 去掉这一条时增量从 +0.16 掉到 +0.03（ig2_low），板块是这条规则的必要条件而非装饰。
+SMART_POOL_IGNITE_SECTOR_Q = max(0.0, min(1.0, float(os.getenv("LYNX_IGNITE_SECTOR_Q", "0.7"))))
 SMART_POOL_INTRADAY_WEIGHT = 0.22
 # 当日板块强弱在盘中重排里的最大加/减分：分位 1.0 → +N，0.0 → −N，0.5 → 0。
 # 与雷达的板块权重同理，这个数**没有回测依据** —— 板块的盘中口径历史从 2026-08-05
@@ -1538,7 +1553,33 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
     return enriched
 
 
-def _confluence_enrich_items(items: list[dict[str, Any]]) -> None:
+async def _sector_mom_pct_map() -> dict[str, float]:
+    """板块 → 20 日动量的全市场分位。给「地量点火」的板块闸用。
+
+    直接复用轮动图那份缓存（key `sector-rotation:{as_of}`，12h TTL，board_refresh
+    后台预热），不自己算：build_rotation 是约 20 秒的全市场扫描，放在推荐主链路里
+    现算等于每次请求多烧 20 秒 —— 板块保温缓存那条硬约束就是为这个立的。
+    缓存未就绪时返回空 dict，调用方按「拿不到板块 → 不加分」处理，宁可少给分也不
+    在数据缺失时白送。
+    """
+    try:
+        from app.routers.insights import _heavy_cached, _rotation_cache_args
+        rot = await _heavy_cached(*_rotation_cache_args())
+    except Exception as exc:  # noqa: BLE001 — 板块数据拿不到只影响加分，不该阻断推荐
+        print(f"ignite sector momentum unavailable: {exc}")
+        return {}
+    if not rot or not rot.get("items"):
+        return {}
+    out: dict[str, float] = {}
+    for sec in rot["items"]:
+        name = str(sec.get("industry") or "")
+        pct = sec.get("mom20_pct")
+        if name and pct is not None:
+            out[name] = float(pct)
+    return out
+
+
+def _confluence_enrich_items(items: list[dict[str, Any]], sector_mom: dict[str, float] | None = None) -> None:
     """把「形态智选」「强势股」并入一键推荐：给每只结构因子入选票补低位形态识别 +
     相对强度维度，形态/强度共振时给一个展示用加成分并据此微调排序。
 
@@ -1616,8 +1657,47 @@ def _confluence_enrich_items(items: list[dict[str, Any]]) -> None:
             pass
         if matched and sm and sm.get("above_ema8") and sm.get("above_ema21"):
             bonus += 1.0  # 结构 + 形态 + 强度三重共振
+        # 「地量点火」：唯一带匹配对照增量的形态，给专属加分，不跟其它形态共享那 +1.5。
+        # 放在 4.0 上限**之外**——上限管的是「形态/强度/三重共振」这组展示性加成，
+        # 而这一条是有审计数字的独立信号，被上限吃掉就等于没加。
+        ignite = next((p for p in matched if p.get("key") == "dryup_ignite"), None)
+        if ignite:
+            ev = ignite.get("evidence") or {}
+            from quantcore.quant.industry import industry_map as _imap
+            sec_name = (_imap() or {}).get(symbol) or ""
+            sec_q = (sector_mom or {}).get(sec_name)
+            # 两道闸：
+            #   板块 —— 拿不到板块数据时按未过闸处理（宁可不加分，不在数据缺失时白送）；
+            #   新鲜度 —— 加分只给点火当日。审计的入场口径就是「点火日收盘入选、T+1 开盘
+            #   买入」，D+1 之后的收益不在那 6231 笔样本里，给分等于凭空外推。
+            #   D+1~D+3 照常显示（用户要看得见窗口还剩几天），但一分不加。
+            fresh = bool(ev.get("fresh"))
+            gated = fresh and sec_q is not None and sec_q >= SMART_POOL_IGNITE_SECTOR_Q
+            item["ignite"] = {
+                "quiet_days": ev.get("quiet_days"),
+                "amount_ratio": ev.get("amount_ratio"),
+                "dist_ma20": ev.get("dist_ma20"),
+                "sector": sec_name,
+                "sector_mom_pct": round(sec_q, 3) if sec_q is not None else None,
+                "days_since": ev.get("days_since"),
+                "fresh": fresh,
+                "gated": gated,
+                "horizon_days": 3,
+                "bonus": round(SMART_POOL_IGNITE_BONUS, 1) if gated else 0.0,
+            }
+            if gated:
+                tags.append("点火")
+                # 留痕用：picks_history 只存形态名字（逗号拼接），不存 gated 标志。
+                # 不改名的话，三四周后做样本外复判时分不开「真加了分的」和「只标注的」，
+                # 而这条规则上线的全部理由就是等那次复判。展示走的是 row.ignite 那个
+                # 独立标签、且通用形态标签已把 dryup_ignite 过滤掉，所以改名只落到留痕。
+                ignite["name"] = "地量点火·过闸"
         if bonus:
             item["confluence_bonus"] = round(min(bonus, 4.0), 1)
+            item["confluence_tags"] = tags
+        if item.get("ignite", {}).get("gated"):
+            item["confluence_bonus"] = round(
+                float(item.get("confluence_bonus") or 0) + SMART_POOL_IGNITE_BONUS, 1)
             item["confluence_tags"] = tags
         # ①c 双确认：结构因子(池底座) + 低位形态 = 双确认；再叠相对强度 = 三重确认。
         # 交集是最高把握子集——回放里结构分本就 proven，形态是低位反转确认。
@@ -1633,8 +1713,9 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
     data = response.get("data") or {}
     items = data.get("items") or []
     if items:
+        sector_mom = await _sector_mom_pct_map()
         try:
-            await asyncio.to_thread(_confluence_enrich_items, items)
+            await asyncio.to_thread(_confluence_enrich_items, items, sector_mom)
         except Exception as exc:  # noqa: BLE001 — 融合富化失败不能阻断推荐主流程
             print(f"confluence enrich failed: {exc}")
         # ③a 风控硬闸门：命中重度风险(七不买 risk_count≥2=回避)的直接剔除出池——

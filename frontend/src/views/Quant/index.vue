@@ -485,7 +485,23 @@
                   :title="`结构因子之上，形态/强度共振加成 +${row.confluence_bonus}（已计入排序，量化分保持结构分不动）`">
                   共振+{{ row.confluence_bonus }}
                 </el-tag>
-                <el-tag v-for="pattern in (row.patterns || []).slice(0, MAX_PATTERN_TAGS)" :key="pattern.key || pattern.name"
+                <!-- 地量点火：唯一带匹配对照增量的形态，单独出一个标签把剂量摊开
+                     （沉寂几天 / 放大几倍 / 点火后第几天），而不是混在通用形态标签里。
+                     过闸才加分，没过闸也照常显示 —— 让人看见「形态在但板块没跟上」。 -->
+                <el-tag v-if="row.ignite" class="capability-tag"
+                  :type="row.ignite.gated ? 'danger' : 'info'"
+                  :effect="row.ignite.gated ? 'dark' : 'plain'"
+                  :title="row.ignite.gated
+                    ? `地量点火当日：沉寂 ${row.ignite.quiet_days} 天后成交额放大到 ${row.ignite.amount_ratio} 倍，距 20 日线 ${row.ignite.dist_ma20}%，板块 20 日动量前 ${Math.round((1 - row.ignite.sector_mom_pct) * 100)}%。排序 +${row.ignite.bonus}。
+有效窗口约 3 个交易日（T+5 口径实测失效）。
+证据：匹配对照增量 +0.16pp、7 年方向一致，但置信区间下沿为负——统计上与 0 分不开，属观察期规则。`
+                    : (row.ignite.fresh
+                        ? `形态成立但板块未过闸：板块 ${row.ignite.sector || '未知'} 的 20 日动量分位 ${row.ignite.sector_mom_pct == null ? '取不到' : Math.round(row.ignite.sector_mom_pct * 100)}，低于 70 分位线，不加分。去掉板块条件后增量从 +0.16 掉到 +0.03。`
+                        : `点火已是 ${row.ignite.days_since} 个交易日前，窗口还剩约 ${3 - row.ignite.days_since} 天。加分只给点火当日（审计入场口径就是那一天），这里只作提示。`)">
+                  {{ row.ignite.fresh ? '地量点火' : `地量点火 D+${row.ignite.days_since}` }}
+                  · 沉寂{{ row.ignite.quiet_days }}天 · {{ row.ignite.amount_ratio }}倍<template v-if="row.ignite.gated"> · +{{ row.ignite.bonus }}</template>
+                </el-tag>
+                <el-tag v-for="pattern in (row.patterns || []).filter(p => p.key !== 'dryup_ignite').slice(0, MAX_PATTERN_TAGS)" :key="pattern.key || pattern.name"
                   class="capability-tag"
                   :type="pattern.category === '三不卖' ? 'success' : 'primary'"
                   :effect="pattern.category === '三不卖' ? 'dark' : 'plain'"
@@ -515,7 +531,7 @@
                   title="现价距近 20 日最高价。贴着高点买入，等于没有回撤缓冲">
                   离高点 {{ signedPercent(row.entry_position.dist_high20) }}
                 </el-tag>
-                <span v-if="!row.confluence_bonus && !(row.patterns || []).length && !row.strength" class="panel-pending">—</span>
+                <span v-if="!row.confluence_bonus && !(row.patterns || []).length && !row.strength && !row.ignite" class="panel-pending">—</span>
               </template>
             </el-table-column>
             <el-table-column label="入选理由" min-width="300">

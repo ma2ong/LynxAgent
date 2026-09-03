@@ -1,0 +1,115 @@
+{
+  "since": "2019-01-01",
+  "horizon": 3,
+  "entry": "open",
+  "generated_at": "2026-09-03T12:02:45",
+  "thresholds": {
+    "MIN_SAMPLES": 200,
+    "MIN_CLUSTERS": 30,
+    "MIN_STABLE_YEARS": 3,
+    "TAIL_DROP": 0.05,
+    "FRICTION_PP": 0.312,
+    "ALPHA": 0.05
+  },
+  "results": [
+    {
+      "rule": "ignite_best",
+      "horizon": 3,
+      "samples": 3798,
+      "clusters": 1085,
+      "avg_excess": 0.711,
+      "avg_excess_by_pick": 0.611,
+      "median_excess": -0.021,
+      "win_rate": 0.4982,
+      "t": 5.8,
+      "p_raw": 6.693350318442981e-09,
+      "net_of_friction": 0.399,
+      "weighting_conflict": false,
+      "matched_n": 3797,
+      "inc_excess": 0.249,
+      "inc_ci_lo": 0.007,
+      "inc_ci_hi": 0.49,
+      "inc_win": -0.0025,
+      "inc_win_ci_lo": -0.0253,
+      "p_inc": 0.04381073701381322,
+      "inc_ex_tail": 0.047,
+      "avg_excess_ex_tail": -0.127,
+      "by_year": {
+        "2020": 0.799,
+        "2021": 1.097,
+        "2022": 1.089,
+        "2023": 0.063,
+        "2024": 0.951,
+        "2025": 0.713,
+        "2026": 0.229
+      },
+      "stable_years": 7,
+      "desc": "点火 + 位置不高 + 板块动量前30%",
+      "p_holm_threshold": 0.025,
+      "pass_holm": false,
+      "gates": {
+        "样本量": true,
+        "超额为正": true,
+        "对照增量为正": true,
+        "去右尾仍为正": true,
+        "时间稳定": true,
+        "多重检验": false,
+        "扣摩擦为正": true
+      },
+      "passed": false,
+      "failed_gates": [
+        "多重检验"
+      ]
+    },
+    {
+      "rule": "ignite_best_pack",
+      "horizon": 3,
+      "samples": 1376,
+      "clusters": 365,
+      "avg_excess": 0.603,
+      "avg_excess_by_pick": 0.594,
+      "median_excess": 0.05,
+      "win_rate": 0.5058,
+      "t": 2.62,
+      "p_raw": 0.008906166408776173,
+      "net_of_friction": 0.291,
+      "weighting_conflict": false,
+      "matched_n": 1376,
+      "inc_excess": 0.09,
+      "inc_ci_lo": -0.357,
+      "inc_ci_hi": 0.537,
+      "inc_win": -0.0042,
+      "inc_win_ci_lo": -0.0441,
+      "p_inc": 0.6927966619365089,
+      "inc_ex_tail": 0.005,
+      "avg_excess_ex_tail": -0.159,
+      "by_year": {
+        "2020": 1.051,
+        "2021": 0.903,
+        "2022": 0.545,
+        "2023": 0.039,
+        "2024": 1.153,
+        "2025": 0.874,
+        "2026": -0.443
+      },
+      "stable_years": 6,
+      "desc": "点火 + 位置不高 + 板块动量 + 同板块≥3只共振",
+      "p_holm_threshold": 0.05,
+      "pass_holm": false,
+      "gates": {
+        "样本量": true,
+        "超额为正": true,
+        "对照增量为正": false,
+        "去右尾仍为正": true,
+        "时间稳定": true,
+        "多重检验": false,
+        "扣摩擦为正": true
+      },
+      "passed": false,
+      "failed_gates": [
+        "对照增量为正",
+        "多重检验"
+      ]
+    }
+  ]
+}

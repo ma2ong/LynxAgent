@@ -340,19 +340,22 @@ async def health():
 
 # 一键智选最终名单的条数上限。原先在 safe_limit / _finalize_intraday_quality /
 # structure_shadow 三处各写死 10，导致前端「推荐上限」控件调了也没用——改这里一处即可。
-# 2026-09-01 Allen 定：给满 10 只。20 只太多，看不过来。
-SMART_POOL_MAX_ITEMS = 10
+# 2026-09-04 起它是**门槛之上的封顶**：行情好、80 分以上一大把时最多给 20 只，
+# 再多用户也看不过来。不再是「每天固定给这么多」。
+SMART_POOL_MAX_ITEMS = 20
 # 一键智选最终名单的分数门槛：达到这条线才上榜。
 #
-# 口径变过两轮，这里记全，免得再来回改：
+# 口径变过三轮，这里记全，免得再来回改：
 #   2026-08-06  名次制，给满 20 只；
 #   2026-08-20  改门槛制（≥90 分，不限只数）—— 理由是名次上限两头都不对：强势日
 #               第 21 只 92 分被砍掉，弱市又要拿 80 分的凑满 20 只；
-#   2026-09-01  Allen 定：**回到名次制，取前 10 只，不设分数线**。门槛制的代价是
-#               名单只数每天飘忽，弱市甚至只剩保底的几只 —— 产品上宁可稳定给 10 只
-#               让用户自己筛，也不要今天 3 只明天 17 只。
-# 设 LYNX_SMART_SCORE_FLOOR=90 可退回门槛制（届时 SMART_POOL_MAX_ITEMS 不生效）。
-SMART_POOL_SCORE_FLOOR = max(0.0, min(100.0, float(os.getenv("LYNX_SMART_SCORE_FLOOR", "0"))))
+#   2026-09-01  回到名次制，取前 10 只，不设分数线 —— 门槛制的代价是名单只数每天
+#               飘忽，弱市甚至只剩保底的几只；
+#   2026-09-04  Allen 定：**门槛制 + 封顶**，≥80 分才上榜，20 只以内不限数量，
+#               超过 20 只只给最强的 20 只。两头都堵住了：弱市不拿 70 分的凑数，
+#               强势日也不会甩一屏看不完的票。
+# 设 LYNX_SMART_SCORE_FLOOR=0 可退回纯名次制（届时只按综合排序取前 SMART_POOL_MAX_ITEMS 只）。
+SMART_POOL_SCORE_FLOOR = max(0.0, min(100.0, float(os.getenv("LYNX_SMART_SCORE_FLOOR", "80"))))
 # 时机层加分的**盘中信号分**门槛（2026-08-28 Allen 定）：盘中信号分不到这条线的，
 # 状态标签照常显示，但一分不加。此前只看状态（entry/watch）不看强度，一个 60 分的
 # 弱确认和一个 95 分的强确认拿到同样的 +8。与上面的名单门槛是两回事：那条管
@@ -1180,7 +1183,8 @@ def _merge_intraday_quality(
         "candidate_count": int(overlay.get("candidate_count") or 0),
     }
     cut_note = (
-        f"最终只保留综合排序≥{SMART_POOL_SCORE_FLOOR:.0f}分的标的，不限只数。"
+        f"最终只保留综合排序≥{SMART_POOL_SCORE_FLOOR:.0f}分的标的，"
+        f"{SMART_POOL_MAX_ITEMS} 只以内不限数量，超出只取最强的 {SMART_POOL_MAX_ITEMS} 只。"
         if SMART_POOL_SCORE_FLOOR > 0
         else f"最终按综合排序取前 {SMART_POOL_MAX_ITEMS} 名。"
     )
@@ -1296,13 +1300,18 @@ def _finalize_intraday_quality(data: dict[str, Any], target: int, score_floor: f
     # 上限跟随端点的 safe_limit（现 20），不再写死 10——写死会让「推荐上限」控件失效。
     safe_target = max(1, min(int(target or SMART_POOL_MAX_ITEMS), SMART_POOL_MAX_ITEMS))
     if score_floor > 0:
-        # 门槛制：够分就上榜，不限只数，也不按名次砍。
+        # 门槛制 + 封顶：够分就上榜，不按名次砍；只有够分的超过 safe_target 只时才截断。
+        # 截断要记进 score_floor_extra，前端得说清「不是只有这些够分，是给你挑了最强的」。
         best = max((_quality_of(item) for item in kept), default=0.0)
         survivors = [item for item in kept if _quality_of(item) >= score_floor]
         data["score_floor"] = round(score_floor, 1)
         data["score_floor_best"] = round(best, 1)
         data["score_floor_fallback"] = False
         data["score_floor_note"] = ""
+        data["score_floor_qualified"] = len(survivors)
+        data["score_floor_extra"] = max(0, len(survivors) - safe_target)
+        if len(survivors) > safe_target:
+            survivors = survivors[:safe_target]
         if not survivors and kept and SMART_POOL_FLOOR_FALLBACK > 0:
             survivors = kept[:SMART_POOL_FLOOR_FALLBACK]
             data["score_floor_fallback"] = True
@@ -1500,8 +1509,8 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
                 item["radar_signal"]["actionable"] = False
             if item.get("timing_status") == "confirmed":
                 item["timing_label"] = "环境数据不足·暂停入场"
-    # 用户最终看到的名单在这里定稿：现按综合排序取前 SMART_POOL_MAX_ITEMS 只
-    # （门槛制已于 2026-09-01 关闭，见 SMART_POOL_SCORE_FLOOR 处的口径沿革）。
+    # 用户最终看到的名单在这里定稿：现为门槛制 + 封顶（≥SMART_POOL_SCORE_FLOOR 分才上榜，
+    # 最多 SMART_POOL_MAX_ITEMS 只），见 SMART_POOL_SCORE_FLOOR 处的口径沿革。
     _finalize_intraday_quality(
         data,
         int(data.get("requested_limit") or len(items) or SMART_POOL_MAX_ITEMS),
@@ -1747,7 +1756,12 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
             for it in excluded[:5]
         ]
         await _apply_intraday_quality(data)
-        _finalize_intraday_quality(data, target or SMART_POOL_MAX_ITEMS)
+        # 门槛要和用户最终看到的名单同口径：这里砍出来的 items 就是下面留痕的 "smart"，
+        # 少传 score_floor 的话，留痕里会混进够名次但不够分、用户根本没见过的票，
+        # 胜率复盘算的就不是这份名单了。
+        _finalize_intraday_quality(
+            data, target or SMART_POOL_MAX_ITEMS, score_floor=SMART_POOL_SCORE_FLOOR
+        )
         items = data.get("items") or []
         # ①c 双确认子集计数，供前端展示/筛选
         data["dual_confirm_count"] = sum(1 for it in items if it.get("dual_confirm"))
@@ -2009,8 +2023,8 @@ async def _compute_lite_smart_pool_unlocked(
             "smart_pool",
             limit=safe_limit,
             universe_limit=safe_universe,
-            # 多带 40 只备胎供风控剔除后回填；名单改成 90 分门槛制后备胎还要兜住
-            # 「第 40 名之外仍有够 90 分的票」——池子不够深，门槛制就名不副实。
+            # 多带 40 只备胎供风控剔除后回填；门槛制下备胎还要兜住
+            # 「第 40 名之外仍有够门槛的票」——池子不够深，门槛制就名不副实。
             # 留痕交给 _apply_confluence 在最终名单上做
             spare=40,
             record=False,
@@ -2399,7 +2413,7 @@ async def _compute_lite_smart_pool_unlocked(
         "items": items,
         "source_note": (
             "结构候选叠加 AI 因子、形态强度和盘中量价时机确认，"
-            + (f"只输出综合排序≥{SMART_POOL_SCORE_FLOOR:.0f}分的标的"
+            + (f"只输出综合排序≥{SMART_POOL_SCORE_FLOOR:.0f}分的标的，最多 {SMART_POOL_MAX_ITEMS} 只"
                if SMART_POOL_SCORE_FLOOR > 0
                else f"按综合排序取前 {SMART_POOL_MAX_ITEMS} 只")
             + "；时机层正在独立留痕验证，仅供研究。"

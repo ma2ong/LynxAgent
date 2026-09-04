@@ -177,6 +177,8 @@ export interface QuantSmartPoolResult {
   score_floor_best?: number
   score_floor_note?: string
   score_floor_fallback?: boolean
+  score_floor_qualified?: number
+  score_floor_extra?: number
   ai_factor?: {
     status?: string
     pick_date?: string
@@ -475,6 +477,8 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     score_floor_best: raw?.score_floor_best,
     score_floor_note: raw?.score_floor_note,
     score_floor_fallback: raw?.score_floor_fallback,
+    score_floor_qualified: raw?.score_floor_qualified,
+    score_floor_extra: raw?.score_floor_extra,
     intraday_candidate_count: raw?.intraday_candidate_count,
     position_gate: raw?.position_gate,
     list_basis: raw?.list_basis,

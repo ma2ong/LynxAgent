@@ -18,7 +18,7 @@ from quantcore.quant.factors import blend_intraday_score, intraday_strength_scor
 
 @pytest.fixture(autouse=True)
 def _disable_score_floor(monkeypatch):
-    """默认关掉 90 分入选门槛（SMART_POOL_SCORE_FLOOR）。
+    """默认关掉入选门槛（SMART_POOL_SCORE_FLOOR，现为 80）。
 
     本文件多数用例的假分数在 50~88，开着门槛会被整池滤空，考的就不是原来那条不变量了。
     门槛本身由 test_score_floor_* 覆盖。
@@ -518,16 +518,32 @@ def _finalize_with_floor(items: list[dict], floor: float = 90.0) -> dict:
     return data
 
 
-def test_score_floor_keeps_every_qualified_pick_without_count_cap(monkeypatch):
-    """够 90 分的全给，不再按名次砍到 20 只（2026-08-20 Allen 定的口径）。"""
+def test_score_floor_gives_every_qualified_pick_up_to_the_cap(monkeypatch):
+    """够门槛的全给——只数不设下限，只在超过封顶时才截断（2026-09-04 Allen 定的口径）。"""
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
+    data = _finalize_with_floor(
+        [_floor_pick(f"600{i:03d}", 99.0 - i * 0.2) for i in range(14)]
+    )
+
+    assert len(data["items"]) == 14
+    assert [item["rank"] for item in data["items"]] == list(range(1, 15))
+    assert data["score_floor"] == 90.0
+    assert data["score_floor_qualified"] == 14
+    assert data["score_floor_extra"] == 0
+
+
+def test_score_floor_caps_a_flood_of_qualified_picks_and_says_how_many_were_cut(monkeypatch):
+    """行情好、够分的一大把时只给最强的封顶只数，但要说清有多少只达标被砍。"""
     monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
     data = _finalize_with_floor(
         [_floor_pick(f"600{i:03d}", 99.0 - i * 0.2) for i in range(28)]
     )
 
-    assert len(data["items"]) == 28 > lite_main.SMART_POOL_MAX_ITEMS
-    assert [item["rank"] for item in data["items"]] == list(range(1, 29))
-    assert data["score_floor"] == 90.0
+    assert len(data["items"]) == lite_main.SMART_POOL_MAX_ITEMS
+    assert data["score_floor_qualified"] == 28
+    assert data["score_floor_extra"] == 28 - lite_main.SMART_POOL_MAX_ITEMS
+    # 砍掉的是最弱的那几只，留下的必须是实时排序最强的
+    assert [item["symbol"] for item in data["items"]][:3] == ["600000", "600001", "600002"]
 
 
 def test_score_floor_drops_everything_below_the_line(monkeypatch):

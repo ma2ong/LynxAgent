@@ -77,7 +77,7 @@
                 {{ showPoolDesc ? '收起说明' : '选股逻辑' }}
               </a>
             </h2>
-            <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），盘中爆发只允许结构质量前 10% 的股票晋级，再按实时量价与雷达时机重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜；最终按综合排序取前 10 只，不设分数线——名单只数每天固定，末位不一定够强，需要你自己再筛一道。只有绿色“量价已确认”才代表通过了第二重条件。</p>
+            <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），盘中爆发只允许结构质量前 10% 的股票晋级，再按实时量价与雷达时机重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜；最终只留综合排序 ≥ 80 分的，20 只以内有多少给多少，够分的超过 20 只时只取最强的 20 只——所以名单每天长短不一，弱市少是正常的。只有绿色“量价已确认”才代表通过了第二重条件。</p>
           </div>
           <div class="smart-inline-settings">
             <label>
@@ -93,11 +93,12 @@
             <span
               class="score-floor-chip"
               :title="smartByScoreFloor
-                ? '综合排序分＝日K结构分与盘中量价融合后的 0~100 刻度。达到门槛就上榜，多少只都给；今天没有够分的就不给。'
+                ? `综合排序分＝日K结构分与盘中量价融合后的 0~100 刻度。达到门槛就上榜，${smartListCap} 只以内有多少给多少；够分的超过 ${smartListCap} 只时只取最强的 ${smartListCap} 只；今天没有够分的就不给。`
                 : '综合排序分＝日K结构分与盘中量价融合后的 0~100 刻度。按这个分数从高到低取前 N 只，不设分数线——名单只数每天固定，好坏由你自己筛。'"
             >
               <template v-if="smartByScoreFloor">
-                入选门槛 综合排序 ≥ <b>{{ smartScoreFloor }}</b> 分 · 不限只数
+                入选门槛 综合排序 ≥ <b>{{ smartScoreFloor }}</b> 分 · 最多 {{ smartListCap }} 只
+                <em v-if="smartFloorExtra > 0" class="floor-extra">今日达标 {{ smartFloorQualified }} 只，已取最强 {{ smartListCap }} 只</em>
               </template>
               <template v-else>
                 按综合排序取前 <b>{{ smartListCount || smartPoolForm.limit }}</b> 只 · 不设分数线
@@ -346,7 +347,7 @@
             v-if="smartPoolResult && !smartPoolResult.score_floor_fallback && smartPoolResult.items.length > 0 && smartPoolResult.items.length < 5"
             type="info" :closable="false" show-icon class="few-picks-tip"
             :title="`当前市场环境下达标标的仅 ${smartPoolResult.items.length} 只`"
-            description="名单按综合排序取前 N 只、不设分数线；不足 N 只说明部分候选被风控剔除了。可参考顶部大盘环境提示控制仓位。"
+            description="名单只收综合排序够门槛的，够几只给几只；今天少说明全市场就没几只够分（或部分候选被风控剔除）。可参考顶部大盘环境提示控制仓位。"
           />
           <el-table
             v-if="smartPoolResult?.items.length"
@@ -639,9 +640,9 @@ const healthLoading = ref(false)
 // universe_limit 的上限＝数据中心本地股票池规模（health.meta_count），不再写死 10000：
 // 后端本来就按 min(universe_limit, 全市场) 取池，写死的 10000 只会让页面报一个
 // 与数据中心「本地股票池 / K线覆盖」对不上的假数字。
-// 默认只数与后端 SMART_POOL_MAX_ITEMS 对齐（2026-09-01 起为 10）；后端仍会二次夹紧，
-// 这里写对只是别让控件一进来就显示一个拿不到的数字。
-const smartPoolForm = ref({ limit: 10, universe_limit: DEFAULT_UNIVERSE_LIMIT, strategy: 'balanced' })
+// 默认只数与后端 SMART_POOL_MAX_ITEMS 对齐（2026-09-04 起为 20，且它现在是门槛之上的封顶）；
+// 后端仍会二次夹紧，这里写对只是别让控件一进来就显示一个拿不到的数字。
+const smartPoolForm = ref({ limit: 20, universe_limit: DEFAULT_UNIVERSE_LIMIT, strategy: 'balanced' })
 const smartPoolLoading = ref(false)
 const smartPoolResult = ref<QuantSmartPoolResult | null>(null)
 const smartPoolTask = ref<QuantSmartPoolTask | null>(null)
@@ -649,12 +650,17 @@ const smartTableRef = ref<any>()
 const selectedSmartRows = ref<QuantSmartPoolItem[]>([])
 // ①c 双确认筛选：只看结构因子+低位形态双确认的最高把握子集
 const smartDualOnly = ref(false)
-// 入选门槛由后端给（LYNX_SMART_SCORE_FLOOR），拿不到时按默认 90 显示。
-// 后端关掉门槛制时不再下发 score_floor（走名次制），所以默认是 0 而不是 90——
-// 写 90 会让界面在门槛已关的情况下仍宣称「≥90 分才上榜」。
+// 入选门槛由后端给（LYNX_SMART_SCORE_FLOOR，现为 80）。后端关掉门槛制时不再下发
+// score_floor（走名次制），所以默认是 0 而不是 80——写死会让界面在门槛已关的情况下
+// 仍宣称「≥80 分才上榜」。
 const smartScoreFloor = computed(() => Number(smartPoolResult.value?.score_floor ?? 0))
-// 名单口径二选一：门槛制（够分就上，只数不定）或名次制（取前 N 只）。
+// 名单口径二选一：门槛制（够分就上，封顶 smartListCap 只）或名次制（取前 N 只）。
 const smartByScoreFloor = computed(() => smartScoreFloor.value > 0)
+// 封顶只数由后端 requested_limit 下发（＝SMART_POOL_MAX_ITEMS 夹紧后的值）。
+const smartListCap = computed(() => Number(smartPoolResult.value?.requested_limit || smartPoolForm.value.limit))
+// 达标却被封顶砍掉的只数：>0 时要说清「不是只有这些够分」。
+const smartFloorQualified = computed(() => Number(smartPoolResult.value?.score_floor_qualified ?? 0))
+const smartFloorExtra = computed(() => Number(smartPoolResult.value?.score_floor_extra ?? 0))
 const smartListCount = computed(() => smartPoolResult.value?.items?.length ?? 0)
 // 中位近20日涨幅越高，追高提示越该显眼。阈值取 15%：回放里这个池 83% 的选股在此之上。
 const profileTone = computed(() => {
@@ -729,7 +735,7 @@ const smartProgressSteps = computed(() => {
       index: '4',
       name: '输出候选池',
       text: smartByScoreFloor.value
-        ? `留下综合排序 ≥ ${smartScoreFloor.value} 分的标的（不限只数，弱市达标少属正常）`
+        ? `留下综合排序 ≥ ${smartScoreFloor.value} 分的标的（最多 ${smartListCap.value} 只，弱市达标少属正常）`
         : `按综合排序取前 ${smartListCount.value || smartPoolForm.value.limit} 只（不设分数线，末位不一定够强）`,
       status: smartStepStatus(86, 100)
     }
@@ -1036,7 +1042,7 @@ const pollSmartPoolTask = async (taskId: string) => {
         } else {
           if (_res.position_gate?.note) parts.push(_res.position_gate.note)
           if (_exc) parts.push(`另有 ${_exc} 只候选命中「七不买」重度风险，已被风控剔除（宁可没得选也不给雷票）。`)
-          parts.push('候选全部被风控剔除，今日暂无可推荐标的——名单按综合排序取前 N 只、不设分数线，空池只会来自风控。')
+          parts.push('候选全部被风控剔除，今日暂无可推荐标的——名单只收综合排序够门槛的，空池要么是风控清了场，要么是今天全市场没有够分的。')
         }
         ElMessageBox.alert(
           parts.join('\n\n'),
@@ -1392,6 +1398,12 @@ const openChart = async (row: any) => {
 
     b {
       font-size: 14px;
+    }
+
+    .floor-extra {
+      font-style: normal;
+      font-size: 12px;
+      color: var(--el-text-color-secondary);
     }
   }
 }

@@ -82,24 +82,30 @@ def _rotation_cache_args():
 
 
 @router.get("/api/lite/sector-leaders")
-async def lite_sector_leaders():
+async def lite_sector_leaders(sort: str = "mom20"):
     """个股深研「按赛道浏览龙头股」：热门板块 + 板块内龙头，点击即进深研报告。
 
     2026-09-02 从人工策划改为跟着板块轮动走。原来是 12 个手写赛道 × 6 只手写龙头，
     一共 72 只票要跟着轮动手工维护 —— 半年后它会变成一份过时的清单，而且看不出过时
     （`sector_leaders.py` 里 603501 还写着「韦尔股份」，公司早已改名豪威集团）。
 
-    排序只用 20 日板块涨幅：那是审计里唯一过全部七闸的信号。**成交额只做准入不进排序** ——
-    板块量能扩张实测无 alpha（rule_audit 的 sector_volexp），拿它排序等于把一个证伪过
-    的因子塞回来。
+    默认排序用 20 日板块涨幅：那是规则审计里唯一过全部七闸的信号；板块量能扩张实测
+    无 alpha（rule_audit 的 sector_volexp）。`sort=amount` 是 Allen 要的第二视角
+    （2026-09-04），按人气看板块——它只切展示顺序，不进任何选股排序，别当信号用。
 
-    两道准入：板块 20 日涨幅 ≥ MIN_MOM20，且近 5 日成交额 ≥ SECTOR_MIN_AMOUNT ——
-    后者滤掉无人问津的板块，那种票涨得再好也买不进。不达标的不丢弃，收进 others
-    交给前端折叠：弱市可能一个都不达标，硬隐藏会让整页空掉。
+    主榜口径 2026-09-04 从「绝对阈值」改成「取前 HOT_LIMIT」：涨幅≥5% 这种绝对门槛
+    在弱市会把整页折叠光（当日 121 个板块只有 7 个过 5%、过完成交额只剩 2 个），在强市
+    又会溢出几十个。这是个**浏览面**，要的是「今天最值得逛的十来条赛道」，那门槛就该
+    是相对的。成交额门槛（SECTOR_MIN_AMOUNT）保留，但只做准入：滤掉无人交易的板块，
+    那种票涨得再好也买不进。没进主榜的不丢弃，收进 others 交给前端折叠。
     """
     from quantcore.quant.rotation import SECTOR_MIN_AMOUNT
 
-    MIN_MOM20 = 5.0
+    # amount 视角要先卡住涨幅，否则榜首永远是半导体/通信设备这些体量最大的板块——
+    # 它们成交额常年第一，跟今天涨不涨没关系，列表会几乎不动。
+    HOT_LIMIT = 12
+    MIN_MOM20_FOR_AMOUNT = 1.0
+    by_amount = sort == "amount"
     rot = await _heavy_cached(*_rotation_cache_args())
     if rot is None or not rot.get("items"):
         return {"success": True, "message": "ok", "data": {
@@ -119,12 +125,21 @@ async def lite_sector_leaders():
             "items": list(sec.get("leaders") or []),
         }
 
-    hot, others = [], []
-    for sec in rot["items"]:
-        if not sec.get("leaders"):
-            continue                   # 板块里一只票都过不了流动性下限，展示它没有意义
-        (hot if (sec["mom20"] >= MIN_MOM20 and sec["amount_5d"] * 1e8 >= SECTOR_MIN_AMOUNT)
-         else others).append(shape(sec))
+    eligible = [sec for sec in rot["items"] if sec.get("leaders")]
+    # 板块里一只票都过不了流动性下限的直接丢掉，展示它没有意义（上面已经滤过）
+    liquid = [sec for sec in eligible if sec["amount_5d"] * 1e8 >= SECTOR_MIN_AMOUNT]
+    if by_amount:
+        pool = [sec for sec in liquid if sec["mom20"] >= MIN_MOM20_FOR_AMOUNT]
+        pool.sort(key=lambda s: -s["amount_5d"])
+    else:
+        pool = sorted(liquid, key=lambda s: -s["mom20"])
+    picked = {id(sec) for sec in pool[:HOT_LIMIT]}
+    hot = [shape(sec) for sec in pool[:HOT_LIMIT]]
+    rest = [sec for sec in eligible if id(sec) not in picked]
+    rest.sort(key=lambda s: (-s["amount_5d"]) if by_amount else (-s["mom20"]))
+    # 折叠区只展示 20 个，就只 shape 这 20 个：下面要给每只龙头拉实时报价，
+    # 把全部一百多个板块都带上等于每次多请求七百多个代码，全部丢弃。
+    others = [shape(sec) for sec in rest[:20]]
 
     codes = [it["code"] for sec in hot + others for it in sec["items"]]
     quotes = await _realtime_quotes(codes, allow_snapshot_fallback=True)
@@ -137,17 +152,23 @@ async def lite_sector_leaders():
             it["price"] = round(float(price), 2) if price is not None else None
             it["pct_chg"] = round(float(pct), 2) if pct is not None else None
 
+    min_yi = round(SECTOR_MIN_AMOUNT / 1e8)
+    note = (
+        (f"板块按近 5 日成交额排序，只列 20 日涨幅≥{MIN_MOM20_FOR_AMOUNT:.0f}%、"
+         f"且近 5 日成交额≥{min_yi} 亿的前 {HOT_LIMIT} 个；")
+        if by_amount else
+        (f"板块按近 20 日涨幅排序，取近 5 日成交额≥{min_yi} 亿的前 {HOT_LIMIT} 个；"
+         "成交额只做准入不参与排序。")
+    ) + "龙头为板块内 20 日涨幅最高、且日均成交额≥1 亿的个股。"
     return {"success": True, "message": "ok", "data": {
         "sectors": hot,
-        "others": others[:20],
+        "others": others,
         "as_of": rot.get("as_of"),
-        "min_mom20": MIN_MOM20,
-        "min_amount_yi": round(SECTOR_MIN_AMOUNT / 1e8),
+        "sort": "amount" if by_amount else "mom20",
+        "hot_limit": HOT_LIMIT,
+        "min_amount_yi": min_yi,
         "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
-        "note": (f"板块按近 20 日涨幅排序，只列涨幅≥{MIN_MOM20:.0f}%、"
-                 f"且近 5 日成交额≥{round(SECTOR_MIN_AMOUNT / 1e8)} 亿的；"
-                 "龙头为板块内 20 日涨幅最高、且日均成交额≥1 亿的个股。"
-                 "成交额只做准入不参与排序。"),
+        "note": note,
     }}
 
 

@@ -67,14 +67,25 @@
     <div v-if="!loading && !data" class="sector-home">
       <div class="browse-head">
         <div class="bh-title"><span class="bh-bar" />按赛道浏览龙头股</div>
-        <span v-if="sectorsUpdatedAt" class="updated">行情更新于 {{ sectorsUpdatedAt }}</span>
+        <div class="bh-right">
+          <div class="sort-switch">
+            <button
+              v-for="opt in SECTOR_SORTS"
+              :key="opt.value"
+              type="button"
+              :class="['ss-btn', { on: sectorSort === opt.value }]"
+              @click="setSectorSort(opt.value)"
+            >{{ opt.label }}</button>
+          </div>
+          <span v-if="sectorsUpdatedAt" class="updated">行情更新于 {{ sectorsUpdatedAt }}</span>
+        </div>
       </div>
 
       <div v-if="sectorsLoading && !sectors.length" class="loading-hint">正在加载赛道行情…</div>
       <div v-else-if="sectorsComputing" class="loading-hint">板块数据正在计算（约 15 秒），稍后刷新即可。</div>
       <p v-if="sectorsNote" class="sector-note">{{ sectorsNote }}</p>
       <p v-if="!sectorsComputing && !sectors.length && otherSectors.length" class="sector-note warn">
-        今日没有板块同时满足「20 日涨幅≥5%」和「成交额居前」，展开下方可看其余板块。
+        今日没有板块达到成交额门槛，展开下方可看其余板块。
       </p>
 
       <div v-for="sector in sectors" :key="sector.key" class="sector-block">
@@ -114,7 +125,7 @@
       </div>
       <div v-if="otherSectors.length" class="others-fold">
         <button type="button" class="fold-btn" @click="showOthers = !showOthers">
-          {{ showOthers ? '收起' : '展开' }}其余 {{ otherSectors.length }} 个板块（未达 20 日涨幅或成交额门槛）
+          {{ showOthers ? '收起' : '展开' }}其余 {{ otherSectors.length }} 个板块
         </button>
         <template v-if="showOthers">
           <div v-for="sector in otherSectors" :key="sector.key" class="sector-block dim">
@@ -660,18 +671,30 @@ type SectorItem = {
   mom20?: number; mom20_pct?: number; amount_5d?: number; quadrant?: string
 }
 const sectors = ref<SectorItem[]>([])
-// 不达标的板块不丢弃，收进折叠区：弱市可能一个板块都到不了 5%，硬隐藏会让整页空掉。
+// 没进主榜的板块不丢弃，收进折叠区：主榜只取前 12，硬隐藏其余的会让人以为市场只有这些。
 const otherSectors = ref<SectorItem[]>([])
 const showOthers = ref(false)
 const sectorsNote = ref('')
 const sectorsComputing = ref(false)
 const sectorsLoading = ref(false)
 const sectorsUpdatedAt = ref('')
-const loadSectors = async () => {
-  if (sectors.value.length && !sectorsComputing.value) return
+// 涨幅是默认视角（唯一过规则审计的板块信号）；成交额是「今天钱在哪」的第二视角，
+// 只切展示顺序。记住选择：这是浏览习惯，不该每次进页面都重选。
+const SECTOR_SORTS = [
+  { value: 'mom20', label: '按 20 日涨幅' },
+  { value: 'amount', label: '按成交额' },
+] as const
+const SECTOR_SORT_KEY = 'lynx_sector_sort'
+const sectorSort = ref(localStorage.getItem(SECTOR_SORT_KEY) === 'amount' ? 'amount' : 'mom20')
+const loadSectors = async (force = false) => {
+  if (!force && sectors.value.length && !sectorsComputing.value) return
   sectorsLoading.value = true
   try {
-    const res: any = await ApiClient.get('/api/lite/sector-leaders', { _ts: Date.now() }, { timeout: 20000 })
+    const res: any = await ApiClient.get(
+      '/api/lite/sector-leaders',
+      { sort: sectorSort.value, _ts: Date.now() },
+      { timeout: 20000 },
+    )
     sectors.value = res?.data?.sectors || []
     otherSectors.value = res?.data?.others || []
     sectorsNote.value = res?.data?.note || ''
@@ -682,6 +705,14 @@ const loadSectors = async () => {
   } finally {
     sectorsLoading.value = false
   }
+}
+
+const setSectorSort = (value: string) => {
+  if (sectorSort.value === value) return
+  sectorSort.value = value
+  localStorage.setItem(SECTOR_SORT_KEY, value)
+  showOthers.value = false   // 换了口径，折叠区里装的板块也变了，收回去重新看
+  loadSectors(true)
 }
 
 function saveHistory(code: string, name?: string) {
@@ -1058,6 +1089,14 @@ onUnmounted(() => {
 .bh-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; }
 .bh-bar { width: 3px; height: 15px; border-radius: 2px; background: var(--el-color-primary); }
 .updated { font-size: 12px; color: var(--el-text-color-secondary); }
+.bh-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sort-switch { display: inline-flex; border: 1px solid var(--el-border-color); border-radius: 6px; overflow: hidden; }
+.ss-btn { border: 0; background: transparent; cursor: pointer; padding: 3px 10px; font-size: 12px;
+  color: var(--el-text-color-secondary); line-height: 20px;
+  & + .ss-btn { border-left: 1px solid var(--el-border-color); }
+  &:hover { color: var(--el-color-primary); }
+  &.on { background: var(--el-color-primary); color: #fff; }
+}
 .sector-block { display: flex; flex-direction: column; gap: 10px; }
 .sector-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   .sec-accent { width: 6px; height: 6px; border-radius: 50%; background: var(--el-color-warning); }

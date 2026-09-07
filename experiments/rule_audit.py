@@ -293,6 +293,107 @@ def _attach_ignite_sector(df: pd.DataFrame) -> None:
     df.drop(columns=["_ig"], inplace=True)
 
 
+def _attach_limit(df: pd.DataFrame) -> None:
+    """涨停与连板高度。日线能算，不需要外部涨停榜。
+
+    阈值按板块：创业板/科创板 19.5%，其余 9.7%（留 0.3pp 余量吸收复权误差）。
+    ST 的 5% 板认不出来 —— 历史 ST 状态本地没有，这批票会被漏判成「没涨停」。
+    漏判只会让信号变少，不会把非涨停错认成涨停，方向上是保守的。
+    """
+    thr = np.where(df["symbol"].str.startswith(("30", "688")), 19.5, 9.7)
+    df["is_limit"] = df["ret1"] >= thr
+    # 连板高度：连续涨停的天数。用「非涨停日的累计数」当分组键，同一段连板落在同一组。
+    seg = (~df["is_limit"]).groupby(df["symbol"], sort=False).cumsum()
+    df["board_height"] = df["is_limit"].astype(int).groupby(
+        [df["symbol"], seg], sort=False).cumsum()
+    # 前 5 日（不含当日）有没有涨停过 —— 「断板」的前提
+    df["had_limit5"] = df["is_limit"].astype(float).groupby(
+        df["symbol"], sort=False).transform(
+        lambda s: s.shift(1).rolling(5, min_periods=5).max()) > 0
+
+
+def _attach_reversal(df: pd.DataFrame) -> None:
+    """弱转强 / 反包：昨天走坏了，今天把昨天整根 K 线吃回去。
+
+    这是 Lucas 唯一明说的「参与时机」，而现有因子里没有任何跨日形态 ——
+    held_open / lost_open 都只看当日开收，看不到「昨天弱、今天强」这个转折。
+
+    与 ignite 族的区别：点火的前置状态是**量能沉寂**（地量），赌的是没人关注的票
+    被唤醒；反包的前置状态是**情绪受挫**（收阴/断板/破线），赌的是有分歧之后
+    资金重新接管。两者的候选池几乎不重叠，是两个独立假设。
+
+    「反包」取严格定义：今日收盘价 > 昨日最高价。宽定义（收盘 > 昨日开盘）会把
+    大量普通阳线算进来，那就不是转折而是「今天涨了」。
+    """
+    g = df.groupby("symbol", sort=False)
+    prev_open = g["open"].shift(1)
+    prev_close = g["close"].shift(1)
+    prev_high = g["high"].shift(1)
+    prev_low = g["low"].shift(1)
+    df["prev_ret1"] = g["ret1"].shift(1)
+    df["prev_bear"] = prev_close < prev_open              # 昨日收阴
+    df["engulf_up"] = df["close"] > prev_high             # 今日反包昨日整根
+    df["engulf_down"] = df["close"] < prev_low            # 反面：强转弱，用于双向测试
+    ma5 = g["close"].transform(lambda s: s.rolling(5, min_periods=5).mean())
+    prev_ma5 = ma5.groupby(df["symbol"], sort=False).shift(1)
+    # 昨天跌破 5 日线、今天收回来：Lucas 说的「结构走坏之后又修复」
+    df["ma5_recover"] = (prev_close < prev_ma5) & (df["close"] > ma5)
+    # 断板反包：前 5 日有过涨停，昨日既没涨停又收阴（断板走弱），今日把它反包回去。
+    # 这是原话「断板走反包，那也是情绪核心」最直接的复刻。
+    df["break_recover"] = (df["had_limit5"] & ~df["is_limit"].groupby(
+        df["symbol"], sort=False).shift(1).fillna(False).astype(bool)
+        & df["prev_bear"] & df["engulf_up"])
+
+
+def _attach_lead(df: pd.DataFrame) -> None:
+    """带队指数：这只票大涨之后，同板块第二天跟不跟。
+
+    为什么不是 sector_leader（已否决的那条）
+    ------------------------------------
+    sector_leader 量的是「板块内涨幅排第几」，也就是身位。Lucas 反复强调核心不是
+    身位：竞业达身位第一但「没有带动题材起飞」是伪龙，欢瑞落后一个身位却有带动
+    作用才是情绪核心。所以这里量的是**带动力**：把该股每次大涨（当日 ≥7%）与
+    **次日板块内其余成分的跟涨家数占比**配对，取历史均值。
+
+    严格无未来函数
+    --------------
+    配对 (d, d+1) 要到 d+1 收盘才完整，所以在 t 日只能用 d ≤ t−2 的配对 —— 下面
+    的 shift(2) 就是这件事。少 shift 一天，规则就会在信号当天偷看到明天的板块表现。
+
+    跟涨家数**剔除自己**：不剔的话，一只连板股会把自己的涨幅算进"别人跟我"，
+    越强的票带队分越高，那量的还是身位，绕回老路上去了。
+    """
+    ok = df["industry"].notna() & (df["sec_n"] >= SECTOR_MIN_MEMBERS)
+    df["_up3"] = (df["ret1"] >= 3).astype(float)
+    cnt = df[ok].groupby(["date", "industry"], sort=False)["_up3"].transform("sum")
+    df["follow_ex"] = np.nan
+    df.loc[ok, "follow_ex"] = (cnt - df.loc[ok, "_up3"]) / (df.loc[ok, "sec_n"] - 1)
+    # 次日的跟涨占比（只作为历史配对的右半边，下面立刻被 shift 推回过去）
+    follow_next = df.groupby("symbol", sort=False)["follow_ex"].shift(-1)
+    pair = follow_next.where(df["ret1"] >= 7)
+    pg = pair.groupby(df["symbol"], sort=False)
+    df["lead_score"] = pg.transform(
+        lambda s: s.shift(2).rolling(60, min_periods=3).mean())
+    df["lead_n"] = pg.transform(
+        lambda s: s.shift(2).rolling(60, min_periods=1).count())
+    # 横截面分位：当天全市场里的带队能力排位（样本不足 3 次大涨的不参与排序）
+    df.loc[df["lead_n"] < 3, "lead_score"] = np.nan
+    df["lead_q"] = df.groupby("date", sort=False)["lead_score"].rank(pct=True)
+    df.drop(columns=["_up3"], inplace=True)
+
+
+def _attach_run_height(df: pd.DataFrame) -> None:
+    """本轮累计涨幅：从近 60 日最低收盘算起涨了多少。
+
+    跟 chase20 的区别在于窗口是**自适应**的：chase20 固定看 20 日，一只用 40 天
+    慢慢翻倍的票在它眼里可能只是「20 日涨 15%」；这一列问的是「从这波起点到现在
+    走了多高」，正是 Lucas 说监管在 133% / 200% 介入的那个高度口径。
+    """
+    low60 = df.groupby("symbol", sort=False)["close"].transform(
+        lambda s: s.rolling(60, min_periods=60).min())
+    df["run_gain"] = (df["close"] / low60 - 1) * 100
+
+
 def _attach_regime(df: pd.DataFrame) -> None:
     """挂上每个交易日的大盘环境标签（偏暖 / 中性 / 偏冷）。
 
@@ -392,6 +493,10 @@ def build_panel(db: str, since: str, horizon: int, entry: str = "close") -> pd.D
     _attach_sector(df)
     _attach_ignite_sector(df)
     _attach_shape(df)
+    _attach_limit(df)        # 涨停/连板，reversal 的断板判据依赖它
+    _attach_reversal(df)
+    _attach_lead(df)         # 带队指数，依赖 _attach_sector 的 industry / sec_n
+    _attach_run_height(df)
     _attach_regime(df)
 
     df = df[df["fwd_excess"].notna()]
@@ -779,6 +884,71 @@ RULES = {
     "chase_in_cold": ("冷环境里的追高票（近20日≥25% 且贴高点 且大盘偏冷）",
                       lambda d: (d["prior_ret20"] >= 25) & (d["dist_high20"] >= -3)
                                 & (d["regime"] == "偏冷")),
+
+    # --- A 弱转强 / 反包族（Lucas 的「参与时机」）------------------------------
+    # 【2026-09-07 裁决】只在 T+1 成立，T+3 消失，T+5 显著为负（rev_deep 增量 −0.36）。
+    # 是纯粹的一日效应，**不能进 T+5 排序**，放进去是负贡献。
+    # 层层加码：光反包 → 反包前先真的走弱 → 走弱到破线 → 断板之后的反包。
+    # 最后一条 rev_break 是原话的精确复刻，前面几条是为了看「哪一层在起作用」。
+    "rev": ("反包（昨收阴，今收盘 > 昨最高）", lambda d: d["prev_bear"] & d["engulf_up"]),
+    "rev_vol": ("反包 + 放量（今量≥前5日均量1.5倍）",
+                lambda d: d["prev_bear"] & d["engulf_up"] & (d["vol_ratio5"] >= 1.5)),
+    "rev_deep": ("深弱转强（昨跌≥3% 且今日反包）",
+                 lambda d: (d["prev_ret1"] <= -3) & d["engulf_up"]),
+    "rev_ma5": ("破线后收回（昨收跌破5日线，今收回线上 且反包）",
+                lambda d: d["ma5_recover"] & d["engulf_up"]),
+    "rev_break": ("断板反包（5日内有涨停、昨日断板收阴、今日反包）", lambda d: d["break_recover"]),
+    "rev_break_sector": ("断板反包 + 板块20日动量前30%",
+                         lambda d: d["break_recover"] & (d["sec_mom20_q"] >= 0.7)),
+    # 反面：强转弱。反包若真有信息，它的镜像该是负的；两边都接近 0 就是没信息。
+    "rev_down": ("强转弱（昨收阳，今收盘 < 昨最低）",
+                 lambda d: (~d["prev_bear"]) & d["engulf_down"]),
+
+    # --- B 带队指数（「情绪核心」而非「身位第一」）-----------------------------
+    # 【2026-09-07 裁决：全否，别再试】决定性劈半（lead_fake vs lead_real，其余条件
+    # 完全相同）得 −0.33 vs −0.34，带队维度在身位之外零信息。
+    # 且 in_sec_first 的负效应经 ret5_top 对照证明只是「5 日涨幅高 → 短期反转」的
+    # 代理，板块维度零贡献。留在这里是为了记录已否决，不是候选。
+    "lead": ("带队指数全市场前10%", lambda d: d["lead_q"] >= 0.9),
+    "lead_up": ("带队前10% 且今日大涨≥5%", lambda d: (d["lead_q"] >= 0.9) & (d["ret1"] >= 5)),
+    # 下面这条是 Lucas 原话最精准的复刻：带动力强、但身位不是第一（欢瑞）
+    "lead_not_first": ("带队前10% 但板块内涨幅不是前10%（核心≠身位）",
+                       lambda d: (d["lead_q"] >= 0.9) & (d["in_sec_q5"] < 0.9)),
+    # 反面：身位第一但没带动力（竞业达式「伪龙」）。若他是对的，这条该显著差于上一条。
+    "lead_fake": ("板块内涨幅前10% 但带队指数后50%（伪龙）",
+                  lambda d: (d["in_sec_q5"] >= 0.9) & (d["lead_q"] <= 0.5)),
+    # 决定性的一刀：把「板块内涨幅前10%」这批票按带队指数劈两半，其余条件完全相同。
+    # 两边之差就是「带队指数在身位之外还有没有信息」——这正是 Lucas 说的伪龙 vs 真核心。
+    "lead_real": ("板块内涨幅前10% 且带队指数前50%（真核心）",
+                  lambda d: (d["in_sec_q5"] >= 0.9) & (d["lead_q"] > 0.5)),
+    # 上面两条一样差（−0.33 / −0.34），说明差的不是带队维度而是「板块内涨幅第一」本身。
+    # 下面三条把它按板块强弱拆开：sector_leader 只测过强板块那一格，全样本从没测过。
+    "in_sec_first": ("板块内5日涨幅前10%（不分板块强弱）", lambda d: d["in_sec_q5"] >= 0.9),
+    # 混淆对照：匹配对照控了 20 日涨幅和成交额，**没控 5 日涨幅**。若「全市场 5 日涨幅
+    # 前10%」也是同样的负增量，那 in_sec_first 量的就只是众所周知的短期反转，
+    # 跟「板块内身位」无关，不构成新发现。
+    "ret5_top": ("全市场5日涨幅前10%（短期反转对照组）",
+                 lambda d: d.groupby("date")["prior_ret5"].rank(pct=True) >= 0.9),
+    "ret5_top_cold": ("全市场5日涨幅前10% 且板块20日动量后50%",
+                      lambda d: (d.groupby("date")["prior_ret5"].rank(pct=True) >= 0.9)
+                                & (d["sec_mom20_q"] <= 0.5)),
+    "in_sec_first_cold": ("弱板块里的板块内第一（板块20日动量后50%）",
+                          lambda d: (d["in_sec_q5"] >= 0.9) & (d["sec_mom20_q"] <= 0.5)),
+    "in_sec_first_mid": ("中等板块里的板块内第一（板块动量 50~80%）",
+                         lambda d: (d["in_sec_q5"] >= 0.9) & (d["sec_mom20_q"] > 0.5)
+                                   & (d["sec_mom20_q"] < 0.8)),
+
+    # --- D 本轮累计高度（监管天花板）-----------------------------------------
+    # 【2026-09-07 裁决】只有 ≥150% 那一档明确为负（增量 −0.62，CI 全负），但剂量
+    # 反应不单调（100~150 档反而 +0.10），样本仅 24k，且大概率是同一个短期反转效应
+    # 的极端版。只能当观察标记，不能当连续衰减项。
+    # 分档而非单一闸门：要看的是剂量反应单不单调，不是某一档好不好看。
+    "height_lt50": ("本轮累计涨幅 <50%", lambda d: d["run_gain"] < 50),
+    "height_50_100": ("本轮累计涨幅 50~100%",
+                      lambda d: (d["run_gain"] >= 50) & (d["run_gain"] < 100)),
+    "height_100_150": ("本轮累计涨幅 100~150%",
+                       lambda d: (d["run_gain"] >= 100) & (d["run_gain"] < 150)),
+    "height_gt150": ("本轮累计涨幅 ≥150%（监管红线区）", lambda d: d["run_gain"] >= 150),
 }
 
 

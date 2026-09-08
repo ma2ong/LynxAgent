@@ -18,7 +18,7 @@ from quantcore.quant.factors import blend_intraday_score, intraday_strength_scor
 
 @pytest.fixture(autouse=True)
 def _disable_score_floor(monkeypatch):
-    """默认关掉入选门槛（SMART_POOL_SCORE_FLOOR，现为 80）。
+    """默认关掉入选门槛（SMART_POOL_SCORE_FLOOR，现为 85）。
 
     本文件多数用例的假分数在 50~88，开着门槛会被整池滤空，考的就不是原来那条不变量了。
     门槛本身由 test_score_floor_* 覆盖。

@@ -77,7 +77,7 @@
                 {{ showPoolDesc ? '收起说明' : '选股逻辑' }}
               </a>
             </h2>
-            <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），盘中爆发只允许结构质量前 10% 的股票晋级，再按实时量价与雷达时机重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜；最终只留综合排序 ≥ 80 分的，20 只以内有多少给多少，够分的超过 20 只时只取最强的 20 只——所以名单每天长短不一，弱市少是正常的。只有绿色“量价已确认”才代表通过了第二重条件。</p>
+            <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），盘中爆发只允许结构质量前 10% 的股票晋级，再按实时量价与雷达时机重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜；最终只留综合排序 ≥ 85 分的，20 只以内有多少给多少，够分的超过 20 只时只取最强的 20 只——所以名单每天长短不一，弱市少是正常的。只有绿色“量价已确认”才代表通过了第二重条件。</p>
           </div>
           <div class="smart-inline-settings">
             <label>
@@ -650,9 +650,9 @@ const smartTableRef = ref<any>()
 const selectedSmartRows = ref<QuantSmartPoolItem[]>([])
 // ①c 双确认筛选：只看结构因子+低位形态双确认的最高把握子集
 const smartDualOnly = ref(false)
-// 入选门槛由后端给（LYNX_SMART_SCORE_FLOOR，现为 80）。后端关掉门槛制时不再下发
-// score_floor（走名次制），所以默认是 0 而不是 80——写死会让界面在门槛已关的情况下
-// 仍宣称「≥80 分才上榜」。
+// 入选门槛由后端给（LYNX_SMART_SCORE_FLOOR，2026-09-08 起为 85）。后端关掉门槛制时
+// 不再下发 score_floor（走名次制），所以默认是 0 而不是门槛值——写死会让界面在门槛
+// 已关的情况下仍宣称「≥N 分才上榜」。
 const smartScoreFloor = computed(() => Number(smartPoolResult.value?.score_floor ?? 0))
 // 名单口径二选一：门槛制（够分就上，封顶 smartListCap 只）或名次制（取前 N 只）。
 const smartByScoreFloor = computed(() => smartScoreFloor.value > 0)

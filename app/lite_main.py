@@ -354,8 +354,10 @@ SMART_POOL_MAX_ITEMS = 20
 #   2026-09-04  Allen 定：**门槛制 + 封顶**，≥80 分才上榜，20 只以内不限数量，
 #               超过 20 只只给最强的 20 只。两头都堵住了：弱市不拿 70 分的凑数，
 #               强势日也不会甩一屏看不完的票。
+#   2026-09-08  Allen 定：门槛抬到 85 分，封顶仍是 20 只 —— 80 分那档强势日每天都能
+#               凑满 20 只，等于又退回名次制，名单挑不出轻重。
 # 设 LYNX_SMART_SCORE_FLOOR=0 可退回纯名次制（届时只按综合排序取前 SMART_POOL_MAX_ITEMS 只）。
-SMART_POOL_SCORE_FLOOR = max(0.0, min(100.0, float(os.getenv("LYNX_SMART_SCORE_FLOOR", "80"))))
+SMART_POOL_SCORE_FLOOR = max(0.0, min(100.0, float(os.getenv("LYNX_SMART_SCORE_FLOOR", "85"))))
 # 时机层加分的**盘中信号分**门槛（2026-08-28 Allen 定）：盘中信号分不到这条线的，
 # 状态标签照常显示，但一分不加。此前只看状态（entry/watch）不看强度，一个 60 分的
 # 弱确认和一个 95 分的强确认拿到同样的 +8。与上面的名单门槛是两回事：那条管

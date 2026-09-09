@@ -164,9 +164,9 @@
                 <span class="up2">+{{ c.open_pct }}%</span>
               </div>
             </div>
-            <small v-else class="c-note">当日强势板块暂无高开候选</small>
+            <small v-else class="c-note">当日强势板块暂无高开异动</small>
           </template>
-          <p v-else class="c-cta">竞价高开推导情绪 + 盘口四形态标注买入候选</p>
+          <p v-else class="c-cta">竞价高开推导情绪 + 盘口四形态标注异动个股</p>
         </div>
       </article>
 
@@ -495,7 +495,7 @@ const loadCards = async (retries = 1) => {
       const pc = d?.auction_tape?.pattern_counts
       if (d) auction.value = {
         pc: { accumulation: pc?.accumulation || 0, shakeout: pc?.shakeout || 0, distribution: pc?.distribution || 0 },
-        top: (d.buy_candidates || []).slice(0, 3),
+        top: (d.watch_candidates || []).slice(0, 3),
       }
     }).catch(() => { failed = true }),
     ApiClient.get<any>('/api/lite/limit-up', {}, { timeout: 45000 }).then((raw) => {

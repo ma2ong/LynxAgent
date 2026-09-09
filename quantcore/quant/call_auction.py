@@ -41,9 +41,9 @@ def _num(value, default=0.0) -> float:
         return default
 
 
-# 科技成长热门行业白名单（东财行业名 f100 的子串匹配）。只在这些行业里选竞价买入股，
+# 科技成长热门行业白名单（东财行业名 f100 的子串匹配）。只在这些行业里挑观察标的，
 # 把白酒/食品/银行/保险/能源/风电/纺织等"老登"行业整体排除——竞价开得再好也不入选。
-# 用户诉求：买入候选务必落在近期热门科技板块（光模块/PCB/存储/芯片/半导体/机器人/算力/AI）。
+# 用户诉求：观察名单务必落在近期热门科技板块（光模块/PCB/存储/芯片/半导体/机器人/算力/AI）。
 HOT_TECH_INDUSTRY_KEYWORDS = (
     "半导体", "光学光电", "元件", "电子化学", "其他电子", "消费电子",
     "通信设备", "通信服务", "计算机", "软件", "IT服务", "互联网",
@@ -52,21 +52,23 @@ HOT_TECH_INDUSTRY_KEYWORDS = (
 )
 
 
-# 买入推荐的展示只数上限。竞价窗口只有几分钟可操作，给十几只等于没给。
+# 观察名单的展示只数上限。竞价窗口只有几分钟可看，列十几只等于没列。
 # 定成模块常量而不是只做函数默认值：路由层要用同一条上限去截已经冻结的当日名单
 # （名单一天只算一次，改了上限不能等到明天才生效）。
 DISPLAY_LIMIT = 5
 
-# 推荐档位门槛：候选评分占当日最高分的比例。同时决定展示范围——达到强推荐档就上榜。
-TOP_TIER_RATIO = 0.9
-STRONG_TIER_RATIO = 0.78
-# 档位是**相对当日最高分**算的，所以每天必然产出「最强推荐」——哪怕当日最强只是
-# 矮子里拔将军（实测：全场只高开 1.8~2.0% 的盘面，五只全被标成最强推荐）。
-# 加一条绝对参照：当日最强的开盘涨幅够不到「抢筹」档时，三档改用相对措辞并标明。
-# 只改标签、不改只数也不改排序 —— 2026-09-01 Allen 定：如实标注，不减信息。
-ABS_STRONG_OPEN_PCT = 3.0
-TIER_NAMES = ("最强推荐", "强推荐", "推荐")
-TIER_NAMES_RELATIVE = ("今日相对最强", "今日相对较强", "相对靠前")
+# 2026-09-09：推荐档位（最强推荐/强推荐/推荐）、综合强度分、名次徽标全部下线，
+# 本模块从「买入推荐」降级为「竞价异动观察」。不是措辞问题——这三样东西声称的排序
+# 能力经不起验证：
+#   · 线上留痕 46 天 / 601 条，当日「分数名次 vs 当日实际收益名次」Spearman rho = −0.005；
+#   · 展示出去的前 5 名盘中超额 −0.43pp、T+1 −0.68pp，反而不如压着没展示的 6-15 名
+#     （+0.29pp / +0.10pp）；
+#   · rule_audit 七道闸（--pool auction --entry open0）匹配对照增量 −0.81pp、CI 下沿 −1.48：
+#     跟同一天、同跌幅档、同流动性档但没上榜的票比，上榜的这批反而更差。
+# 证据、复现命令与那份被收回的立项回测见 experiments/README.md「2026-09-09 那轮」。
+#
+# 候选怎么算、留痕记哪些，**一个字没动**：改了就要换池名（见 README 的池名纪律），
+# 46 天样本会断档，而这条规则恰恰需要继续被观测。变的只是它对外声称自己是什么。
 
 
 def _is_hot_tech(industry: str) -> bool:
@@ -79,13 +81,9 @@ def compute_call_auction(
     sectors_config: List[dict],
     *,
     buy_limit: int = 15,
-    # 展示口径按「档位」而不是按名次：凡是评分达到当日最高分 78%（即『强推荐』及以上）
-    # 的候选都够格上榜，让"今天到底有几只够强"由盘面自己决定，而不是固定砍到前 3 名。
-    # 但档位口径没有上限，强势日会一口气给出十几只——竞价只有几分钟可操作，给这么多
-    # 等于没给。2026-09-01 Allen 定：**最多推荐 5 只**，够格的多了就按名次取前 5。
-    # 留痕不受这条限制，仍按 buy_limit 记满，否则以后无法继续验证名次与涨停率的关系。
+    # 展示就是「按评分序取前 N 只」，不再有档位。留痕不受这条限制，仍按 buy_limit
+    # 记满，否则无法继续验证这条规则本身。
     display_limit: int = DISPLAY_LIMIT,
-    min_display: int = 3,
     industry_map: Dict[str, str] | None = None,
     hot_industries: Dict[str, float] | None = None,
     exclude_symbols: set | None = None,
@@ -93,9 +91,9 @@ def compute_call_auction(
     open_max_ratio: float = 0.6,
     record: bool = True,
 ) -> Dict[str, object]:
-    """把全市场快照算成：竞价情绪概览 + 竞价热门板块 + 竞价买入推荐。
+    """把全市场快照算成：竞价情绪概览 + 竞价热门板块 + 竞价异动观察名单。
 
-    买入候选的行业门槛优先级：
+    观察名单的行业门槛优先级：
     1. hot_industries（近段趋势动态热门板块，{行业:近N日涨幅%}）—— 不写死赛道，跟随轮动；
     2. 缺失时退回静态科技成长白名单 HOT_TECH_INDUSTRY_KEYWORDS（兜底）；
     3. 连 industry_map 都没有时不做行业过滤（保证功能可用）。
@@ -209,7 +207,7 @@ def compute_call_auction(
         "is_auction_window": in_window,
     }
 
-    # 竞价热门板块：动态口径——与买入候选同源，用"近段趋势热门板块"(按近 N 日涨幅排名)，
+    # 竞价热门板块：动态口径——与观察名单同源，用"近段趋势热门板块"(按近 N 日涨幅排名)，
     # 再叠加今日竞价强度；缺动态数据时退回 SECTOR_LEADERS 策划赛道（兜底）。全页口径一致。
     hot_sectors: List[dict] = []
     if use_dynamic:
@@ -267,7 +265,7 @@ def compute_call_auction(
             if not r["is_st"] and _industry_ok(ind) and r["open_pct"] >= 1.0:
                 hot_open_by_industry[ind] = hot_open_by_industry.get(ind, 0) + 1
 
-    # 竞价买入推荐：① 只在"近段趋势热门板块"里选（动态跟随轮动；缺数据时退回科技白名单；
+    # 竞价异动观察名单：① 只在"近段趋势热门板块"里选（动态跟随轮动；缺数据时退回科技白名单；
     #   白酒/银行等不在近期热门就排除，但哪天它们趋势起来也会自动入选）② 健康高开（下限 open_min%，
     #   上限按板块涨停限自适应=板限×open_max_ratio，避开一字板、又给 20% 板的科技股留足空间）
     #   ③ 非 ST、非业绩暴雷、价格不仙 ④ 评分叠加板块共振 + 板块近段涨幅。
@@ -336,26 +334,9 @@ def compute_call_auction(
         })
     candidates.sort(key=lambda c: (c["score"], c.get("resonance", 0)), reverse=True)
 
-    # 强弱排序可见化：名次(1=最强) + 综合强度(40~100，随名次递减) + 推荐档位。
-    # 排名区间要同时盖住「留痕的 buy_limit 只」和「达到强推荐档的全部只数」。
-    best_score = candidates[0]["score"] if candidates else 0.0
-    strong_count = sum(1 for c in candidates if best_score and c["score"] / best_score >= STRONG_TIER_RATIO)
-    ranked = candidates[:max(buy_limit, strong_count)]
-    top_candidates = ranked[:buy_limit]
-    # 当日最强够不够「抢筹」：够不到就说明今天整场都不强，档位名改成相对措辞
-    best_open = max((c["open_pct"] for c in candidates), default=0.0)
-    relative_only = bool(candidates) and best_open < ABS_STRONG_OPEN_PCT
-    tier_names = TIER_NAMES_RELATIVE if relative_only else TIER_NAMES
-    if ranked:
-        scores = [c["score"] for c in ranked]
-        smax, smin = max(scores), min(scores)
-        span = (smax - smin) or 1.0
-        for idx, c in enumerate(ranked):
-            c["rank"] = idx + 1
-            c["strength"] = round(40 + (c["score"] - smin) / span * 60)
-            ratio = c["score"] / (smax or 1.0)
-            c["tier"] = (tier_names[0] if ratio >= TOP_TIER_RATIO
-                         else (tier_names[1] if ratio >= STRONG_TIER_RATIO else tier_names[2]))
+    # 留痕仍取评分序的前 buy_limit 只——规则没变，样本才能接着积累。
+    # 不再给候选贴名次/强度/档位：实测这个顺序没有预测力，标出来只会让人按顺序加仓。
+    top_candidates = candidates[:buy_limit]
 
     # 留痕当日竞价候选，供复盘页统计真实 T+N 胜率。record 由路由层控制：只在竞价
     # 冻结时刻记一次。旧行为是保温循环每 60 秒重算重记——盘中量比/成交额早已不是
@@ -370,10 +351,9 @@ def compute_call_auction(
         except Exception:
             pass
 
-    # 展示与留痕分开：页面给够格的前 display_limit 只，留痕仍按 buy_limit 记满，
-    # 复盘样本继续积累（把展示上限也套到留痕上，等于把历史样本砍掉三分之二）。
-    shown = ranked[:strong_count] if strong_count else ranked[:max(1, min_display)]
-    shown = shown[:max(1, display_limit)]
+    # 展示与留痕分开：页面给前 display_limit 只，留痕仍按 buy_limit 记满，复盘样本
+    # 继续积累（把展示上限也套到留痕上，等于把历史样本砍掉三分之二）。
+    shown = candidates[:max(1, display_limit)]
 
     dynamic_hot = [
         {"name": name, "trend_pct": score}
@@ -383,42 +363,41 @@ def compute_call_auction(
         "available": True,
         "overview": overview,
         "hot_sectors": hot_sectors[:8],
-        "buy_candidates": shown,
-        # 未展示数 = 全部候选 − 实际展示。展示上限收紧后这个数会变大，正是本意：
-        # 用户需要知道「还有几只够格但没给出来」，而不是以为今天只有这么点货。
+        # 键名从 buy_candidates 改成 watch_candidates：这不是一份买入清单，
+        # 叫 buy_ 会让下一个读代码的人以为它经过了收益验证。
+        "watch_candidates": shown,
+        # 未展示数 = 全部候选 − 实际展示。用户需要知道「今天还有几只同样条件的没列出来」，
+        # 而不是以为今天只有这么点货。
         "hidden_candidates": max(0, len(candidates) - len(shown)),
         "display_limit": display_limit,
-        "strong_tier_count": strong_count,
-        # 今天整场都不强：档位仍按相对强弱排，但名字已改成「今日相对最强」这类措辞，
-        # 免得「最强推荐」这四个字在弱势日照样出现、久而久之失去含义。
         # 本次实际写进留痕的代码。路由层要在四形态判完之后把形态回填到这些行上——
         # 形态是留痕当时还算不出来的（要额外拉盘前分时），但不落库就永远无法回答
         # 「诱多出货是不是真的更差」，那等于每天算一个从不验证的信号给用户看。
         "recorded_codes": [c["code"] for c in top_candidates] if (record and top_candidates) else [],
-        "relative_only": relative_only,
-        "best_open_pct": round(best_open, 2),
-        "tier_note": (
-            f"今日最强也只高开 +{best_open:.2f}%，够不到「抢筹」档（+{ABS_STRONG_OPEN_PCT:.0f}%），"
-            f"下面是矮子里拔将军，档位按当日相对强弱排，不代表绝对够强。"
-            if relative_only else ""
-        ),
-        # 留痕实测的真实命中率，直接端给前端——避免「上榜=会涨停」的误读
+        # 留痕实测，直接端给前端。数字每次改动都要跟着重算，不能留着过期值当既成事实
+        # ——上一版写的是 18 天 / 314 条，实际早已是 46 天 / 601 条。
+        # 重算：experiments/rule_audit.py --pool auction --entry open0 --horizon 1
         "hit_stats": {
-            "sessions": 18, "samples": 314,
-            "top3_limit_up_rate": 16.3, "rest_limit_up_rate": 9.9,
-            "top3_intraday_median_pct": 0.4,
+            "sessions": 46, "samples": 601,
+            "top5_intraday_excess_pp": -0.43,     # 展示的这几只，开盘买到收盘，相对全市场
+            "top5_t1_excess_pp": -0.68,           # 同上，持到 T+1 收盘（A股 T+1，这才是能兑现的）
+            "rest_intraday_excess_pp": 0.29,      # 没展示的 6-15 名，同口径
+            "matched_control_pp": -0.81,          # 与同日同跌幅档同流动性档、未上榜的票相比
+            "rank_spearman": -0.005,              # 分数名次 vs 当日收益名次，41 天平均
         },
         "gated_by_hot_sector": gating,
         "gating_mode": "dynamic_trend" if use_dynamic else ("static_tech" if gating else "off"),
         "dynamic_hot_industries": dynamic_hot,
         "note": (
-            ("『近段趋势热门板块』只做加分、不做准入——回测显示把它当硬闸门会把资金定向送进"
-             "刚涨完、最接近见顶的方向：全年胜率 52.4%→48.3%，近两月更掉到 41.5%。"
-             if use_dynamic else
-             "动态趋势数据暂不可用，板块加分退回科技成长白名单。")
-            + f"评分以竞价健康高开(下限{open_min:g}%、上限按板块涨停×{open_max_ratio:g}自适应)为主，叠加量比、板块共振与板块趋势。"
-            + "⚠ 口径提醒：回测中『买开盘、次日收盘』的平均超额全年约 +0.33pp、胜率约 52%，"
-            "但近两月降到 41.5% 且不显著——弱市里竞价追高本就容易失效，请结合大盘风险档位决定是否出手。"
+            "⚠ 这份名单没有通过收益验证，请当作「今天谁在竞价异动」来看，不要当买入清单。"
+            "46 个交易日 / 601 条留痕实测：展示的这几只，开盘买到收盘相对全市场 −0.43pp、"
+            "持到 T+1 收盘 −0.68pp；与同一天、同跌幅档、同流动性档但没上榜的票相比是 −0.81pp。"
+            "12 个月全市场回测在任何一个可交易卖点上也都不显著。"
+            "列表按竞价评分排列，但该顺序实测无预测力（名次与当日收益的 Spearman ≈ 0），"
+            "不要按先后加仓位。"
+            + ("『近段趋势热门板块』只做加分、不做准入——把它当硬闸门等于把资金定向送进刚涨完、"
+               "最接近见顶的方向。" if use_dynamic else "动态趋势数据暂不可用，板块加分退回科技成长白名单。")
+            + f"入选条件：竞价高开下限{open_min:g}%、上限按板块涨停×{open_max_ratio:g}自适应，非ST、股价≥3元。"
             + ("" if gating else "（行业数据暂不可用，本次未做行业过滤）")
             + "竞价高开=今开/昨收；成交额口径：竞价时段(09:15-09:25)为真实撮合额，盘后为全日累计(仅参考)。研究用途，不构成投资建议。"
         ),

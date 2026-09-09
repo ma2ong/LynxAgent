@@ -222,13 +222,13 @@ async def _auction_with_live_prices(payload: dict[str, Any]) -> dict[str, Any]:
 
     body = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     if isinstance(body, dict):
-        shown = body.get("buy_candidates")
+        shown = body.get("watch_candidates")
         if isinstance(shown, list) and len(shown) > DISPLAY_LIMIT:
             body["hidden_candidates"] = int(body.get("hidden_candidates") or 0) + len(shown) - DISPLAY_LIMIT
-            body["buy_candidates"] = shown[:DISPLAY_LIMIT]
+            body["watch_candidates"] = shown[:DISPLAY_LIMIT]
         body.setdefault("display_limit", DISPLAY_LIMIT)
     data = payload.get("data") if isinstance(payload.get("data"), dict) else None
-    candidates = (data or {}).get("buy_candidates") or []
+    candidates = (data or {}).get("watch_candidates") or []
     if not data or not candidates:
         return payload
     try:
@@ -261,7 +261,7 @@ async def _auction_with_live_prices(payload: dict[str, Any]) -> dict[str, Any]:
         **payload,
         "data": {
             **data,
-            "buy_candidates": enriched,
+            "watch_candidates": enriched,
             "live_price_as_of": datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M:%S"),
         },
     }
@@ -274,7 +274,7 @@ async def lite_call_auction(
     open_min: float = 1.5,
     open_max_ratio: float = 0.6,
 ):
-    """集合竞价板块：从全市场快照的今开/昨收推导竞价情绪、热门板块、买入推荐。
+    """集合竞价板块：从全市场快照的今开/昨收推导竞价情绪、热门板块、异动观察名单。
 
     可调参数：window 近段趋势窗口(交易日)、top_k 动态热门板块数、open_min 高开下限%、
     open_max_ratio 高开上限占板块涨停限的比例(自适应 10/20/30% 板)。
@@ -286,12 +286,13 @@ async def lite_call_auction(
     top_k = max(3, min(top_k, 30))
     open_min = max(0.0, min(open_min, 10.0))
     open_max_ratio = max(0.2, min(open_max_ratio, 0.95))
-    # v7：展示口径从「固定前 3 名」改为「全部强推荐档」，旧的冻结存档必须失效重算。
-    cache_key = f"call-auction:v7:{window}:{top_k}:{open_min}:{open_max_ratio}"
+    # v8：买入推荐降级为异动观察（去档位/强度/名次，键名改 watch_candidates），
+    # v7 的冻结存档字段对不上新页面，必须失效重算。
+    cache_key = f"call-auction:v8:{window}:{top_k}:{open_min}:{open_max_ratio}"
 
     # —— 竞价结果日内冻结 ——
     # 症结：本页原来全天每 60 秒重算。09:26 之后快照里的量比/成交额是盘中/全日口径，
-    # 拿它们给"竞价买入推荐"打分，名单会随盘面整天漂移——用户上午看到的推荐和收盘时
+    # 拿它们给"竞价异动名单"打分，名单会随盘面整天漂移——用户上午看到的名单和收盘时
     # 的推荐不是同一批，且每次重算都在留痕，午后漂进来的票以盘中价混进竞价池的复盘
     # 统计。竞价是 09:25 一锤定音的事件，结果就该在窗口结束后冻结一整天。
     import json as _json
@@ -299,7 +300,7 @@ async def lite_call_auction(
 
     now_cn = datetime.now(ZoneInfo("Asia/Shanghai"))
     today = now_cn.strftime("%Y-%m-%d")
-    param_sig = f"v7:{window}:{top_k}:{open_min}:{open_max_ratio}"
+    param_sig = f"v8:{window}:{top_k}:{open_min}:{open_max_ratio}"
     post_auction = now_cn.weekday() < 5 and (now_cn.hour * 60 + now_cn.minute) >= 9 * 60 + 26
     _FROZEN_STATE_KEY = "call_auction_frozen_v1"
 
@@ -355,7 +356,7 @@ async def lite_call_auction(
     snap_date, snap_time = _snapshot_stamp(snapshot)
     result["data_freshness"] = _auction_freshness(snap_date, snap_time, today, now_cn)
 
-    # 四形态：按需回溯拉东财盘前分时（09:15-09:25 逐分钟虚拟撮合价），给买入候选贴上盘口
+    # 四形态：按需回溯拉东财盘前分时（09:15-09:25 逐分钟虚拟撮合价），给观察名单贴上盘口
     # 形态（抢筹/诱多/洗盘/分歧）。只算候选池这十几只——全市场形态计数对决策没有用处，
     # 而且要几千次请求。盘后照样能算，不依赖后端在竞价窗口在线。
     try:
@@ -363,7 +364,7 @@ async def lite_call_auction(
         # 判形态的范围要盖住「展示的」和「留痕的」两批：展示只有前几只，而留痕记满
         # buy_limit 只，后者才是日后做匹配对照的样本。多判十来只只是多一轮盘前分时
         # 请求，一天一次，换来的是这个信号将来可被检验。
-        codes = [str(c.get("code") or "") for c in (result.get("buy_candidates") or [])]
+        codes = [str(c.get("code") or "") for c in (result.get("watch_candidates") or [])]
         codes += [str(c) for c in (result.get("recorded_codes") or [])]
         patterns = await asyncio.to_thread(classify_symbols, list(dict.fromkeys(codes)))
         tape = tape_summary(patterns)
@@ -372,10 +373,10 @@ async def lite_call_auction(
             "resolved": tape["resolved"], "pattern_counts": tape["pattern_counts"],
             "note": "四形态来自当日 09:15-09:25 逐分钟虚拟撮合价，盘中盘后均可回溯。",
         }
-        # 四形态是「盘口提示」而非硬筛：买入候选由强势板块+健康高开决定，形态只做每只的
+        # 四形态是「盘口提示」而非硬筛：观察名单由强势板块+健康高开决定，形态只做每只的
         # 标注（诱多/分歧标黄提醒）。硬闸门会在多数高开于竞价小幅回落的日子把整张清单清空，
         # 反而丢掉主要输出，故只标注不剔除。
-        for c in result.get("buy_candidates") or []:
+        for c in result.get("watch_candidates") or []:
             pat = patterns.get(str(c.get("code") or "").zfill(6))
             if pat and pat.get("pattern") != "insufficient":
                 c["auction_pattern"] = pat

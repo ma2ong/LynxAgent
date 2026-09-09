@@ -3,7 +3,7 @@
     <div class="page-head">
       <div class="head-copy">
         <h1>集合竞价</h1>
-        <p>先筛强势板块与健康高开，再用 09:15-09:25 四形态做买入硬闸门，仅供研究参考</p>
+        <p>竞价情绪 + 强势板块 + 09:15-09:25 盘口四形态。异动观察，非买入建议</p>
       </div>
       <div class="head-ctrl">
         <span v-if="updatedAt" class="updated">更新于 {{ updatedAt }}</span>
@@ -82,7 +82,7 @@
       </section>
       <el-alert v-else-if="data.auction_tape && !data.auction_tape.available"
         type="info" :closable="false" show-icon
-        title="当前买入候选的竞价有效报价不足，判不出盘口形态" />
+        title="当前观察名单的竞价有效报价不足，判不出盘口形态" />
 
       <!-- 高开幅度分布（精确口径） -->
       <section class="dist" v-if="data.overview.distribution?.length">
@@ -124,44 +124,41 @@
           </div>
         </section>
 
-        <!-- 竞价买入推荐 -->
+        <!-- 竞价异动观察 -->
         <section class="panel">
-          <div class="panel-title">竞价买入候选 <em>近段强势板块 · 由强到弱排序，点击进深研</em></div>
-          <!-- 上榜口径：先按档位挑出够「强推荐」的，再按名次取前 display_limit 只。
-               竞价只有几分钟可操作，给十几只等于没给（2026-09-01 Allen 定上限 5）。
-               被上限挡下的写进「另有 N 只」，别让用户以为今天就这点货。
-               真实命中率照写——上榜不等于会涨停，最强档也只有六分之一。 -->
-          <!-- 档位是相对当日最高分算的，弱势日照样会有「最强」。这条提示在整场都不强时
-               出现，如实说明这是矮子里拔将军——名单照给，但不让标签替盘面吹牛。 -->
-          <div v-if="data.tier_note" class="tier-note">{{ data.tier_note }}</div>
+          <div class="panel-title">竞价异动观察 <em>今天谁在竞价放量高开 · 点击进深研</em></div>
+          <!-- 2026-09-09：这里原来是「竞价买入候选」，带名次徽标、推荐档位和综合强度条。
+               三样全部下线：46 天 / 601 条留痕实测，名次与当日收益的 Spearman ≈ 0，
+               展示出去的前 5 名反而不如压着没展示的 6-15 名，匹配对照增量 −0.81pp。
+               排序留着（留痕要按同一口径继续积累），但不再声称它代表强弱。
+               证据见 experiments/README.md「2026-09-09 那轮」。 -->
           <div v-if="data.hit_stats" class="hit-note">
-            <b>达到「强推荐」档的按强弱最多取前 {{ data.display_limit || 5 }} 只（今日 {{ data.buy_candidates.length }} 只<span
-              v-if="data.hidden_candidates">，另有 {{ data.hidden_candidates }} 只未展示</span>）。</b>
+            <b class="hit-warn">这不是买入清单。</b>
             {{ data.hit_stats.sessions }} 个交易日 / {{ data.hit_stats.samples }} 条留痕实测：
-            前 3 名当日涨停率 <b class="hit-good">{{ data.hit_stats.top3_limit_up_rate }}%</b>，
-            第 4 名以后 {{ data.hit_stats.rest_limit_up_rate }}%——名次越靠后越要减仓位。
+            这几只开盘买入持到当日收盘，相对全市场
+            <b class="hit-bad">{{ signedPct(data.hit_stats.top5_intraday_excess_pp) }}pp</b>；
+            持到 T+1 收盘（A 股 T+1，这才是能兑现的）
+            <b class="hit-bad">{{ signedPct(data.hit_stats.top5_t1_excess_pp) }}pp</b>；
+            与同一天、同跌幅档、同流动性档但没上榜的票相比
+            <b class="hit-bad">{{ signedPct(data.hit_stats.matched_control_pp) }}pp</b>。
             <span class="hit-warn">
-              上榜 ≠ 会涨停：最强档也是约 6 次中 1 次，开盘买入到收盘的中位收益仅
-              +{{ data.hit_stats.top3_intraday_median_pct }}%，收益全靠那 1/6。
+              列表顺序按竞价评分排，但该顺序实测无预测力（名次与当日收益 Spearman ≈ 0），
+              别按先后加仓位。今日列出 {{ data.watch_candidates.length }} 只<span
+                v-if="data.hidden_candidates">，另有 {{ data.hidden_candidates }} 只同样条件的未列出</span>。
             </span>
           </div>
-          <div v-if="!data.buy_candidates.length" class="empty">当日近段强势板块无符合条件的高开候选（弱势竞价）</div>
+          <div v-if="!data.watch_candidates.length" class="empty">当日近段强势板块无符合条件的高开异动（弱势竞价）</div>
           <button
-            v-for="c in data.buy_candidates" :key="c.code"
-            type="button" class="cand-card" :class="{ top: c.rank === 1 }" @click="openStock(c.code)"
+            v-for="c in data.watch_candidates" :key="c.code"
+            type="button" class="cand-card" @click="openStock(c.code)"
           >
-            <span class="cc-rank" :class="rankClass(c.rank)">{{ c.rank }}</span>
             <div class="cc-l">
               <div class="cc-name">{{ c.name }}<span class="cc-code">{{ c.code }}</span>
                 <span v-if="c.theme" class="theme-tag">{{ c.theme }}</span>
                 <span v-if="c.auction_pattern" class="pat-tag" :class="patClass(c.auction_pattern.pattern)"
                   :title="c.auction_pattern.note">{{ c.auction_pattern.label }}</span>
-                <span v-if="c.tier" class="tier" :class="tierClass(c.tier)">{{ c.tier }}</span>
               </div>
               <div class="cc-reasons">{{ c.reasons.join(' · ') }}</div>
-              <span v-if="c.strength != null" class="cc-bar" :title="`综合强度 ${c.strength}`">
-                <i :class="tierClass(c.tier)" :style="{ width: c.strength + '%' }" />
-              </span>
             </div>
             <div class="cc-r">
               <!-- 竞价价是 09:25 冻结的提醒价；现价每次打开页面现取，两个一起才知道还追不追得上。 -->
@@ -171,15 +168,18 @@
                 <span>现 <b>{{ c.live_price.toFixed(2) }}</b>
                   <em v-if="c.live_pct != null" :class="c.live_pct >= 0 ? 'up' : 'down'">{{ signedPct(c.live_pct) }}</em>
                 </span>
-                <span v-if="c.change_since_auction != null" class="cc-since">
-                  较竞价 <b :class="c.change_since_auction >= 0 ? 'up' : 'down'">{{ signedPct(c.change_since_auction) }}</b>
+                <!-- A 股 T+1：今天买进最早明天才能卖，所以这个数是「盘中走势」，
+                     不是你能兑现的盈亏。措辞按这个来，别让人拿它当账面收益。 -->
+                <span v-if="c.change_since_auction != null" class="cc-since"
+                  title="竞价价到现价的盘中走势。A股 T+1，当日买入无法当日卖出，此数不可兑现">
+                  盘中较竞价 <b :class="c.change_since_auction >= 0 ? 'up' : 'down'">{{ signedPct(c.change_since_auction) }}</b>
                 </span>
               </div>
             </div>
           </button>
-          <p v-if="data.buy_candidates.length" class="cand-hint">
+          <p v-if="data.watch_candidates.length" class="cand-hint">
             标签为 09:15-09:25 竞价盘口形态：<span class="pat-tag p-dist">诱多出货</span
-            ><span class="pat-tag p-div">多空分歧</span> 为提示而非排除项，仍按板块强度排序，自行结合开盘量价判断。
+            ><span class="pat-tag p-div">多空分歧</span> 为提示而非排除项，自行结合开盘量价判断。
           </p>
         </section>
       </div>
@@ -213,18 +213,11 @@ const DIST_CLASS: Record<string, string> = {
   平开: 'd-flat', 低开: 'd-lo1', 大幅低开: 'd-lo2',
 }
 const distClass = (label: string) => DIST_CLASS[label] || 'd-flat'
-const rankClass = (r: number) => (r === 1 ? 'r1' : r <= 3 ? 'r23' : 'rn')
 const signedPct = (value: number) => `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
 const PAT_CLASS: Record<string, string> = {
   accumulation: 'p-acc', distribution: 'p-dist', shakeout: 'p-shake', divergence: 'p-div', neutral: 'p-neu',
 }
 const patClass = (p: string) => PAT_CLASS[p] || 'p-neu'
-// 弱势日档位名会换成相对措辞（今日相对最强/较强），配色按同一梯度走，
-// 否则整块掉进灰色，反而看不出当日的强弱次序。
-const tierClass = (t: string) =>
-  (t === '最强推荐' || t === '今日相对最强') ? 't-top'
-    : (t === '强推荐' || t === '今日相对较强') ? 't-strong'
-      : 't-mid' 
 const fmtAmt = (yi: number) => (yi >= 10000 ? `${(yi / 10000).toFixed(2)} 万亿` : `${yi} 亿`)
 
 const openStock = (code: string) => {
@@ -312,7 +305,7 @@ onMounted(load)
   margin-bottom: 10px; padding: 7px 11px; border-radius: 8px; font-size: 12px; line-height: 1.65;
   background: var(--el-fill-color-light); border-left: 4px solid var(--el-color-warning);
   color: var(--el-text-color-regular);
-  .hit-good { color: #ef232a; }
+  .hit-bad { color: #2ea043; font-variant-numeric: tabular-nums; }
   .hit-warn { display: block; color: var(--el-text-color-secondary); }
 }
 
@@ -332,27 +325,11 @@ onMounted(load)
   background: var(--el-fill-color-lighter); margin-bottom: 8px; transition: all .15s ease;
 }
 .cand-card:hover { border-color: var(--el-color-primary); transform: translateX(2px); }
-.cand-card.top { border-color: #b71c1c66; background: linear-gradient(90deg, rgba(183,28,28,.06), transparent 55%); }
-.cc-rank {
-  flex: none; width: 24px; height: 24px; border-radius: 6px; display: grid; place-items: center;
-  font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums;
-  background: var(--el-fill-color); color: var(--el-text-color-secondary);
-}
-.cc-rank.r1 { background: #b71c1c; color: #fff; }
-.cc-rank.r23 { background: rgba(239,35,42,.14); color: #ef232a; }
 .cc-l { flex: 1; min-width: 0; }
 .cc-name { font-size: 14px; font-weight: 600; }
 .cc-code { font-size: 11px; color: var(--el-text-color-secondary); margin-left: 6px; font-variant-numeric: tabular-nums; }
 .theme-tag { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px; margin-left: 6px; color: var(--el-color-primary); background: var(--el-color-primary-light-9); border: 1px solid var(--el-color-primary-light-7); }
-.tier-note { background: #fff7e6; border: 1px solid #ffd591; color: #874d00; padding: 7px 10px; border-radius: 6px; font-size: 12px; line-height: 1.6; margin-bottom: 8px; }
-.tier { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px; margin-left: 6px; color: #fff; }
-.t-top { background: #b71c1c; }
-.t-strong { background: #ef232a; }
-.t-mid { background: #f0a020; }
 .cc-reasons { font-size: 12px; color: var(--el-text-color-secondary); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cc-bar { display: block; height: 3px; border-radius: 2px; background: var(--el-fill-color); margin-top: 6px; overflow: hidden;
-  i { display: block; height: 100%; border-radius: 2px; }
-}
 .cc-r { flex: none; text-align: right; }
 .cc-price { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .cc-price small { font-size: 11px; font-weight: 500; color: var(--el-text-color-placeholder); margin-right: 4px; }

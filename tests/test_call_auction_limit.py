@@ -1,6 +1,7 @@
-"""集合竞价买入推荐的展示上限。
+"""集合竞价异动观察名单：展示上限，以及「不再声称能排强弱」这条降级本身。
 
-只测「给多少只」这一条，不测选股逻辑本身——后者由留痕和复盘页回答。
+只测「给多少只」和「没有推荐包装漏回来」，不测选股逻辑好不好——后者由留痕、
+复盘页和 experiments/ 回答，2026-09-09 那轮的结论是它没有 alpha。
 """
 from quantcore.quant.call_auction import compute_call_auction
 
@@ -10,8 +11,7 @@ INDUSTRY = "半导体"
 def _snapshot(n: int, opens: list[float] | None = None) -> dict:
     """造 n 只都够格进买入候选的票：高开、放量、成交额充足。
 
-    opens 给定时按它设置各自的开盘涨幅——档位是**相对当日最高分**算的，所以想
-    构造「只有一只够强推荐」的盘面，必须让第一名和其余拉开足够大的差距。
+    opens 给定时按它设置各自的开盘涨幅。
     """
     snap = {}
     for i in range(n):
@@ -44,30 +44,19 @@ def _run(n: int, opens: list[float] | None = None, **kw) -> dict:
 def test_display_is_capped_at_five():
     """够格的再多，页面也最多给 5 只。
 
-    竞价窗口只有几分钟可操作，一口气给十几只等于没给。上限是产品决定
+    竞价窗口只有几分钟可看，一口气列十几只等于没列。上限是产品决定
     （2026-09-01 Allen 定），不是评分算法的结果。
     """
     out = _run(30)
     assert out["available"] is True
-    assert len(out["buy_candidates"]) <= 5
+    assert len(out["watch_candidates"]) <= 5
     assert out["display_limit"] == 5
-
-
-def test_one_qualifier_shows_one_not_five():
-    """只有一只够「强推荐」档时就给一只——5 是上限，不是凑数目标。
-
-    一枝独秀的盘面：第一名远强于其余，档位按「占当日最高分的比例」算，
-    其余全部掉出强推荐档。此时名单必须只有 1 只。
-    """
-    out = _run(13, opens=[5.9] + [1.6] * 12)
-    assert out["strong_tier_count"] == 1
-    assert len(out["buy_candidates"]) == 1
 
 
 def test_short_list_is_not_padded():
     """够格的不足 5 只时按实际给，不拿弱票凑数。"""
     out = _run(2)
-    assert len(out["buy_candidates"]) <= 2
+    assert len(out["watch_candidates"]) <= 2
 
 
 def test_hidden_count_covers_what_the_cap_held_back():
@@ -79,35 +68,36 @@ def test_hidden_count_covers_what_the_cap_held_back():
 def test_record_sample_is_not_truncated_by_the_display_cap():
     """留痕仍按 buy_limit 记满：把展示上限套到留痕上等于砍掉三分之二的复盘样本。
 
-    展示只有 5 只，但排名信息要覆盖到 buy_limit 只，复盘才能继续回答
-    「名次和涨停率什么关系」。
+    这条规则已被判定没有 alpha，但样本还要继续积累——不继续观测就无法回答
+    「换了市场环境它会不会变」，那等于用一次结论把这个问题永久关死。
     """
     out = _run(30, buy_limit=15)
-    ranked_positions = [c["rank"] for c in out["buy_candidates"]]
-    assert ranked_positions == sorted(ranked_positions)
-    # 候选池本身没有被展示上限裁掉
-    assert out["hidden_candidates"] + len(out["buy_candidates"]) >= 15
+    assert out["hidden_candidates"] + len(out["watch_candidates"]) >= 15
 
 
-def test_weak_session_switches_to_relative_tier_names():
-    """整场都不强时档位改用相对措辞，名单只数不变。
+def test_no_recommendation_packaging_leaks_back():
+    """降级守卫：名单里不许再出现名次、推荐档位、综合强度分。
 
-    档位算的是「占当日最高分的比例」，所以每天必然产出「最强推荐」——实测一个全场
-    只高开 1.75~2.0% 的盘面，五只全被标成最强推荐。名单照给（少给信息不是改进），
-    但标签不能替盘面吹牛。
+    2026-09-09 下线的就是这三样。它们声称的是「这几只里哪只更强」，而 46 天 /
+    601 条留痕实测名次与当日收益的 Spearman ≈ 0，匹配对照增量 −0.81pp。
+    哪天有人凭手感把它们加回来，这条测试要先拦一次。
     """
-    weak = _run(5, opens=[2.0, 1.9, 1.85, 1.8, 1.75])
-    assert weak["relative_only"] is True
-    assert weak["tier_note"]
-    assert all(c["tier"].startswith("今日相对") or c["tier"] == "相对靠前"
-               for c in weak["buy_candidates"])
-    # 只改标签：只数与排序不受影响
-    assert len(weak["buy_candidates"]) == 5
+    out = _run(30)
+    assert out["watch_candidates"]
+    for c in out["watch_candidates"]:
+        assert "rank" not in c
+        assert "tier" not in c
+        assert "strength" not in c
+    for gone in ("tier_note", "relative_only", "strong_tier_count", "buy_candidates"):
+        assert gone not in out
 
-    strong = _run(5, opens=[5.0, 4.5, 4.0, 3.5, 3.2])
-    assert strong["relative_only"] is False
-    assert strong["tier_note"] == ""
-    assert strong["buy_candidates"][0]["tier"] == "最强推荐"
+
+def test_note_states_the_measured_result_not_a_promise():
+    """卡片文案必须把实测结论摆在前面，不能只说「仅供参考」。"""
+    out = _run(30)
+    assert "不是买入清单" in out["note"] or "不要当买入清单" in out["note"]
+    assert out["hit_stats"]["sessions"] == 46
+    assert out["hit_stats"]["matched_control_pp"] < 0
 
 
 def test_recorded_codes_are_exposed_for_pattern_backfill():

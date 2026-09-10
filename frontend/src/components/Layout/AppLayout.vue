@@ -24,10 +24,8 @@
       >
         <el-menu-item index="/dashboard"><el-icon><Odometer /></el-icon><span>盘面总览</span></el-menu-item>
         <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
-        <el-menu-item index="/call-auction"><el-icon><Sunrise /></el-icon><span>集合竞价</span></el-menu-item>
         <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
         <el-menu-item index="/rotation"><el-icon><Refresh /></el-icon><span>板块轮动</span></el-menu-item>
-        <el-menu-item index="/breadth"><el-icon><Grid /></el-icon><span>市场宽度</span></el-menu-item>
         <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
         <el-menu-item index="/risk-alert"><el-icon><Warning /></el-icon><span>风险预警</span></el-menu-item>
         <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
@@ -63,7 +61,7 @@ import { useRoute } from 'vue-router'
 import {
   TrendCharts, Star,
   DocumentChecked, Menu,
-  MagicStick, Tools, DataLine, Sunrise, DataAnalysis, Histogram, Warning, Odometer, Refresh, Grid,
+  MagicStick, Tools, DataLine, DataAnalysis, Histogram, Warning, Odometer, Refresh,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'
@@ -74,7 +72,7 @@ const route = useRoute()
 
 // 需要保活的搜索类页面（组件 name 必须与此一致）。个股深研/复盘不保活：
 // 深研每次点开都要跟着新代码重新分析，不能复用上一只票的旧结果。
-const CACHED_VIEWS = ['DashboardPage', 'QuantPage', 'CallAuctionPage', 'LimitUpPage', 'HeatmapPage', 'RiskAlertPage']
+const CACHED_VIEWS = ['DashboardPage', 'QuantPage', 'LimitUpPage', 'HeatmapPage', 'RiskAlertPage']
 
 const billingInfo = ref<BillingMe | null>(null)
 const mobileMenuOpen = ref(false)

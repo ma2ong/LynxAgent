@@ -87,7 +87,6 @@
           <el-radio-button value="smart">一键智选推荐</el-radio-button>
           <el-radio-button value="smart_timing">时机融合 v1</el-radio-button>
           <el-radio-button value="smart_structure">结构基线（对照）</el-radio-button>
-          <el-radio-button value="auction">竞价优选</el-radio-button>
           <el-radio-button value="pattern">形态智选（对照）</el-radio-button>
           <el-radio-button value="strength">强势股（对照）</el-radio-button>
         </el-radio-group>
@@ -259,10 +258,10 @@ const POOL_LABELS: Record<string, string> = {
   smart: '一键智选推荐',
   smart_timing: '时机融合 v1',
   smart_structure: '结构基线（对照）',
-  auction: '竞价优选',
   pattern: '形态智选（对照）',
   strength: '强势股（对照）',
   // 以下为已退役的旧池，仅解析历史留痕用，复盘页不再展示
+  auction: '竞价优选（已退役）',
   swing: '短线波段',
   smart_v2: '智能推荐 v2（已退役）',
   smart_fac: '因子实验（已转正为 v3）',
@@ -272,7 +271,7 @@ const poolLabel = (key: string) => POOL_LABELS[key] || key
 // 新时机层与原结构候选同时留痕，才能用同一天、同一 T+1/T+5 口径验证改造是否有效；
 // 形态与强势股继续作为更长期的影子对照组。
 const VISIBLE_POOLS = [
-  'smart', 'smart_timing', 'smart_structure', 'auction', 'pattern', 'strength',
+  'smart', 'smart_timing', 'smart_structure', 'pattern', 'strength',
 ]
 const keepVisible = <T extends { pool: string }>(list: T[]) =>
   list.filter((p) => VISIBLE_POOLS.includes(p.pool))

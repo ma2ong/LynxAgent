@@ -301,12 +301,6 @@
                         </template>
                       </div>
                     </div>
-                    <div class="mini">
-                      <div class="mini-head"><b>集合竞价</b><span class="spacer"></span><span>进入 →</span></div>
-                      <div class="tri">
-                        <span v-for="s in ovAuction" :key="s.label"><b>{{ s.value }}</b><i>{{ s.label }}</i></span>
-                      </div>
-                    </div>
                   </div>
                 </div>
               </div>
@@ -411,40 +405,6 @@
           <span class="cap dim">同为按真实版面重绘</span>
         </div>
         <div class="gallery">
-          <!-- 集合竞价 -->
-          <div class="card">
-            <div class="win-head"><b>集合竞价</b><span class="spacer"></span><span>09:25 撮合结束</span></div>
-            <div class="card-media">
-              <div class="screen">
-                <div class="au-top">
-                  <span class="k">竞价情绪</span><span class="v down">弱</span>
-                  <span class="spacer"></span><span class="m dim">示意 · 2026-08-19 09:25</span>
-                </div>
-                <div class="au-kv">
-                  <span v-for="k in auctionKv" :key="k.label">
-                    <span class="dim">{{ k.label }}</span>
-                    <span v-html="k.value"></span>
-                  </span>
-                </div>
-                <div class="au-dist">
-                  <span class="dim">高开幅度分布</span>
-                  <span class="dist">
-                    <i v-for="(d, i) in openDist" :key="i" :style="{ flexGrow: d.n, opacity: d.o }" :class="d.tone"></i>
-                  </span>
-                </div>
-                <p class="screen-say">竞价普遍低开，当日情绪偏弱，控制仓位、以防守为主。</p>
-              </div>
-            </div>
-            <div class="card-copy">
-              <h3>开盘前就把当日定性</h3>
-              <ul class="ticks">
-                <li>撮合一结束就给出情绪档位，并说明这个档位历史上对应什么状况</li>
-                <li>全市场高开幅度分布同屏，是普涨还是分化看得出来</li>
-                <li>热门板块按竞价强度排序，资金在哪个方向合力一目了然</li>
-              </ul>
-            </div>
-          </div>
-
           <!-- 行业热力 -->
           <div class="card">
             <div class="win-head"><b>行业热力</b><span class="spacer"></span><span>全市场 treemap</span></div>
@@ -894,7 +854,6 @@ const limits = [
   '滑点未计：双边交易成本（约 0.13pp / 期）已扣，冲击成本与滑点没有。',
   '窗口敏感：会话轴前移 3 周即可让部分结论翻转，任何单次回放数字都不能当承诺。',
   '排除规则用当前股票名称，历史时点的 ST 状态无法还原。',
-  '竞价优选依赖盘中数据，日线无法 point-in-time 重建，目前只有实盘留痕，样本不足以下结论。',
 ]
 
 // ── 盘面总览示意面板 ──────────────────────────────────────────
@@ -908,11 +867,6 @@ const ovRisk = [
   { value: '351', label: '减仓防守', tone: 'up' },
   { value: '7', label: '反包观察', tone: '' },
 ]
-const ovAuction = [
-  { value: '0', label: '主力抢筹' },
-  { value: '0', label: '洗盘低吸' },
-  { value: '0', label: '诱多出货' },
-]
 const ovHeat = [
   { name: '航天装备Ⅱ', w: 88, value: '+6.29%', tone: 'up' },
   { name: '风电设备', w: 40, value: '+2.57%', tone: 'up' },
@@ -921,7 +875,6 @@ const ovHeat = [
   { name: '通信设备', w: 63, value: '−4.48%', tone: 'down' },
 ]
 const ovReview = [
-  { name: '竞价优选', cells: [{ v: '55%', tone: 'up' }, { v: '62%', tone: 'up' }, { v: '56%', tone: 'up' }] },
   { name: '智能选股', cells: [{ v: '50%', tone: 'up' }, { v: '47%', tone: 'down' }, { v: '45%', tone: 'down' }] },
 ]
 
@@ -947,15 +900,6 @@ const reviewPools = [
     ],
   },
   {
-    name: '竞价优选',
-    marks: '295 条留痕',
-    cells: [
-      { h: 'T+1', win: '55%', avg: '+1.41%', ex: '+0.98pp', n: '280', tone: 'up' },
-      { h: 'T+3', win: '62%', avg: '+2.58%', ex: '+1.02pp', n: '250', tone: 'up' },
-      { h: 'T+5', win: '56%', avg: '+1.94%', ex: '−0.88pp', n: '220', tone: 'up' },
-    ],
-  },
-  {
     name: '时机融合 v1',
     marks: '459 条留痕',
     cells: [
@@ -966,22 +910,6 @@ const reviewPools = [
   },
 ]
 
-// ── 集合竞价示意面板 ──────────────────────────────────────────
-const auctionKv = [
-  { label: '高开 / 低开', value: '<b class="up">721</b> / <b class="down">4189</b>' },
-  { label: '高开比', value: '<b>13.5%</b>' },
-  { label: '平均开盘', value: '<b class="down">−1.02%</b>' },
-  { label: '竞价涨停 / 跌停', value: '<b class="up">9</b> / <b class="down">7</b>' },
-]
-const openDist = [
-  { n: 9, o: 1, tone: 'up' },
-  { n: 22, o: 0.55, tone: 'up' },
-  { n: 69, o: 0.3, tone: 'up' },
-  { n: 621, o: 0.14, tone: 'up' },
-  { n: 415, o: 1, tone: 'flat' },
-  { n: 3665, o: 0.3, tone: 'down' },
-  { n: 531, o: 1, tone: 'down' },
-]
 
 // ── 行业热力 treemap：面积≈市值权重，颜色按红涨绿跌 ────────────
 const treemap = [
@@ -1119,7 +1047,6 @@ const kline = computed(() => {
 })
 
 const dayline = [
-  { at: '09:25', board: '集合竞价', body: '撮合一结束就给出当日情绪档位，并说明这个档位历史上对应什么状况。先定性，再动手。' },
   { at: '开盘后', board: '智能选股', body: '点一次跑全市场，出当日名单并当场留痕。整池等权买入，不挑一两只重仓。' },
   { at: '盘中', board: '风险预警 · 行业热力', body: '风险分四档红绿灯给出明确的仓位动作；热力图看钱去了哪些行业。' },
   { at: '15:00 收盘', board: '涨停热点', body: '钱堆在哪一档高度、哪一个方向。连板梯队看得出是在发酵还是已经见顶。' },
@@ -1184,7 +1111,7 @@ const fitNo = [
 
 const freeItems = [
   '全部选股池与每日名单，条数不因免费而缩水',
-  '集合竞价 / 行业热力 / 涨停热点 / 风险预警',
+  '行业热力 / 板块轮动 / 涨停热点 / 风险预警',
   '个股深研 / 选股复盘 / 自选股 / 数据中心',
   '历史回放数据与全部复盘战绩，含为负的那部分',
   '不限次数，没有任何需要付费才能看到的部分',
@@ -1581,13 +1508,6 @@ const faqs = [
 .rv-cell i { display: block; font-style: normal; font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); line-height: 1.7; }
 
 .au-top { padding-bottom: 11px; border-bottom: 1px solid var(--rule); }
-.au-kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; font-family: var(--mono); font-size: 11.5px; }
-.au-kv > span { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--rule-soft); }
-.au-dist { display: flex; align-items: center; gap: 8px; padding-top: 11px; font-family: var(--mono); font-size: 10px; }
-.dist { display: flex; flex-grow: 1; height: 8px; }
-.dist i.up { background: var(--up); }
-.dist i.down { background: var(--down); }
-.dist i.flat { background: var(--rule); }
 
 .tm-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding-bottom: 10px; font-family: var(--mono); font-size: 10px; }
 .tm-top b { font-size: 12px; font-weight: 600; }
@@ -1731,7 +1651,6 @@ const faqs = [
   .caveat { padding-left: 0; }
   .ov-grid, .rv-grid { grid-template-columns: 1fr; }
   .lu-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .au-kv { grid-template-columns: 1fr; }
   /* 密排的示意屏在手机上不硬压：让它在自己的容器里横向滚，
      页面主体绝不横向滚动。 */
   .media, .card-media { overflow-x: auto; }

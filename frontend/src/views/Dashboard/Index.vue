@@ -146,30 +146,6 @@
         </div>
       </article>
 
-      <!-- 集合竞价 -->
-      <article class="card">
-        <header @click="go('/call-auction')">
-          <span class="c-ico">🌅</span><h3>集合竞价</h3><span class="c-more">进入 →</span>
-        </header>
-        <div class="c-body">
-          <template v-if="auction">
-            <div class="kpi-mini">
-              <div><b class="up2">{{ auction.pc.accumulation }}</b><span>主力抢筹</span></div>
-              <div><b class="up2">{{ auction.pc.shakeout }}</b><span>洗盘低吸</span></div>
-              <div><b class="down2">{{ auction.pc.distribution }}</b><span>诱多出货</span></div>
-            </div>
-            <div v-if="auction.top.length" class="rank-list">
-              <div v-for="c in auction.top" :key="c.code" class="rank-row" @click="goStock(c.code)">
-                <span class="rk-name">{{ c.name }}<small>{{ c.code }}</small></span>
-                <span class="up2">+{{ c.open_pct }}%</span>
-              </div>
-            </div>
-            <small v-else class="c-note">当日强势板块暂无高开异动</small>
-          </template>
-          <p v-else class="c-cta">竞价高开推导情绪 + 盘口四形态标注异动个股</p>
-        </div>
-      </article>
-
       <!-- 行业热力 -->
       <article class="card">
         <header @click="go('/heatmap')">
@@ -395,14 +371,13 @@ const smartWin = ref<number | null>(null)
 const smartDate = ref('')
 const poolStats = ref<{ label: string; t1: number | null; t3: number | null; t5: number | null }[]>([])
 const topSell = ref<{ symbol: string; name: string; signal: string }[]>([])
-const auction = ref<{ pc: Record<string, number>; top: any[] } | null>(null)
 const limitUp = ref<{ up: number; down: number; maxBoards: number; causes: { name: string; n: number }[] } | null>(null)
 const hotIndustries = ref<{ name: string; pct: number }[]>([])
 const favs = ref<{ symbol: string; name: string; pct: number | null }[]>([])
 const favTop = computed(() =>
   [...favs.value].sort((a, b) => Math.abs(b.pct ?? 0) - Math.abs(a.pct ?? 0)).slice(0, 4))
 
-const POOL_LABEL: Record<string, string> = { smart: '一键智选', auction: '竞价优选' }
+const POOL_LABEL: Record<string, string> = { smart: '一键智选' }
 const winCls = (v: number | null) => (v == null ? 'muted' : v >= 50 ? 'up' : 'down')
 const fmtWin = (v: number | null) => (v == null ? '—' : `${v}%`)
 
@@ -448,7 +423,7 @@ const loadCards = async (retries = 1) => {
       .slice(0, 3).map((i) => ({ symbol: i.symbol, name: i.name, signal: i.signal }))
     }).catch(() => { failed = true }),
     quantApi.picksStats(30, '', false).then((res) => {
-      const stats = (res?.pools || []).filter((p) => ['smart', 'auction'].includes(p.pool))
+      const stats = (res?.pools || []).filter((p) => p.pool === 'smart')
       poolStats.value = stats.map((p) => ({
         label: POOL_LABEL[p.pool] || p.pool,
         t1: p.horizons?.t1?.win_rate == null ? null : Math.round(p.horizons.t1.win_rate * 100),
@@ -489,14 +464,6 @@ const loadCards = async (retries = 1) => {
       favs.value = list.map((f: any) => ({
         symbol: f.symbol || f.stock_code, name: f.stock_name, pct: f.change_percent ?? null,
       }))
-    }).catch(() => { failed = true }),
-    ApiClient.get<any>('/api/lite/call-auction', { _ts: Date.now() }, { timeout: 30000 }).then((raw) => {
-      const d = raw?.data ?? raw
-      const pc = d?.auction_tape?.pattern_counts
-      if (d) auction.value = {
-        pc: { accumulation: pc?.accumulation || 0, shakeout: pc?.shakeout || 0, distribution: pc?.distribution || 0 },
-        top: (d.watch_candidates || []).slice(0, 3),
-      }
     }).catch(() => { failed = true }),
     ApiClient.get<any>('/api/lite/limit-up', {}, { timeout: 45000 }).then((raw) => {
       const d = raw?.data ?? raw

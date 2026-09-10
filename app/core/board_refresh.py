@@ -336,10 +336,20 @@ async def _refresh_cycle() -> None:
         return
     await _safe("breadth", ins.lite_breadth())
 
-    # 5) 一键智选的结构因子基于完整日 K，每个交易日只需预热一次。
+    # 5) 一键智选的结构因子基于完整日 K，所以「预热一次」的单位是**日线基准日**，
+    #    不是自然日：收盘同步落库后基准日翻到今天，cache_key 随之换代，旧的那把
+    #    key 就再也没人要了。原来按自然日打标记（且只在 09:00–15:40 窗口内预热），
+    #    于是 15:20 同步完成后到次日开盘，选股页拿到的永远是 warming 空名单，用户
+    #    只能手点一键智能推荐（2026-09-10 定位）。改成跟着基准日走、不设时段闸：
+    #    每个基准日仍只重算一次，代价上限是每天多一次盘后扫描。
     #    盘中实时价与时机层由用户请求刷新；后台每 60 秒进入推荐锁会让用户点击无谓排队。
-    today = datetime.now(_TZ).strftime("%Y-%m-%d")
-    if _in_active_window() and _smart_pool_warm_date != today and not syncing:
+    bar_date = ""
+    try:
+        from quantcore.quant.local_store import get_local_store
+        bar_date = get_local_store().latest_real_bar_date() or ""
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("board refresh [smart-pool] bar date unavailable: %s", exc)
+    if bar_date and _smart_pool_warm_date != bar_date and not syncing:
         if not _has_memory_budget("smart-pool"):
             return
         try:
@@ -352,6 +362,6 @@ async def _refresh_cycle() -> None:
                 force_refresh=False,
             )
             if m._smart_pool_response_has_items(result):
-                _smart_pool_warm_date = today
+                _smart_pool_warm_date = bar_date
         except Exception as exc:  # noqa: BLE001
             logger.warning("board refresh [smart-pool] failed: %s", exc)

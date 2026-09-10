@@ -1967,6 +1967,14 @@ async def _compute_lite_smart_pool_unlocked(
     # 全市场评分（与回放口径一致：回放在全市场上取每期 top-N）。v3 结构因子分走进程池，
     # 3700 只约 32 秒，5000 只的上限扛得住；旧的 1200 截断会让线上池和回放验证的池不是一回事。
     safe_universe = max(safe_limit * 2, min(universe_limit, 10000))
+    # 候选上限归一到本地股票池真实规模。引擎在 limit >= 池子大小时不截断，所以请求
+    # 5525 / 6000 / 10000 扫的是同一份全市场；但 cache_key 带的是请求原值，于是它们
+    # 各成一把 key —— 后台保温器暖的是 10000，选股页请求的是 meta_count(5525)，
+    # cache_only 永远落空、永远端出 warming 空名单，用户只能天天手点一键智能推荐
+    # （2026-09-10 定位）。归一后三者共用一把 key，进页面即命中暖好的名单。
+    universe_count = get_local_store().symbol_count() or 0
+    if universe_count:
+        safe_universe = max(safe_limit * 2, min(safe_universe, universe_count))
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     cache_key = (

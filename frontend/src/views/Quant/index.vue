@@ -905,7 +905,7 @@ const refreshSmartPoolLive = async () => {
 }
 
 // 进页面自动跑一次一键智能推荐（Allen 2026-08-28：不想每天手点）。
-// 三条约束，缺一条就会变成灾难：
+// 四条约束，缺一条就会变成灾难：
 // 1. 只在**今天还没扫过**时触发。cache_only 秒显的名单可能是昨天底池按今日实时重排
 //    的结果 —— 有名单不代表今天扫过，所以判据用后端的 scanned_today（当日留痕），
 //    不是 items.length。
@@ -915,12 +915,16 @@ const refreshSmartPoolLive = async () => {
 let autoScanTried = false
 
 const maybeAutoScan = (result: QuantSmartPoolResult | null) => {
-  if (autoScanTried || !result || result.scanned_today !== false) return
+  if (autoScanTried || !result) return
+  // 4. 今天扫过、但这套参数端不出名单（缓存落空/暖机中）时也要补一刀。否则页面就
+  //    一直空着等用户手点 —— 「今天扫过」是后端视角，用户看到的是一个空表。
+  const nothingToShow = !smartPoolResult.value?.items?.length
+  if (result.scanned_today !== false && !nothingToShow) return
   if (smartPoolLoading.value || smartPoolTask.value) return
   const hour = new Date().getHours()
   if (hour < 9 || hour >= 16) return
   autoScanTried = true
-  ElMessage.info('今日尚未生成名单，正在自动运行一键智能推荐')
+  ElMessage.info('正在自动运行一键智能推荐，稍后展示今日名单')
   loadSmartPool()
 }
 

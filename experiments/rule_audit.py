@@ -394,6 +394,23 @@ def _attach_run_height(df: pd.DataFrame) -> None:
     df["run_gain"] = (df["close"] / low60 - 1) * 100
 
 
+def _attach_trend(df: pd.DataFrame) -> None:
+    """中期趋势与人气榜位：50 日均线状态、当日成交额全市场名次。
+
+    50 日均线是最常见的「先定趋势再选信号」判据：价在线上或线在往上 = 上涨趋势，
+    线在往下 = 下跌趋势。系统现有因子最长只看 20 日（dist_ma20 / prior_ret20），
+    没有任何一列描述中期趋势，所以值得单独审。
+    均线「向上」用 10 日前的均线值对比，阈值先定死，不看结果再调。
+    """
+    g = df.groupby("symbol", sort=False)
+    ma50 = g["close"].transform(lambda s: s.rolling(50, min_periods=50).mean())
+    df["dist_ma50"] = (df["close"] / ma50 - 1) * 100
+    ma50_prev = ma50.groupby(df["symbol"], sort=False).shift(10)
+    df["ma50_slope"] = (ma50 / ma50_prev - 1) * 100
+    # 当日成交额在全市场的名次（1 = 成交额最大）。「成交榜前 N」就是这一列。
+    df["amt_rank"] = df.groupby("date", sort=False)["amount"].rank(ascending=False, method="first")
+
+
 def _attach_regime(df: pd.DataFrame) -> None:
     """挂上每个交易日的大盘环境标签（偏暖 / 中性 / 偏冷）。
 
@@ -497,6 +514,7 @@ def build_panel(db: str, since: str, horizon: int, entry: str = "close") -> pd.D
     _attach_reversal(df)
     _attach_lead(df)         # 带队指数，依赖 _attach_sector 的 industry / sec_n
     _attach_run_height(df)
+    _attach_trend(df)
     _attach_regime(df)
 
     df = df[df["fwd_excess"].notna()]
@@ -848,6 +866,37 @@ RULES = {
     "supertrend_flip": ("Supertrend 当日刚翻多（新信号）", lambda d: d["st_flip_up"]),
     "donchian20": ("突破前 20 日最高价（20 日新高）", lambda d: d["donchian20"]),
     "donchian55": ("突破前 55 日最高价（55 日新高）", lambda d: d["donchian55"]),
+
+    # ---- 中期趋势族（2026-09-15）：「先定趋势再选信号」。四条一起过 Holm。
+    # 结论：ma50_strict 是第二条过七闸的规则（T+5 增量 +0.18 / CI +0.09 / 去右尾 +0.39 /
+    # 七年全正；T+20 +0.23 / CI +0.06）。**但生产不用改**：智选池回放里 98% 的票本来就
+    # 满足它（trend 因子权重 20%，含 ma20/ma60 斜率），装成硬闸门较基线 −0.04pp/t=−0.70，
+    # 等于什么都没做。宽口径 ma50_up（价上「或」线升）T+5 过不了闸（+0.05 / CI −0.03），
+    # 「或」把没趋势的票放进来了；ma50_down 增量 −0.03，「下跌趋势别买」在 A 股横截面
+    # 上没有牙齿；趋势中回踩 −0.09，不是买点。
+    #   ma50_up     上涨趋势的原始定义（价在线上 **或** 线在往上），最宽
+    #   ma50_strict 价在线上 **且** 线在往上，最严
+    #   ma50_down   下跌趋势（线在往下），预期为负 —— 反向对照
+    #   ma50_flat   线在往上但价已跌破，问「趋势里的回踩」是不是买点
+    "ma50_up": ("50日均线上涨趋势（价在线上 或 均线向上）",
+                lambda d: (d["dist_ma50"] > 0) | (d["ma50_slope"] > 0)),
+    "ma50_strict": ("价在50日线上 且 均线向上",
+                    lambda d: (d["dist_ma50"] > 0) & (d["ma50_slope"] > 0)),
+    "ma50_down": ("50日均线向下（下跌趋势）", lambda d: d["ma50_slope"] < 0),
+    "ma50_pullback": ("均线向上但价跌破50日线（趋势中回踩）",
+                      lambda d: (d["dist_ma50"] <= 0) & (d["ma50_slope"] > 0)),
+    # ---- 人气/成交榜（2026-09-15）：「有钱人买啥我买啥」。剂量对照 20 / 50 / 100。
+    # 结论：T+5 三档全过不了闸（增量 +0.10 / +0.05 / +0.08，CI 下沿都跨 0），成交额最大
+    # 的那几十只跟同档（≥10 亿）里没进榜的票没区别；装到智选池上（+amt_top100）留存 37%、
+    # 较基线 −0.31pp。T+20 的 amt_top20 勉强过（+0.30 / CI +0.06，只有 4 个年份），
+    # 产品是 T+5，不采。同花顺「人气榜」是另一回事（搜索/关注热度），库里没有历史，审不了。
+    # 匹配对照按成交额分档，top-20 会跟同档（≥10 亿）里没进榜的票比，答的是
+    # 「在同样有人气的票里，最前面那几十只是不是更好」。
+    "amt_top20": ("当日成交额全市场前 20", lambda d: d["amt_rank"] <= 20),
+    "amt_top50": ("当日成交额全市场前 50", lambda d: d["amt_rank"] <= 50),
+    "amt_top100": ("当日成交额全市场前 100", lambda d: d["amt_rank"] <= 100),
+    "amt_top20_up": ("成交榜前 20 且 50 日均线上涨趋势",
+                     lambda d: (d["amt_rank"] <= 20) & ((d["dist_ma50"] > 0) | (d["ma50_slope"] > 0))),
     "maxvol_down": ("近 60 日天量那天收阴（疑似派发）", lambda d: d["maxvol60_down"]),
     "maxvol_up": ("近 60 日天量那天收阳（派发判据的另一侧）",
                   lambda d: d["maxvol60_valid"] & ~d["maxvol60_down"]),

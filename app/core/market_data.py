@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -36,6 +38,11 @@ lite_realtime_quotes_cache: tuple[datetime, dict[str, dict[str, Any]]] | None = 
 _quotes_loading: bool = False
 _akshare_last_failure: datetime | None = None  # backoff: skip akshare for 5 min after failure
 lite_data_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="lite-data")
+# 批量取价单独一个小池子。asyncio.wait_for 超时只是不再等，线程并不会被释放：热力图/
+# 涨停分布这类 15~30s 的重活把 lite_data_executor 三条线程全占住时，5s 的取价排队等不到
+# 线程就超时，一键智选就会把缓存里的昨收当现价端出去（2026-09-15 09:30 现场）。
+lite_quote_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="lite-quote")
+logger = logging.getLogger(__name__)
 
 
 def _cache_get(key: str, ttl_seconds: int) -> Any | None:
@@ -54,7 +61,7 @@ def _cache_set(key: str, value: Any) -> Any:
     return value
 
 
-async def _run_data_task(func, *args, timeout: float = 20.0):
+async def _run_data_task(func, *args, timeout: float = 20.0, executor: ThreadPoolExecutor | None = None):
     """Run market-data work in a small isolated executor.
 
     The default asyncio thread pool can be occupied by slow third-party data
@@ -63,7 +70,7 @@ async def _run_data_task(func, *args, timeout: float = 20.0):
     """
     loop = asyncio.get_running_loop()
     return await asyncio.wait_for(
-        loop.run_in_executor(lite_data_executor, lambda: func(*args)),
+        loop.run_in_executor(executor or lite_data_executor, lambda: func(*args)),
         timeout=timeout,
     )
 
@@ -596,12 +603,25 @@ async def _realtime_quotes(
     if not clean_symbols:
         return {}
     quotes: dict[str, dict[str, Any]] = {}
+    timeout = 5.0 if len(clean_symbols) <= 80 else 12.0
+    started = time.monotonic()
     try:
-        timeout = 5.0 if len(clean_symbols) <= 80 else 12.0
-        quotes = await _run_data_task(_fetch_tencent_realtime_quotes, clean_symbols, timeout=timeout)
-    except Exception:
+        quotes = await _run_data_task(
+            _fetch_tencent_realtime_quotes, clean_symbols, timeout=timeout, executor=lite_quote_executor
+        )
+    except Exception as exc:  # noqa: BLE001 — 取价失败必须留痕，静默返回空就是昨收冒充现价
+        logger.warning(
+            "realtime quotes batch failed: %d symbols, %.1fs, %s",
+            len(clean_symbols), time.monotonic() - started, repr(exc),
+        )
         quotes = {}
     missing_symbols = [symbol for symbol in clean_symbols if symbol not in quotes]
+    if missing_symbols:
+        # 先用内存里已有的当日全市场快照补齐（后台每 60s 刷一次，最旧一分钟），不发请求。
+        # 不是今天的快照不用：那和昨收没区别，宁可标「未覆盖」。
+        cached = _todays_in_memory_snapshot()
+        quotes.update({symbol: cached[symbol] for symbol in missing_symbols if symbol in cached})
+        missing_symbols = [symbol for symbol in missing_symbols if symbol not in quotes]
     if missing_symbols and allow_snapshot_fallback:
         try:
             snapshot = await _run_data_task(_load_realtime_quotes_snapshot, timeout=8.0)
@@ -609,6 +629,17 @@ async def _realtime_quotes(
         except Exception:
             pass
     return quotes
+
+
+def _todays_in_memory_snapshot() -> dict[str, dict[str, Any]]:
+    if not lite_realtime_quotes_cache:
+        return {}
+    snapshot = lite_realtime_quotes_cache[1] or {}
+    today = datetime.now().astimezone().strftime("%Y/%m/%d")
+    sample = next(iter(snapshot.values()), None)
+    if not sample or not str(sample.get("updated_at") or "").startswith(today):
+        return {}
+    return snapshot
 
 
 def _apply_realtime_quote(item: dict[str, Any], quote: dict[str, Any] | None) -> dict[str, Any]:

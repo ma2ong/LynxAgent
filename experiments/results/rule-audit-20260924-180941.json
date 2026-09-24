@@ -1,0 +1,121 @@
+{
+  "since": "2025-10-01",
+  "horizon": 10,
+  "entry": "open",
+  "generated_at": "2026-09-24T18:09:41",
+  "thresholds": {
+    "MIN_SAMPLES": 200,
+    "MIN_CLUSTERS": 30,
+    "MIN_STABLE_YEARS": 3,
+    "TAIL_DROP": 0.05,
+    "FRICTION_PP": 0.312,
+    "ALPHA": 0.05
+  },
+  "results": [
+    {
+      "rule": "smart_structure:base",
+      "horizon": 10,
+      "samples": 734,
+      "clusters": 30,
+      "avg_excess": -2.885,
+      "avg_excess_by_pick": -2.989,
+      "median_excess": -4.757,
+      "win_rate": 0.3106,
+      "t": -4.65,
+      "p_raw": 3.2850891993341236e-06,
+      "net_of_friction": -3.197,
+      "weighting_conflict": false,
+      "matched_n": 734,
+      "inc_excess": -1.146,
+      "inc_ci_lo": -2.463,
+      "inc_ci_hi": 0.172,
+      "inc_win": -0.0522,
+      "inc_win_ci_lo": -0.0955,
+      "p_inc": 0.08827048078685529,
+      "inc_ex_tail": -0.602,
+      "avg_excess_ex_tail": -4.755,
+      "by_year": {
+        "2026": -2.885
+      },
+      "stable_years": 0,
+      "desc": "留痕 smart_structure 池 + 闸门 base",
+      "vs_base": 0.0,
+      "vs_base_t": 0.0,
+      "vs_base_days": 30,
+      "kept_share": 1.0,
+      "p_holm_threshold": 0.025,
+      "pass_holm": false,
+      "gates": {
+        "样本量": true,
+        "超额为正": false,
+        "对照增量为正": false,
+        "去右尾仍为正": false,
+        "时间稳定": false,
+        "多重检验": false,
+        "扣摩擦为正": false
+      },
+      "passed": false,
+      "failed_gates": [
+        "超额为正",
+        "对照增量为正",
+        "去右尾仍为正",
+        "时间稳定",
+        "多重检验",
+        "扣摩擦为正"
+      ]
+    },
+    {
+      "rule": "smart_structure:base,-crash60",
+      "horizon": 10,
+      "samples": 142,
+      "clusters": 30,
+      "avg_excess": -2.758,
+      "avg_excess_by_pick": -2.296,
+      "median_excess": -4.303,
+      "win_rate": 0.3028,
+      "t": -2.11,
+      "p_raw": 0.03465749259768991,
+      "net_of_friction": -3.07,
+      "weighting_conflict": false,
+      "matched_n": 142,
+      "inc_excess": -1.381,
+      "inc_ci_lo": -3.989,
+      "inc_ci_hi": 1.228,
+      "inc_win": -0.0927,
+      "inc_win_ci_lo": -0.1884,
+      "p_inc": 0.2995550736978112,
+      "inc_ex_tail": -0.382,
+      "avg_excess_ex_tail": -3.972,
+      "by_year": {
+        "2026": -2.758
+      },
+      "stable_years": 0,
+      "desc": "留痕 smart_structure 池 + 闸门 base,-crash60",
+      "vs_base": 0.127,
+      "vs_base_t": 0.12,
+      "vs_base_days": 30,
+      "kept_share": 0.193,
+      "p_holm_threshold": 0.05,
+      "pass_holm": false,
+      "gates": {
+        "样本量": false,
+        "超额为正": false,
+        "对照增量为正": false,
+        "去右尾仍为正": false,
+        "时间稳定": false,
+        "多重检验": false,
+        "扣摩擦为正": false
+      },
+      "passed": false,
+      "failed_gates": [
+        "样本量",
+        "超额为正",
+        "对照增量为正",
+        "去右尾仍为正",
+        "时间稳定",
+        "多重检验",
+        "扣摩擦为正"
+      ]
+    }
+  ]
+}

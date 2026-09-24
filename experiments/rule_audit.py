@@ -452,6 +452,33 @@ def _attach_path(df: pd.DataFrame) -> None:
     df["amp_hi_ret_q"] = df.groupby("date", sort=False)["amp_hi_ret"].rank(pct=True)
 
 
+def _attach_borrowed(df: pd.DataFrame) -> None:
+    """2026-09-24 从两个开源选股项目搬来的三条规则所需特征，口径照抄原项目。
+
+    - InStock（myhhub/stock）「回撤稳健」：近 60 日涨幅 < 60%，期间没有单日跌 ≥7%，
+      也没有两日合计跌 ≥10%。它问的正是「涨得稳的票会不会继续涨」。
+    - InStock「高而窄的旗形」：现价 ≥ 近 24 日最低价 1.9 倍，且今、昨两日各涨 ≥9.5%。
+    - KHunter「2560」：25 日均线向上且价在线上，5 日均量今天上穿 60 日均量。
+    """
+    g = df.groupby("symbol", sort=False)
+    r = df["ret1"]
+    worst1 = r.groupby(df["symbol"], sort=False).transform(lambda s: s.rolling(60, min_periods=60).min())
+    r2 = (df["close"] / g["close"].shift(2) - 1) * 100
+    worst2 = r2.groupby(df["symbol"], sort=False).transform(lambda s: s.rolling(59, min_periods=59).min())
+    df["no_crash60"] = (df["prior_ret60"] < 60) & (worst1 > -7) & (worst2 > -10)
+    df["crash60"] = worst1 <= -7
+    low24 = g["low"].transform(lambda s: s.rolling(24, min_periods=24).min())
+    prev_r = r.groupby(df["symbol"], sort=False).shift(1)
+    df["high_tight_flag"] = (df["close"] >= low24 * 1.9) & (r >= 9.5) & (prev_r >= 9.5)
+    ma25 = g["close"].transform(lambda s: s.rolling(25, min_periods=25).mean())
+    ma25_up = ma25 > ma25.groupby(df["symbol"], sort=False).shift(5)
+    a5 = g["amount"].transform(lambda s: s.rolling(5, min_periods=5).mean())
+    a60 = g["amount"].transform(lambda s: s.rolling(60, min_periods=60).mean())
+    above = a5 > a60
+    cross = above & ~above.groupby(df["symbol"], sort=False).shift(1, fill_value=True).astype(bool)
+    df["kh_2560"] = ma25_up & (df["close"] > ma25) & cross
+
+
 def _attach_regime(df: pd.DataFrame) -> None:
     """挂上每个交易日的大盘环境标签（偏暖 / 中性 / 偏冷）。
 
@@ -557,6 +584,7 @@ def build_panel(db: str, since: str, horizon: int, entry: str = "close") -> pd.D
     _attach_run_height(df)
     _attach_trend(df)
     _attach_path(df)
+    _attach_borrowed(df)
     _attach_regime(df)
 
     df = df[df["fwd_excess"].notna()]
@@ -956,6 +984,19 @@ RULES = {
                    lambda d: d["path_id_q"] >= 0.8),
     "amp_cut_low": ("近20日高振幅日涨幅合计最低 20%", lambda d: d["amp_hi_ret_q"] <= 0.2),
     "amp_cut_high": ("近20日高振幅日涨幅合计最高 20%——反向对照", lambda d: d["amp_hi_ret_q"] >= 0.8),
+    # ---- 开源项目搬来的三条（2026-09-24，见 _attach_borrowed），加一条反向对照，一起过 Holm。
+    # 【裁决】2020 起、次日开盘买：no_crash60 T+20 过七闸（+0.17 / CI +0.03，T+5 +0.02 贴 0），
+    # 反向 crash60 −0.20；high_tight_flag 明确有害（T+5 −1.20，T+20 −4.80 / CI −6.29）；
+    # kh_2560 无效（T+20 +0.15 / CI −0.02）。装到智选池：-high_tight_flag 回放里只剔掉 1 笔
+    # （结构池本来就不含），无事可做；-crash60 较基线 T+5 +0.22 / T+20 +1.23 但 t 仅 0.31/0.93、
+    # 留存 57%，线上 smart_structure 留存只剩 19%、+0.1 —— 方向对但证据不够，不上线。
+    "no_crash60": ("InStock 回撤稳健：60日涨<60%、无单日跌≥7%、无两日跌≥10%",
+                   lambda d: d["no_crash60"]),
+    "crash60": ("近60日有过单日跌≥7%——回撤稳健的反向对照", lambda d: d["crash60"]),
+    "high_tight_flag": ("InStock 高而窄旗形：距24日低点≥1.9倍且连续两天涨≥9.5%",
+                        lambda d: d["high_tight_flag"]),
+    "kh_2560": ("KHunter 2560：25日线向上价在线上 + 5日均量上穿60日均量",
+                lambda d: d["kh_2560"]),
     "maxvol_down": ("近 60 日天量那天收阴（疑似派发）", lambda d: d["maxvol60_down"]),
     "maxvol_up": ("近 60 日天量那天收阳（派发判据的另一侧）",
                   lambda d: d["maxvol60_valid"] & ~d["maxvol60_down"]),

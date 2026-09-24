@@ -411,6 +411,47 @@ def _attach_trend(df: pd.DataFrame) -> None:
     df["amt_rank"] = df.groupby("date", sort=False)["amount"].rank(ascending=False, method="first")
 
 
+def _attach_path(df: pd.DataFrame) -> None:
+    """上涨路径的质量（2026-09-24，借自券商金工研报复现库 QuantsPlaybook）。
+
+    Allen 要的是「推荐后能延续」，而现有因子只问涨了多少、不问怎么涨上去的。两条
+    公开研究专门回答这个：
+    - 信息离散度（Da-Gurun-Warachka 2014「frog in the pan」）：同样涨 30%，靠很多个
+      小阳线磨上去的比靠一两根大阳线跳上去的更能延续——市场对连续的小信息反应不足。
+      ID = sign(近60日涨幅) × (下跌天数占比 − 上涨天数占比)，越小越平滑。
+    - 振幅切割（开源证券金工「振幅因子的隐藏结构」）：近 20 日里振幅最大的 5 天的
+      涨幅合计。高振幅日的涨幅多是情绪脉冲，之后反转；这个数越高越差。
+    分位在当日全市场里排；阈值取五分位，先定死、不看结果再调。
+    """
+    g = df.groupby("symbol", sort=False)
+    up = (df["ret1"] > 0).astype(float)
+    dn = (df["ret1"] < 0).astype(float)
+    pos = up.groupby(df["symbol"], sort=False).transform(lambda s: s.rolling(60, min_periods=60).mean())
+    neg = dn.groupby(df["symbol"], sort=False).transform(lambda s: s.rolling(60, min_periods=60).mean())
+    df["path_id"] = np.sign(df["prior_ret60"]) * (neg - pos)
+    rising = df["prior_ret60"] > 0
+    df["path_id_q"] = df["path_id"].where(rising).groupby(df["date"], sort=False).rank(pct=True)
+
+    prev = g["close"].shift(1)
+    amp = ((df["high"] - df["low"]) / prev).to_numpy()
+    r = df["ret1"].to_numpy()
+    sym = df["symbol"].to_numpy()
+    out = np.full(len(df), np.nan)
+    starts = np.flatnonzero(np.r_[True, sym[1:] != sym[:-1]])
+    ends = np.r_[starts[1:], len(df)]
+    from numpy.lib.stride_tricks import sliding_window_view
+    for a, b in zip(starts, ends):
+        if b - a < 21:
+            continue
+        wa = sliding_window_view(amp[a + 1:b], 20)
+        wr = sliding_window_view(r[a + 1:b], 20)
+        wa = np.where(np.isnan(wa), -np.inf, wa)
+        top = np.argpartition(-wa, 5, axis=1)[:, :5]
+        out[a + 20:b] = np.take_along_axis(wr, top, axis=1).sum(axis=1)
+    df["amp_hi_ret"] = out
+    df["amp_hi_ret_q"] = df.groupby("date", sort=False)["amp_hi_ret"].rank(pct=True)
+
+
 def _attach_regime(df: pd.DataFrame) -> None:
     """挂上每个交易日的大盘环境标签（偏暖 / 中性 / 偏冷）。
 
@@ -515,6 +556,7 @@ def build_panel(db: str, since: str, horizon: int, entry: str = "close") -> pd.D
     _attach_lead(df)         # 带队指数，依赖 _attach_sector 的 industry / sec_n
     _attach_run_height(df)
     _attach_trend(df)
+    _attach_path(df)
     _attach_regime(df)
 
     df = df[df["fwd_excess"].notna()]
@@ -897,6 +939,23 @@ RULES = {
     "amt_top100": ("当日成交额全市场前 100", lambda d: d["amt_rank"] <= 100),
     "amt_top20_up": ("成交榜前 20 且 50 日均线上涨趋势",
                      lambda d: (d["amt_rank"] <= 20) & ((d["dist_ma50"] > 0) | (d["ma50_slope"] > 0))),
+    # ---- 上涨路径质量（2026-09-24）：借自 QuantsPlaybook 复现的两篇研究，见 _attach_path。
+    # 四条一起过 Holm：两条正向 + 两条反向对照，反向对照应为负，否则机制不成立。
+    # 【2026-09-24 裁决】6 年全样本，次日开盘买：
+    #   信息离散度在 A 股**无效**：path_smooth T+5 −0.00 / T+20 −0.12，path_jumpy +0.01 / +0.06，
+    #   两侧都贴 0 且方向反了。「小阳线磨上去更能延续」是美股结论，这里不成立，别再试。
+    #   振幅切割**成立且两侧对称**：amp_cut_low 过七闸（T+5 +0.04 / CI +0.01，T+20 +0.16 /
+    #   CI +0.09）；反向 amp_cut_high 明确为负（T+5 −0.17 / CI 下沿 −0.22，T+20 −0.39 / −0.50），
+    #   七年方向一致。含义：近期涨幅主要靠几根大振幅K线拉出来的票，之后跑输同处境的票。
+    #   **但不能装进智选池**：--replay smart --variant base,-amp_cut_high 留存仅 25%（智选 75%
+    #   的票本来就在这一档），较基线 T+5 −0.14 / T+20 −1.20 —— 剔掉的正是贡献右尾的票。
+    #   与 2026-08 七个追高闸门全否同理：全市场成立的规则，在追涨池内部不一定成立。
+    "path_smooth": ("近60日上涨且路径最平滑（信息离散度最低 20%）",
+                    lambda d: d["path_id_q"] <= 0.2),
+    "path_jumpy": ("近60日上涨但路径最跳跃（信息离散度最高 20%）——反向对照",
+                   lambda d: d["path_id_q"] >= 0.8),
+    "amp_cut_low": ("近20日高振幅日涨幅合计最低 20%", lambda d: d["amp_hi_ret_q"] <= 0.2),
+    "amp_cut_high": ("近20日高振幅日涨幅合计最高 20%——反向对照", lambda d: d["amp_hi_ret_q"] >= 0.8),
     "maxvol_down": ("近 60 日天量那天收阴（疑似派发）", lambda d: d["maxvol60_down"]),
     "maxvol_up": ("近 60 日天量那天收阳（派发判据的另一侧）",
                   lambda d: d["maxvol60_valid"] & ~d["maxvol60_down"]),

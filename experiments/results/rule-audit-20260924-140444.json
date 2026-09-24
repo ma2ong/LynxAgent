@@ -1,0 +1,116 @@
+{
+  "since": "2025-01-01",
+  "horizon": 5,
+  "entry": "open",
+  "generated_at": "2026-09-24T14:04:44",
+  "thresholds": {
+    "MIN_SAMPLES": 200,
+    "MIN_CLUSTERS": 30,
+    "MIN_STABLE_YEARS": 3,
+    "TAIL_DROP": 0.05,
+    "FRICTION_PP": 0.312,
+    "ALPHA": 0.05
+  },
+  "results": [
+    {
+      "rule": "smart:base",
+      "horizon": 5,
+      "samples": 1033,
+      "clusters": 52,
+      "avg_excess": 1.427,
+      "avg_excess_by_pick": 1.417,
+      "median_excess": -0.331,
+      "win_rate": 0.4918,
+      "t": 1.68,
+      "p_raw": 0.09337561611302059,
+      "net_of_friction": 1.115,
+      "weighting_conflict": false,
+      "matched_n": 1033,
+      "inc_excess": 0.656,
+      "inc_ci_lo": -0.194,
+      "inc_ci_hi": 1.506,
+      "inc_win": 0.0261,
+      "inc_win_ci_lo": -0.0095,
+      "p_inc": 0.13031202985548007,
+      "inc_ex_tail": 2.427,
+      "avg_excess_ex_tail": -0.185,
+      "by_year": {
+        "2025": 2.371,
+        "2026": 0.619
+      },
+      "stable_years": 2,
+      "desc": "回放 smart 池 + 闸门 base",
+      "vs_base": 0.0,
+      "vs_base_t": 0.0,
+      "vs_base_days": 52,
+      "kept_share": 1.0,
+      "p_holm_threshold": 0.025,
+      "pass_holm": false,
+      "gates": {
+        "样本量": true,
+        "超额为正": true,
+        "对照增量为正": false,
+        "去右尾仍为正": true,
+        "时间稳定": false,
+        "多重检验": false,
+        "扣摩擦为正": true
+      },
+      "passed": false,
+      "failed_gates": [
+        "对照增量为正",
+        "时间稳定",
+        "多重检验"
+      ]
+    },
+    {
+      "rule": "smart:base,-amp_cut_high",
+      "horizon": 5,
+      "samples": 254,
+      "clusters": 50,
+      "avg_excess": 1.382,
+      "avg_excess_by_pick": 1.716,
+      "median_excess": 0.416,
+      "win_rate": 0.5157,
+      "t": 1.29,
+      "p_raw": 0.19738254563283908,
+      "net_of_friction": 1.07,
+      "weighting_conflict": false,
+      "matched_n": 254,
+      "inc_excess": 0.584,
+      "inc_ci_lo": -0.974,
+      "inc_ci_hi": 2.143,
+      "inc_win": 0.0285,
+      "inc_win_ci_lo": -0.0533,
+      "p_inc": 0.46237279448524693,
+      "inc_ex_tail": 2.478,
+      "avg_excess_ex_tail": 0.471,
+      "by_year": {
+        "2025": 3.149,
+        "2026": -0.25
+      },
+      "stable_years": 1,
+      "desc": "回放 smart 池 + 闸门 base,-amp_cut_high",
+      "vs_base": -0.136,
+      "vs_base_t": -0.23,
+      "vs_base_days": 50,
+      "kept_share": 0.246,
+      "p_holm_threshold": 0.05,
+      "pass_holm": false,
+      "gates": {
+        "样本量": true,
+        "超额为正": true,
+        "对照增量为正": false,
+        "去右尾仍为正": true,
+        "时间稳定": false,
+        "多重检验": false,
+        "扣摩擦为正": true
+      },
+      "passed": false,
+      "failed_gates": [
+        "对照增量为正",
+        "时间稳定",
+        "多重检验"
+      ]
+    }
+  ]
+}

@@ -383,7 +383,13 @@ SMART_POOL_IGNITE_BONUS = max(0.0, min(10.0, float(os.getenv("LYNX_IGNITE_BONUS"
 # 板块闸：板块 20 日动量的全市场分位低于这条线就只标注不加分。
 # 去掉这一条时增量从 +0.16 掉到 +0.03（ig2_low），板块是这条规则的必要条件而非装饰。
 SMART_POOL_IGNITE_SECTOR_Q = max(0.0, min(1.0, float(os.getenv("LYNX_IGNITE_SECTOR_Q", "0.7"))))
-SMART_POOL_INTRADAY_WEIGHT = 0.22
+# 盘中强度（当日涨幅+成交活跃）在最终排序里的权重。2026-09-24 起默认 0（原 0.22）。
+# experiments/intraday_rerank_ab.py：在结构分前 60 名里按旧公式重排取前 20，
+# 12 个月回放 T+5/T+10/T+20 较纯结构分 −0.64/−0.94/−1.56pp（次日开盘买），
+# 8~9 月样本外同样为负；权重 11%/22%/33% 三档全负——任何正权重都会把当日大涨票
+# 顶上来换掉半张名单，而它们之后几天回吐。线上留痕同期 T+10 匹配对照增量 −1.65
+# （CI −3.07~−0.23）。设 LYNX_SMART_INTRADAY_WEIGHT=0.22 可退回旧排序。
+SMART_POOL_INTRADAY_WEIGHT = max(0.0, min(0.4, float(os.getenv("LYNX_SMART_INTRADAY_WEIGHT", "0"))))
 # 当日板块强弱在盘中重排里的最大加/减分：分位 1.0 → +N，0.0 → −N，0.5 → 0。
 # 与雷达的板块权重同理，这个数**没有回测依据** —— 板块的盘中口径历史从 2026-08-05
 # 才开始按日落 14:30 全市场快照，攒够样本前无法 A/B。所以默认保守、走环境变量可调，
@@ -1192,7 +1198,8 @@ def _merge_intraday_quality(
     )
     data["ranking_basis"] = (
         "最近完整日K筛结构底池；盘中爆发仅允许结构质量前10%、今日涨幅≥4%且实时成交≥2亿的股票补入候选；"
-        "盘中动态分权重22%重排最终名单；涨停/近板不拦截，醒目标注买入难度后照常上榜；"
+        + (f"盘中动态分权重{SMART_POOL_INTRADAY_WEIGHT:.0%}重排最终名单；" if SMART_POOL_INTRADAY_WEIGHT > 0 else "当日涨幅不参与排序（实测追当日涨幅会拖累之后 5~20 日收益）；")
+        + "涨停/近板不拦截，醒目标注买入难度后照常上榜；"
         + cut_note
     )
     basis = data.get("list_basis")
@@ -1984,7 +1991,8 @@ async def _compute_lite_smart_pool_unlocked(
         # 系数 40 的主导项没有 alpha），外加地量加分项。
         # v16（2026-08-05）：industry_heat 由「昨收阶段分」改为叠加当日实时主题分位。
         # 评分输入变了就必须换 key，否则旧公式算出的名单会继续被端上来。
-        f"smart-pool:factor-v18-strength-bonus:{daily_as_of}:"
+        # v19（2026-09-24）：盘中强度权重默认 0.22 → 0，按结构分排序。
+        f"smart-pool:factor-v19-no-intraday-chase:{SMART_POOL_INTRADAY_WEIGHT}:{daily_as_of}:"
         f"{strategy}:{safe_limit}:{safe_universe}"
     )
     _smart_pool_task_update(

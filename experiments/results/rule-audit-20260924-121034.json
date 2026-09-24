@@ -1,0 +1,156 @@
+{
+  "since": "2019-01-01",
+  "horizon": 1,
+  "entry": "close",
+  "generated_at": "2026-09-24T12:10:34",
+  "thresholds": {
+    "MIN_SAMPLES": 200,
+    "MIN_CLUSTERS": 30,
+    "MIN_STABLE_YEARS": 3,
+    "TAIL_DROP": 0.05,
+    "FRICTION_PP": 0.312,
+    "ALPHA": 0.05
+  },
+  "results": [
+    {
+      "rule": "pool:smart",
+      "horizon": 1,
+      "samples": 1180,
+      "clusters": 50,
+      "avg_excess": -0.322,
+      "avg_excess_by_pick": -0.364,
+      "median_excess": -0.887,
+      "win_rate": 0.4322,
+      "t": -1.14,
+      "p_raw": 0.256154401178071,
+      "net_of_friction": -0.634,
+      "weighting_conflict": false,
+      "matched_n": 1180,
+      "inc_excess": 0.062,
+      "inc_ci_lo": -0.369,
+      "inc_ci_hi": 0.494,
+      "inc_win": 0.025,
+      "inc_win_ci_lo": -0.0131,
+      "p_inc": 0.7773245224213923,
+      "inc_ex_tail": 0.523,
+      "avg_excess_ex_tail": -1.028,
+      "by_year": {
+        "2026": -0.322
+      },
+      "stable_years": 0,
+      "desc": "线上 smart 池的真实留痕",
+      "p_holm_threshold": 0.025,
+      "pass_holm": false,
+      "gates": {
+        "样本量": true,
+        "超额为正": false,
+        "对照增量为正": false,
+        "去右尾仍为正": true,
+        "时间稳定": false,
+        "多重检验": false,
+        "扣摩擦为正": false
+      },
+      "passed": false,
+      "failed_gates": [
+        "超额为正",
+        "对照增量为正",
+        "时间稳定",
+        "多重检验",
+        "扣摩擦为正"
+      ]
+    },
+    {
+      "rule": "pool:pattern",
+      "horizon": 1,
+      "samples": 992,
+      "clusters": 55,
+      "avg_excess": -0.095,
+      "avg_excess_by_pick": -0.147,
+      "median_excess": -0.319,
+      "win_rate": 0.4637,
+      "t": -0.29,
+      "p_raw": 0.7689209078296881,
+      "net_of_friction": -0.407,
+      "weighting_conflict": false,
+      "matched_n": 992,
+      "inc_excess": 0.058,
+      "inc_ci_lo": -0.361,
+      "inc_ci_hi": 0.476,
+      "inc_win": 0.0102,
+      "inc_win_ci_lo": -0.0264,
+      "p_inc": 0.7868226378777259,
+      "inc_ex_tail": 0.259,
+      "avg_excess_ex_tail": -0.851,
+      "by_year": {
+        "2026": -0.095
+      },
+      "stable_years": 0,
+      "desc": "线上 pattern 池的真实留痕",
+      "p_holm_threshold": 0.05,
+      "pass_holm": false,
+      "gates": {
+        "样本量": true,
+        "超额为正": false,
+        "对照增量为正": false,
+        "去右尾仍为正": true,
+        "时间稳定": false,
+        "多重检验": false,
+        "扣摩擦为正": false
+      },
+      "passed": false,
+      "failed_gates": [
+        "超额为正",
+        "对照增量为正",
+        "时间稳定",
+        "多重检验",
+        "扣摩擦为正"
+      ]
+    },
+    {
+      "rule": "pool:strength",
+      "horizon": 1,
+      "samples": 749,
+      "clusters": 42,
+      "avg_excess": 0.066,
+      "avg_excess_by_pick": 0.101,
+      "median_excess": -0.014,
+      "win_rate": 0.4993,
+      "t": 0.17,
+      "p_raw": 0.8684164080060741,
+      "net_of_friction": -0.246,
+      "weighting_conflict": false,
+      "matched_n": 749,
+      "inc_excess": 0.166,
+      "inc_ci_lo": -0.376,
+      "inc_ci_hi": 0.708,
+      "inc_win": 0.0512,
+      "inc_win_ci_lo": 0.0039,
+      "p_inc": 0.5475953422934636,
+      "inc_ex_tail": 0.538,
+      "avg_excess_ex_tail": -0.514,
+      "by_year": {
+        "2026": 0.066
+      },
+      "stable_years": 1,
+      "desc": "线上 strength 池的真实留痕",
+      "p_holm_threshold": 0.01667,
+      "pass_holm": false,
+      "gates": {
+        "样本量": true,
+        "超额为正": true,
+        "对照增量为正": false,
+        "去右尾仍为正": true,
+        "时间稳定": false,
+        "多重检验": false,
+        "扣摩擦为正": false
+      },
+      "passed": false,
+      "failed_gates": [
+        "对照增量为正",
+        "时间稳定",
+        "多重检验",
+        "扣摩擦为正"
+      ]
+    }
+  ]
+}

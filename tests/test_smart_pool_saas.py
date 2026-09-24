@@ -98,8 +98,8 @@ def test_intraday_strength_changes_same_daily_structure_rank():
     assert strong > weak + 8
 
 
-def test_intraday_rerank_promotes_strong_live_candidate_without_changing_structure_score():
-    items = [
+def _rerank_pair():
+    return [
         {
             "symbol": "600001",
             "smart_score": 80.0,
@@ -120,15 +120,34 @@ def test_intraday_rerank_promotes_strong_live_candidate_without_changing_structu
         },
     ]
 
+
+def test_intraday_rerank_default_does_not_chase_todays_gainer():
+    # 2026-09-24：追当日涨幅实测拖累之后 5~20 日收益（experiments/intraday_rerank_ab.py），
+    # 默认权重改 0 —— 结构分高的票不能被当日 +6% 的票挤下去。
+    items = _rerank_pair()
+
+    lite_main._rerank_smart_pool_intraday(items)
+
+    assert items[0]["symbol"] == "600001"
+    assert items[1]["quant_score"] == 76.0
+    assert items[0]["reasons"][0].startswith("盘中动态分")
+
+
+def test_intraday_rerank_rollback_weight_still_promotes_live_strength(monkeypatch):
+    # 回退路径 LYNX_SMART_INTRADAY_WEIGHT=0.22 必须仍然可用
+    monkeypatch.setattr(lite_main, "SMART_POOL_INTRADAY_WEIGHT", 0.22)
+    items = _rerank_pair()
+
     lite_main._rerank_smart_pool_intraday(items)
 
     assert items[0]["symbol"] == "600002"
     assert items[0]["quant_score"] == 76.0
     assert items[0]["realtime_rank_score"] > items[1]["realtime_rank_score"]
-    assert items[0]["reasons"][0].startswith("盘中动态分")
 
 
-def test_partial_realtime_coverage_does_not_rank_missing_quotes_as_fresh():
+def test_partial_realtime_coverage_does_not_rank_missing_quotes_as_fresh(monkeypatch):
+    # 刻度不变量只在盘中权重 > 0 时有意义，按回退权重 0.22 测
+    monkeypatch.setattr(lite_main, "SMART_POOL_INTRADAY_WEIGHT", 0.22)
     items = [
         {
             "symbol": "600001",
@@ -163,6 +182,8 @@ def test_realtime_enrichment_reranks_full_structure_candidate_pool(monkeypatch):
     # 会被 2026-08-06 加的质量线（LYNX_SMART_QUALITY_GAP，弱市不凑数）截断。
     # 显式关掉它，隔离被测对象。质量线本身由 test_quality_gap_* 覆盖。
     monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
+    # 「底池外的盘中强票能换进名单」只在盘中权重 > 0 时成立，按回退权重 0.22 测
+    monkeypatch.setattr(lite_main, "SMART_POOL_INTRADAY_WEIGHT", 0.22)
     candidates = [
         {
             "symbol": f"6000{i:02d}",

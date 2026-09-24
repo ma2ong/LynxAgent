@@ -860,6 +860,9 @@ class LocalQuantStore:
         batch_at = _datetime.now().astimezone().isoformat(timespec="seconds")
         # 09:25 起算：集合竞价池的留痕价就是竞价成交价，早于此则一定是陈旧价。
         after_open = (now.hour * 60 + now.minute) >= 9 * 60 + 25
+        # 周末不留痕：有人周末手动点扫描，会把上周五收盘价按周末日期记进历史
+        # （2026-09-12 周六、09-20 周日各多出 100 条），复盘样本凭空多两天。
+        trading_weekday = now.weekday() < 5
         rows = []
         for rank, it in enumerate(items, start=1):
             raw = str(it.get("symbol") or it.get("code") or "").strip()
@@ -882,7 +885,7 @@ class LocalQuantStore:
             already = conn.execute(
                 "SELECT 1 FROM picks_history WHERE pick_date=? AND pool=? LIMIT 1",
                 (today, pool)).fetchone()
-            if after_open and not already:
+            if after_open and trading_weekday and not already:
                 conn.executemany(
                     "INSERT OR IGNORE INTO picks_history"
                     "(pick_date,pool,symbol,name,score,close,rank,patterns) "
@@ -927,7 +930,7 @@ class LocalQuantStore:
         import sqlite3
         from datetime import datetime as _datetime
         now = _now_cn()
-        if (now.hour * 60 + now.minute) < 9 * 60 + 25:
+        if (now.hour * 60 + now.minute) < 9 * 60 + 25 or now.weekday() >= 5:
             return 0
         day = now.strftime("%Y-%m-%d")
         at = _datetime.now().astimezone().isoformat(timespec="seconds")

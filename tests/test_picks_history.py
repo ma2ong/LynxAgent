@@ -19,7 +19,10 @@ def pick_clock(monkeypatch):
     """把留痕时点钉在开盘后，并允许测试自己拨表——否则用例在 09:25 前跑会全灭。"""
     from datetime import datetime, timedelta
 
-    state = {"now": datetime.combine(date.today(), datetime.min.time()).replace(hour=10)}
+    day = date.today()
+    while day.weekday() >= 5:      # 周末不留痕，测试在周末跑时拨回最近的周五
+        day -= timedelta(days=1)
+    state = {"now": datetime.combine(day, datetime.min.time()).replace(hour=10)}
     monkeypatch.setattr(local_store, "_now_cn", lambda: state["now"])
 
     def advance(**kw):
@@ -103,6 +106,17 @@ def test_record_picks_skips_history_before_open(store, pick_clock):
     store.record_picks("smart", [{"symbol": "600002", "name": "盘后", "score": 88, "close": 12.0}])
     assert store._conn().execute(
         "SELECT symbol FROM picks_history WHERE pool='smart'").fetchall() == [("600002",)]
+
+
+def test_record_picks_skips_history_on_weekend(store, pick_clock):
+    from datetime import datetime
+    saturday = date(2026, 9, 12)
+    pick_clock["now"] = datetime.combine(saturday, datetime.min.time()).replace(hour=10)
+    store.record_picks("smart", [{"symbol": "600001", "name": "涨股", "score": 90, "close": 10.0}])
+    conn = store._conn()
+    assert conn.execute("SELECT COUNT(*) FROM picks_history").fetchone()[0] == 0
+    # 名单本身照常可看
+    assert conn.execute("SELECT COUNT(*) FROM latest_picks").fetchone()[0] == 1
 
 
 def test_record_picks_skips_invalid_symbols(store):

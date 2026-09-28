@@ -54,6 +54,7 @@ from app.core.market_data import (  # 行情/缓存底座；缓存 getter 仍是
     _is_trading_day_now,
     _load_realtime_quotes_snapshot,
     _persistent_cache_get,
+    _persistent_cache_latest,
     _persistent_cache_set,
     _realtime_quotes,
     _run_data_task,
@@ -2057,6 +2058,8 @@ async def _compute_lite_smart_pool_unlocked(
         safe_universe = max(safe_limit * 2, min(safe_universe, universe_count))
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
+    cache_prefix = f"smart-pool:factor-v19-no-intraday-chase:{SMART_POOL_INTRADAY_WEIGHT}:"
+    cache_suffix = f":{strategy}:{safe_limit}:{safe_universe}"
     cache_key = (
         # v18（2026-08-28）：修好共振加成里的「强度」分支——它的缩进原先落在 except 块内，
         # 从上线起就没生效过，排序因此会变（详见 _confluence_enrich_items 的注释）。
@@ -2065,8 +2068,7 @@ async def _compute_lite_smart_pool_unlocked(
         # v16（2026-08-05）：industry_heat 由「昨收阶段分」改为叠加当日实时主题分位。
         # 评分输入变了就必须换 key，否则旧公式算出的名单会继续被端上来。
         # v19（2026-09-24）：盘中强度权重默认 0.22 → 0，按结构分排序。
-        f"smart-pool:factor-v19-no-intraday-chase:{SMART_POOL_INTRADAY_WEIGHT}:{daily_as_of}:"
-        f"{strategy}:{safe_limit}:{safe_universe}"
+        f"{cache_prefix}{daily_as_of}{cache_suffix}"
     )
     _smart_pool_task_update(
         task_id,
@@ -2086,6 +2088,13 @@ async def _compute_lite_smart_pool_unlocked(
             _smart_pool_task_update(task_id, progress=95, phase="realtime", message="历史缓存命中，刷新实时价格")
             return await _enrich_smart_pool_realtime(persistent_cached)
         if cache_only:
+            # 日线基准日刚换代（收盘同步落库后 daily_as_of 翻到今天），新名单要等后台
+            # 保温器算完（同步期间还会跳过）——这段时间先端出最近一份名单，页面上的
+            # 「结构底池 日期」会如实标出它基于哪天。以前这里直接给空名单，每天 15 点后
+            # 选股页空白十几分钟到一两个小时（2026-09-28 实测）。
+            previous = _persistent_cache_latest(cache_prefix, cache_suffix, 4 * 86400)
+            if _smart_pool_response_has_items(previous):
+                return await _enrich_smart_pool_realtime(previous)
             # 彻底冷缓存：不现算(否则阻塞~100s)，返回 warming 占位，交给后台保温器算好。
             return {"items": [], "universe_size": 0, "analyzed": 0, "source": "warming",
                     "warming": True, "daily_as_of": daily_as_of, "market_context": {}}

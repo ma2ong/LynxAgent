@@ -617,3 +617,31 @@ def test_score_floor_zero_falls_back_to_the_old_rank_cap(monkeypatch):
     )
 
     assert len(data["items"]) == lite_main.SMART_POOL_MAX_ITEMS
+
+
+def test_cache_only_serves_previous_list_after_bar_date_rolls(monkeypatch):
+    """收盘同步后 daily_as_of 翻到今天、新名单还没算好：进页面要看到上一份名单而不是空白。"""
+    from app.core.market_data import _persistent_cache_set
+
+    class _Store:
+        def symbol_count(self):
+            return 5525
+
+        def latest_real_bar_date(self):
+            return "2026-09-28"
+
+    monkeypatch.setattr("quantcore.quant.local_store.get_local_store", lambda: _Store())
+    monkeypatch.setattr(lite_main, "_cache_get", lambda key, ttl: None)
+    prev_key = (f"smart-pool:factor-v19-no-intraday-chase:{lite_main.SMART_POOL_INTRADAY_WEIGHT}:"
+                f"2026-09-24:balanced:20:5525")
+    _persistent_cache_set(prev_key, {"success": True, "data": {"items": [{"symbol": "600000"}],
+                                                              "daily_as_of": "2026-09-24"}})
+
+    async def passthrough(resp):
+        return resp
+
+    monkeypatch.setattr(lite_main, "_enrich_smart_pool_realtime", passthrough)
+    result = asyncio.run(lite_main._compute_lite_smart_pool_unlocked(
+        "balanced", 20, 10000, cache_only=True))
+    assert result["data"]["items"][0]["symbol"] == "600000"
+    assert result["data"]["daily_as_of"] == "2026-09-24"

@@ -80,19 +80,11 @@
                 {{ showPoolDesc ? '收起说明' : '选股逻辑' }}
               </a>
             </h2>
-            <p v-if="showPoolDesc">结构因子先从全市场筛出强结构备选池（MACD、布林位置、趋势、动量、资金流，与历史回放同源），盘中爆发只允许结构质量前 10% 的股票晋级，再按实时量价与雷达时机重排；涨停或距离涨停过近会醒目标注买入难度但照常上榜；最终只留综合排序 ≥ 85 分的，20 只以内有多少给多少，够分的超过 20 只时只取最强的 20 只——所以名单每天长短不一，弱市少是正常的。只有绿色“量价已确认”才代表通过了第二重条件。</p>
+            <p v-if="showPoolDesc">每天用最近一个完整交易日的日K，给全市场每只股票打结构分（趋势、动量、MACD、布林位置、资金流、板块热度，与历史回放同一个评分函数），按结构分从高到低排序。盘中实时涨幅不参与排序——回测证明「谁今天涨得多就往前排」会让名单更差；盘中量价只用来判断现在适不适合入场（绿色“量价已确认”）。涨停或距离涨停过近会醒目标注买入难度但照常上榜；最终只留综合排序 ≥ 85 分的，20 只以内有多少给多少，够分的超过 20 只时只取最强的 20 只——所以名单每天长短不一，弱市少是正常的。只有绿色“量价已确认”才代表通过了第二重条件。</p>
           </div>
           <div class="smart-inline-settings">
-            <label>
-              <span>候选</span>
-              <el-input-number
-                v-model="smartPoolForm.universe_limit"
-                :min="50" :max="localUniverseSize" :step="50" controls-position="right"
-              />
-              <em v-if="localUniverseSize" class="universe-hint" title="候选上限就是数据中心的本地股票池规模，填满即全市场扫描">
-                / 本地全市场 {{ localUniverseSize }} 只
-              </em>
-            </label>
+            <!-- 候选数输入框已撤：它只对「扫多少只」有意义，填满就是全市场，普通用户用不上，
+                 反而因为占位值与真实规模不一致导致进页面取不到缓存名单（2026-09-28）。 -->
             <span
               class="score-floor-chip"
               :title="smartByScoreFloor
@@ -636,7 +628,7 @@ const router = useRouter()
 
 const dataHealth = ref<QuantDataHealth | null>(null)
 // 本地股票池规模拿到之前的占位上限；拿到 health 后立刻按真实规模收敛。
-const DEFAULT_UNIVERSE_LIMIT = 6000
+const DEFAULT_UNIVERSE_LIMIT = 10000  // 后端按本地股票池真实规模归一，大于它即全市场
 const localUniverseSize = computed(() =>
   Number(dataHealth.value?.meta_count || 0) || DEFAULT_UNIVERSE_LIMIT)
 

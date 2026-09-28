@@ -96,6 +96,26 @@ def _persistent_cache_get(key: str, ttl_seconds: int) -> Any | None:
         return None
 
 
+def _persistent_cache_latest(prefix: str, suffix: str, ttl_seconds: int) -> Any | None:
+    """同一前后缀下最近写入的一份缓存（中间段通常是日期，换代后旧 key 仍可兜底）。"""
+    ensure_lite_cache_table()
+    with store.connect() as conn:
+        row = conn.execute(
+            "SELECT payload_json, created_at FROM lite_response_cache "
+            "WHERE cache_key LIKE ? AND cache_key LIKE ? ORDER BY created_at DESC LIMIT 1",
+            (prefix + "%", "%" + suffix),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        created_at = datetime.fromisoformat(row["created_at"])
+        if datetime.now(timezone.utc) - created_at > timedelta(seconds=ttl_seconds):
+            return None
+        return json.loads(row["payload_json"])
+    except (ValueError, json.JSONDecodeError):
+        return None
+
+
 def _persistent_cache_set(key: str, value: Any) -> Any:
     ensure_lite_cache_table()
     created_at = datetime.now(timezone.utc).isoformat()

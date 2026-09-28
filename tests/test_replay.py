@@ -152,9 +152,12 @@ def test_replay_regime_stratification(store):
     """先跌后涨的市场：回放期应被分入偏冷/偏暖，各环境样本数守恒。"""
     from quantcore.quant.replay import _session_regimes
 
-    n = 120
-    # 全市场先横盘 40 天 → 跌 40 天(每天-0.5%) → 涨 40 天(每天+0.5%)
-    path = [10.0] * 40
+    # 回放要求每只票至少 MIN_BARS=80 根才开始取样：横盘段必须长过 80 根，下跌段才整段落在
+    # 可取样区间里。原先横盘 40 天，可取样的偏冷日只剩第 79 根这一个边界点，每 5 天取一次样，
+    # 取不取得到看「今天星期几」——这条用例因此随日期时过时不过（2026-09 起连续失败）。
+    n = 165
+    # 全市场先横盘 85 天 → 跌 40 天(每天-0.5%) → 涨 40 天(每天+0.5%)
+    path = [10.0] * 85
     for _ in range(40):
         path.append(path[-1] * 0.995)
     for _ in range(40):
@@ -163,7 +166,8 @@ def test_replay_regime_stratification(store):
         _seed(store, f"6000{i:02d}", list(path), amounts=[2e8] * n)
     store.upsert_meta([{"symbol": f"6000{i:02d}", "name": f"股{i}"} for i in range(1, 12)])
 
-    res = run_replay(months=4, step=5, top_n=3, store=store, workers=0)
+    # _trading_dates 从「今天−(2n+5) 天」起排，数据止于约 100 天前，窗口要放宽才覆盖得到
+    res = run_replay(months=8, step=5, top_n=3, store=store, workers=0)
     smart = next(p for p in res["pools"] if p["pool"] == "smart")
     regs = {r["regime"]: r for r in smart["regimes"]}
     # 下跌段 5 日中位 ≈ -2.5% → 偏冷；上涨段 ≈ +2.5% 且 100% 上涨 → 偏暖

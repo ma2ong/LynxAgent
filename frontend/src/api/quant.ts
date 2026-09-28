@@ -457,6 +457,7 @@ const unwrap = <T>(response: any): T => {
 }
 
 const nonce = () => Date.now()
+let riskAlertShared: { at: number; p: Promise<RiskAlert> } | null = null
 
 const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
   const items = (raw?.items || []).map((item: any) => ({
@@ -666,8 +667,14 @@ export const quantApi = {
   smallcap: async () =>
     unwrap<SmallcapResult>(await ApiClient.get('/api/quant/smallcap', { _ts: nonce() }, { timeout: 30000 })),
 
-  riskAlert: async () =>
-    unwrap<RiskAlert>(await ApiClient.get('/api/quant/risk-alert', { _ts: nonce() }, { timeout: 30000 })),
+  // 顶部行情条、盘面总览、智选页都要它，一次打开会同时请求两三遍：20 秒内共享同一次请求
+  riskAlert: async (): Promise<RiskAlert> => {
+    if (riskAlertShared && Date.now() - riskAlertShared.at < 20_000) return riskAlertShared.p
+    const p = ApiClient.get('/api/quant/risk-alert', { _ts: nonce() }, { timeout: 30000 }).then((r) => unwrap<RiskAlert>(r))
+    riskAlertShared = { at: Date.now(), p }
+    p.catch(() => { riskAlertShared = null })
+    return p
+  },
 
   riskScan: async (limit = 200) =>
     unwrap<RiskScan>(await ApiClient.get('/api/quant/risk-scan', { limit, _ts: nonce() }, { timeout: 60000 })),

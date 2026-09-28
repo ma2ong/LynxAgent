@@ -249,7 +249,7 @@
               </span>
             </div>
             <div
-              v-if="smartPoolResult.position_gate?.label"
+              v-if="smartPoolResult.position_gate?.label && !riskLocked"
               class="env-gate"
               :class="'env-' + (smartPoolResult.position_gate.state === '偏冷' ? 'cold' : smartPoolResult.position_gate.state === '偏暖' ? 'warm' : 'neutral')"
             >
@@ -296,7 +296,8 @@
               </span>
             </div>
             <!-- 结构层有历史回放，新增时机层仍需独立留痕；两者证据边界必须清楚。 -->
-            <div class="basket-note">
+            <!-- 只在名单里真有绿色标签时才解释它；风险锁定日一只都不会出现，说明就是噪音 -->
+            <div v-if="hasConfirmed" class="basket-note">
               <div class="basket-head">
                 <b>绿色表示量价已二次确认</b>
                 <span>结构入选后须再通过实时量价确认；预警和等待状态不直接入场。</span>
@@ -519,13 +520,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 defineOptions({ name: 'QuantPage' })  // keep-alive 保活标识，勿改
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { DataLine, Search, TrendCharts } from '@element-plus/icons-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { favoritesApi } from '@/api/favorites'
-import KLineProChart from '@/components/KLineProChart.vue'
+// K 线图只在点「看图」时才用，按需加载：它连带 echarts（约 620KB），首次访问白下一遍太亏
+const KLineProChart = defineAsyncComponent(() => import('@/components/KLineProChart.vue'))
 import WhyPickedDrawer from '@/components/WhyPickedDrawer.vue'
 import {
   quantApi,
@@ -792,6 +794,9 @@ const BASKET_SIM = [
   { k: 20, mean: '+1.75pp', median: '+1.60pp', beat: '77.8%', tail: '91.7%' },
 ]
 const riskLocked = computed(() => ['危险', '极危'].includes(riskAlert.value?.level || ''))
+// 环境仓位块在风险锁定时隐藏：页面顶部的「推荐已转为观察名单」已经说了同一件事
+const hasConfirmed = computed(() =>
+  (smartPoolResult.value?.items || []).some((row: any) => row.timing_actionable && !buyLocked(row)))
 const realtimeBadge = computed(() => {
   const result = smartPoolResult.value
   if (!result?.realtime_status) return null
@@ -901,14 +906,9 @@ onMounted(async () => {
     }
     poolStats.value = map
   }).catch(() => {})
-  try {
-    const s = await quantApi.syncStatus()
-    syncStatus.value = s
-    if (s.health) dataHealth.value = s.health
-    if (s.running) pollSync()
-  } finally {
-    refreshDataHealth(true)
-  }
+  // 数据健康接口已带同步进度（sync_running 等），不必再先查一遍同步状态——
+  // 走海外节点时每多一个请求就多约 1 秒（2026-09-29）
+  refreshDataHealth(true)
 })
 onUnmounted(() => {
   stickyHeadObserver?.disconnect()

@@ -567,8 +567,28 @@ async def smallcap_portfolio():
     return {"success": True, "data": data}
 
 
+_RISK_ALERT_CACHE: dict = {}
+_RISK_ALERT_LOCK = asyncio.Lock()
+
+
 @router.get("/risk-alert")
 async def quant_risk_alert():
+    """风险仪表的 30 秒缓存外壳：现算一次 4~5 秒，而智选页、盘面总览、顶部风险标签
+    每次打开都要它（智选页一次打开就请求两遍）。并发请求排队等同一次计算，不各算各的。"""
+    import time as _time
+    cached = _RISK_ALERT_CACHE.get("v")
+    if cached and _time.time() - cached[0] < 30:
+        return cached[1]
+    async with _RISK_ALERT_LOCK:
+        cached = _RISK_ALERT_CACHE.get("v")
+        if cached and _time.time() - cached[0] < 30:
+            return cached[1]
+        result = await _compute_risk_alert()
+        _RISK_ALERT_CACHE["v"] = (_time.time(), result)
+        return result
+
+
+async def _compute_risk_alert():
     """市场级风险仪表：赚钱效应温度/连续走弱/跌停潮/广度骤降 → 风险等级 + 明确仓位动作。"""
     try:
         from quantcore.quant.engine import market_context

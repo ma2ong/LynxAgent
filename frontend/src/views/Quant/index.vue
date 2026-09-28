@@ -247,6 +247,12 @@
                 历史上这种时候，下一批 10 日平均再跑输约 1.8 个百分点、只有约 1/3 跑赢市场——
                 今天的名单建议只观察或轻仓，等风格恢复。
               </span>
+              <!-- 依据 experiments/style_switch_check.py：红条亮的 177 周里小市值组合周超额 +0.50pp（t 2.62），
+                   不亮时 −0.01；5/6 年成立。只在红条里给入口，平时不推。 -->
+              <span class="style-alt">
+                这种行情下，<router-link to="/smallcap">小市值周频组合</router-link>历史上反而更好：
+                过去 5 年同样亮红条的 177 周里，平均每周跑赢中小板 0.5 个百分点，56% 的周跑赢（未计退市股，实际会偏低）。
+              </span>
             </div>
             <div
               v-if="smartPoolResult.position_gate?.label && !riskLocked"
@@ -1692,6 +1698,8 @@ const openChart = async (row: any) => {
   border-left: 4px solid var(--el-color-danger);
   color: var(--el-text-color-regular);
   .style-alert-head { color: var(--el-color-danger); margin-right: 8px; font-size: 14px; }
+  .style-alt { display: block; margin-top: 4px; color: var(--el-text-color-primary); }
+  .style-alt a { color: var(--el-color-primary); font-weight: 600; }
 }
 .profile-note {
   margin: 0; padding: 6px 10px; border-radius: 8px; font-size: 13px;

@@ -60,7 +60,7 @@
         <el-input v-model="hpKeyword" size="small" clearable placeholder="搜索股票/代码" class="stock-search" />
       </div>
       <div class="tab-hint">{{ hpHint }}</div>
-      <el-table v-if="filteredHp.length" :data="filteredHp" size="small" stripe max-height="460">
+      <el-table v-if="filteredHp.length" :data="filteredHp.slice(0, hpLimit)" size="small" stripe max-height="460">
         <el-table-column label="风险分档" width="200" fixed="left">
           <template #default="{ row }">
             <el-tag size="small" :type="stageType(row.stage)" effect="dark">{{ row.stage }}</el-tag>
@@ -101,6 +101,7 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-button v-if="filteredHp.length > hpLimit" class="more-rows" size="small" text type="primary" @click="hpLimit += PAGE">再显示 {{ Math.min(PAGE, filteredHp.length - hpLimit) }} 只（共 {{ filteredHp.length }} 只）</el-button>
       <el-empty v-else :description="hpTab === 'all' ? '当前无个股同时满足全部高位风险条件' : '这一档当前没有个股'" :image-size="70" />
     </section>
 
@@ -134,7 +135,7 @@
         {{ sigHint }}
         <span v-if="sigTruncated" class="dim">· 本页只列前 {{ sigShown }} 只（按严重度截取）</span>
       </div>
-      <el-table v-if="filteredScan.length" :data="filteredScan" size="small" stripe max-height="520">
+      <el-table v-if="filteredScan.length" :data="filteredScan.slice(0, scanLimit)" size="small" stripe max-height="520">
         <el-table-column label="综合建议" width="105" fixed="left">
           <template #default="{ row }">
             <el-tag size="small" :type="signalType(row.signal)" effect="dark">{{ row.signal }}</el-tag>
@@ -196,13 +197,14 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-button v-if="filteredScan.length > scanLimit" class="more-rows" size="small" text type="primary" @click="scanLimit += PAGE">再显示 {{ Math.min(PAGE, filteredScan.length - scanLimit) }} 只（共 {{ filteredScan.length }} 只）</el-button>
       <el-empty v-else-if="!loading" :description="scan ? '这一档当前没有个股' : '暂无扫描数据'" :image-size="80" />
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onMounted, ref } from 'vue'
+import { computed, onActivated, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { quantApi, type RiskAlert, type RiskScan } from '@/api/quant'
 defineOptions({ name: 'RiskAlertPage' })
@@ -242,6 +244,12 @@ const hpTabs = computed(() => [
 ])
 const hpHint = computed(() =>
   HP_STAGES.find((s) => s.key === hpTab.value)?.hint || '按走坏程度分档，越靠前状态越新')
+// 一次只渲染 PAGE 行：两张表合计上千行时整页 DOM 18 万字，打开和切页都卡（2026-09-28）。
+// 搜索与分档仍作用于全量，只是结果分批显示。
+const PAGE = 50
+const hpLimit = ref(PAGE)
+const scanLimit = ref(PAGE)
+watch([hpTab, hpKeyword], () => { hpLimit.value = PAGE })
 const filteredHp = computed(() => {
   const kw = hpKeyword.value.trim().toLowerCase()
   const stage = HP_STAGES.find((s) => s.key === hpTab.value)?.label
@@ -277,6 +285,7 @@ const sigShown = computed(() => scanByTab.value.length)
 // 后端按配额截取，列表条数会少于统计口径——直说，别让人以为漏了票
 const sigTruncated = computed(() =>
   sigShown.value < (sigTabs.value.find((t) => t.key === sigTab.value)?.count || 0))
+watch([sigTab, keyword], () => { scanLimit.value = PAGE })
 const filteredScan = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
   return scanByTab.value.filter((item) =>
@@ -378,4 +387,5 @@ onActivated(applyQueryTab)
 .stock-search { max-width: 220px; }
 .tab-hint { margin-bottom: 10px; font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6;
   .dim { color: var(--el-text-color-placeholder); margin-left: 4px; } }
+.more-rows { margin-top: 6px; }
 </style>

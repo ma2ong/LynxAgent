@@ -21,7 +21,6 @@ const routes: RouteRecordRaw[] = [
       { path: 'review', name: 'picks-review', component: () => import('@/views/Review/Index.vue') },
       { path: 'risk-alert', name: 'risk-alert', component: () => import('@/views/RiskAlert/Index.vue') },
       { path: 'stock-analysis', name: 'stock-analysis', component: () => import('@/views/StockAnalysis/index.vue') },
-      { path: 'insights/catalyst', name: 'catalyst', component: () => import('@/views/Insights/CatalystMonitor.vue') },
       { path: 'favorites', name: 'favorites', component: () => import('@/views/Favorites/index.vue') },
       { path: 'data-center', name: 'data-center', component: () => import('@/views/DataCenter/Index.vue'), meta: { requiresAdmin: true } },
       { path: 'account/membership', name: 'membership', component: () => import('@/views/Account/Membership.vue') },

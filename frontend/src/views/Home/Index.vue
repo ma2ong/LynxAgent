@@ -45,10 +45,13 @@
     <section id="top" class="hero">
       <div class="wrap hero-grid">
         <div class="hero-copy">
-          <p class="eyebrow">SAME SCORING FUNCTION · LIVE &amp; REPLAY</p>
-          <h1>同一个评分函数<br />线上跑一遍<span class="comma">，</span>历史再跑一遍</h1>
+          <!-- 首屏先回答新用户的问题「这东西帮我做什么」，方法论放到下面。原标题
+               「同一个评分函数，线上跑一遍、历史再跑一遍」是给懂量化的人看的（2026-09-29 改）。 -->
+          <p class="eyebrow">A 股选股 · 每天更新 · 免费</p>
+          <h1>每天从 5000 只 A 股里<br />挑出值得看的那一小撮<span class="comma">，</span><br />并直说它最近灵不灵</h1>
           <p class="lede">
-            页面上看到的每一分，都能拉回历史原样复算。复算出来不好看的那一部分，也在这一页上。
+            一键智选、小市值周频组合、行业热力、风险预警，一屏看完今天该不该动手。
+            每一次推荐都自动记账复盘——跑输的时候，页面会亮红条告诉你，而不是藏起来。
           </p>
           <div class="hero-cta">
             <router-link class="btn btn-primary btn-lg" :to="loggedIn ? '/dashboard' : '/login?register=1'">
@@ -86,7 +89,7 @@
       <div class="wrap evidence-grid">
         <div v-for="e in proofs" :key="e.span" class="evidence-cell">
           <span class="cap">{{ e.span }}</span>
-          <span class="big" :class="e.tone">{{ e.value }}<em>pp</em></span>
+          <span class="big" :class="e.tone">{{ e.value }}<em>{{ e.unit }}</em></span>
           <span class="sub">{{ e.note }}</span>
         </div>
       </div>
@@ -809,9 +812,10 @@ const heroPicks = [
   { no: '07', name: '荃银高科', code: '300087', score: 81, ret: -2.4 },
 ]
 
+// 两组数字的口径不变（12 个月回放 +1.99pp/期、60 个月 −0.62pp/期），只把说法换成人话
 const proofs = [
-  { span: '12 个月回放 · 130 期 · 次日开盘可成交口径', value: '+1.99', tone: 'up', note: '平均超额 / 期 · 中位 +0.43pp · 票级胜率 51.9%' },
-  { span: '60 个月长样本 · 231 期 · 收盘买入 T+5', value: '−0.62', tone: 'down', note: '平均超额 / 期 · t = −2.49 · 我们不挑对自己有利的那个' },
+  { span: '最近 12 个月（按规则回算，次日开盘买入）', value: '+1.99', unit: '个百分点', tone: 'up', note: '推荐的票持有 5 天，平均比大盘多涨这么多' },
+  { span: '拉长到 5 年', value: '−0.62', unit: '个百分点', tone: 'down', note: '平均反而比大盘少涨——所以我们不承诺收益，两个数都给你看' },
 ]
 
 const steps = [
@@ -1334,7 +1338,7 @@ const faqs = [
   font-family: var(--mono); font-weight: 700; font-size: clamp(34px, 3.6vw, 50px);
   line-height: 1.1; letter-spacing: -2.5px;
 }
-.evidence-cell .big em { font-style: normal; font-size: 18px; letter-spacing: 0; }
+.evidence-cell .big em { font-style: normal; font-size: 18px; letter-spacing: 0; margin-left: 6px; }
 .evidence-cell .sub { font-size: 13px; color: var(--ink-2); }
 
 /* ── 区块骨架 ── */

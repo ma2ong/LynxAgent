@@ -239,6 +239,20 @@
             </div>
           </div>
           <div v-if="smartPoolResult?.items.length" class="decision-context">
+            <!-- 追涨风格失灵提示：结构分几乎完全取决于「强者恒强」当期灵不灵，且有延续性。
+                 依据见 experiments/README.md 2026-09-28；Allen 选择照常推荐 + 醒目提示，不停推。 -->
+            <div v-if="smartPoolResult.style_health?.failing" class="style-alert">
+              <b class="style-alert-head">⚠ 追涨风格正在失灵</b>
+              <span>
+                上一批推荐（{{ smartPoolResult.style_health.pick_date }}）持有
+                {{ smartPoolResult.style_health.hold_days }} 个交易日平均
+                <b>{{ signedPercent(smartPoolResult.style_health.pick_ret) }}</b>，同期市场
+                <b>{{ signedPercent(smartPoolResult.style_health.market_ret) }}</b>，
+                只有 {{ Math.round(smartPoolResult.style_health.win_rate * 100) }}% 上涨。
+                历史上这种时候，下一批 10 日平均再跑输约 1.8 个百分点、只有约 1/3 跑赢市场——
+                今天的名单建议只观察或轻仓，等风格恢复。
+              </span>
+            </div>
             <div
               v-if="smartPoolResult.position_gate?.label"
               class="env-gate"
@@ -1771,6 +1785,13 @@ const openChart = async (row: any) => {
     color: var(--el-text-color-secondary);
   }
   .basis-high { color: #e6a23c; }
+}
+.style-alert {
+  margin: 0; padding: 8px 12px; border-radius: 8px; font-size: 13px; line-height: 1.6;
+  background: var(--el-color-danger-light-9);
+  border-left: 4px solid var(--el-color-danger);
+  color: var(--el-text-color-regular);
+  .style-alert-head { color: var(--el-color-danger); margin-right: 8px; font-size: 14px; }
 }
 .profile-note {
   margin: 0; padding: 6px 10px; border-radius: 8px; font-size: 13px;

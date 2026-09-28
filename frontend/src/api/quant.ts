@@ -211,6 +211,18 @@ export interface QuantSmartPoolResult {
     chased_share: number
     samples: number
   } | null
+  /** 上一批已兑现名单（持有 10 个交易日）vs 市场；failing=追涨风格正在失灵 */
+  style_health?: {
+    pick_date: string
+    eval_date: string
+    hold_days: number
+    pick_ret: number
+    market_ret: number
+    excess: number
+    win_rate: number
+    samples: number
+    failing: boolean
+  } | null
   dual_confirm_count?: number
   triple_confirm_count?: number
   excluded_severe_count?: number
@@ -484,6 +496,7 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     list_basis: raw?.list_basis,
     scanned_today: raw?.scanned_today ?? null,
     list_profile: raw?.list_profile ?? null,
+    style_health: raw?.style_health ?? null,
     dual_confirm_count: raw?.dual_confirm_count,
     triple_confirm_count: raw?.triple_confirm_count,
     excluded_severe_count: raw?.excluded_severe_count,

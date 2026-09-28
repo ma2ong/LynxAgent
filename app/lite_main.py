@@ -1600,6 +1600,7 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
         data["price_source"] = "最近完整日K（实时行情不可用）"
     data["position_gate"] = gate
     _attach_list_profile(data)
+    data["style_health"] = await _smart_style_health_cached()
     try:
         await asyncio.to_thread(_attach_first_seen, items)
     except Exception as exc:  # noqa: BLE001 — 首推价只是展示项，失败不能拖垮名单
@@ -1813,6 +1814,27 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
         _update_smart_pool_list_basis(data)
         # 留痕不在这里做：两条新扫描路径之后都会进 _enrich_smart_pool_realtime，
         # 缓存命中也只走那条，留痕统一放在那里（见 _record_smart_picks_once）。
+
+
+async def _smart_style_health_cached() -> dict[str, Any] | None:
+    """上一批已兑现名单 vs 市场（见 quantcore/quant/style_health.py）。
+
+    只在日线更新后才会变，10 分钟缓存一次；算不出来（新库、留痕不足）就不显示，
+    不能拖垮名单。
+    """
+    cached = _cache_get("smart_style_health", 600)
+    if cached is not None:
+        return cached.get("value")
+    try:
+        from quantcore.quant.local_store import get_local_store
+        from quantcore.quant.style_health import smart_style_health
+
+        value = await asyncio.to_thread(smart_style_health, get_local_store())
+    except Exception as exc:  # noqa: BLE001 — 提示项失败不能阻断推荐主流程
+        print(f"style_health failed: {exc}")
+        value = None
+    _cache_set("smart_style_health", {"value": value})
+    return value
 
 
 def _attach_list_profile(data: dict[str, Any]) -> None:

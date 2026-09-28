@@ -17,8 +17,14 @@ import app.lite_main as lite_main
 
 @pytest.fixture
 def client(monkeypatch):
+    import uuid
+    from app.lite_auth import issue_tokens, store
+
     monkeypatch.setattr(lite_main, "_pool_recorded_today", lambda pool: True)
-    return TestClient(lite_main.app)
+    name = f"u{uuid.uuid4().hex[:8]}"
+    store.create_user(name, f"{name}@example.com", "Passw0rd!x")
+    token = issue_tokens(name)["access_token"]
+    return TestClient(lite_main.app, headers={"Authorization": f"Bearer {token}"})
 
 
 def _unwrap(payload: dict) -> dict:

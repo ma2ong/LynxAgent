@@ -37,7 +37,7 @@ _socket.setdefaulttimeout(30)
 
 from app.lite_auth import get_current_lite_user, router as lite_auth_router, store
 from app.lite_billing import router as billing_router
-from app.lite_admin import router as admin_router
+from app.lite_admin import require_admin, router as admin_router
 from app.lite_notifications import notification_store
 from app.core.scan_gate import run_scan
 from app.core.engine import get_stock_pool_items, lite_quant_engine
@@ -99,6 +99,31 @@ async def _security_headers(request, call_next):
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "same-origin")
     return response
+
+# 公网默认全部要登录，只放行下面这些：登录注册本身、探活、官网未登录也要显示的行情条。
+# 以前靠每个路由自己挂 Depends，结果 50 个接口漏了——包括全市场重扫描和全量数据同步，
+# 任何人不登录就能反复触发（2026-09-28 实测）。改成入口一道闸：新加的接口默认受保护，
+# 忘了加校验的后果从「公网裸奔」变成「前端 401」，一眼就能发现。
+_PUBLIC_API = {
+    "/api/health",
+    "/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/auth/logout",
+    "/api/auth/reset-password", "/api/auth/verify-email",
+    "/api/lite/macro-bar",
+}
+
+
+@app.middleware("http")
+async def _require_login_for_api(request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and path not in _PUBLIC_API and request.method != "OPTIONS":
+        from fastapi import HTTPException
+        from fastapi.responses import JSONResponse
+        try:
+            await get_current_lite_user(request.headers.get("authorization"))
+        except HTTPException as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+    return await call_next(request)
+
 
 app.include_router(lite_auth_router)
 app.include_router(quant_router, dependencies=[Depends(get_current_lite_user)])
@@ -2857,7 +2882,7 @@ async def multi_source_sources_status():
     }
 
 
-@app.post("/api/lite/datalake/sync")
+@app.post("/api/lite/datalake/sync", dependencies=[Depends(require_admin)])
 async def lite_datalake_sync(full: bool = False):
     svc = get_sync_service()
     status = await asyncio.to_thread(svc.run_sync, full, False)

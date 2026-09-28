@@ -31,7 +31,7 @@
         <el-menu-item index="/stock-analysis"><el-icon><DocumentChecked /></el-icon><span>个股深研</span></el-menu-item>
         <el-menu-item index="/review"><el-icon><DataAnalysis /></el-icon><span>选股复盘</span></el-menu-item>
         <el-menu-item index="/favorites"><el-icon><Star /></el-icon><span>我的自选股</span></el-menu-item>
-        <el-menu-item index="/data-center"><el-icon><DataLine /></el-icon><span>数据中心</span></el-menu-item>
+        <el-menu-item v-if="currentUser?.is_admin" index="/data-center"><el-icon><DataLine /></el-icon><span>数据中心</span></el-menu-item>
         <el-menu-item index="/account/membership"><el-icon><Tools /></el-icon><span>用户设置</span></el-menu-item>
       </el-menu>
       <!-- 退出登录已移进「用户设置」页：它是低频且不可撤销的操作，

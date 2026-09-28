@@ -62,8 +62,11 @@
           同步中 {{ syncStatus.done || dataHealth.sync_done || 0 }}/{{ syncStatus.total || dataHealth.sync_total || 0 }}
         </el-tag>
         <el-button size="small" :loading="healthLoading || syncRunning" @click="refreshDataHealth(true)">刷新状态</el-button>
-        <el-button size="small" type="primary" :loading="syncRunning" :disabled="isIntradayHealth" @click="startSync(false)">收盘后补日线</el-button>
-        <el-button size="small" type="danger" plain :loading="syncRunning" @click="startSync(true)">重建历史日线</el-button>
+        <!-- 数据同步是运维操作（全量重建约 5000 只），后端只认管理员 -->
+        <template v-if="currentUser?.is_admin">
+          <el-button size="small" type="primary" :loading="syncRunning" :disabled="isIntradayHealth" @click="startSync(false)">收盘后补日线</el-button>
+          <el-button size="small" type="danger" plain :loading="syncRunning" @click="startSync(true)">重建历史日线</el-button>
+        </template>
       </div>
     </section>
 
@@ -626,6 +629,7 @@ import {
   type RiskAlert
 } from '@/api/quant'
 import { panelApi, type PanelScore } from '@/api/quant'
+import { currentUser, loadCurrentUser } from '@/stores/user'
 
 const route = useRoute()
 const router = useRouter()
@@ -828,9 +832,13 @@ const ensureDataBeforeScan = async () => {
   const health = await refreshDataHealth(true)
   if (!health) return false
   if (!health.ready) {
-    // 数据同步页已并入数据中心，这里直接把人送过去，而不是留一句他不知道去哪点的提示
-    ElMessage.warning('本地K线不足，已转到数据中心；请先完成一次历史日线重建。')
-    router.push('/data-center')
+    // 数据同步只有管理员能做：管理员直接送去数据中心；普通用户帮不上忙，告诉他等多久
+    if (currentUser.value?.is_admin) {
+      ElMessage.warning('本地K线不足，已转到数据中心；请先完成一次历史日线重建。')
+      router.push('/data-center')
+    } else {
+      ElMessage.warning('行情数据正在后台准备，通常几分钟内完成，请稍后再点一次。')
+    }
     return false
   }
   if (health.needs_incremental_sync || health.sync_running || health.auto_started) {
@@ -842,6 +850,7 @@ const ensureDataBeforeScan = async () => {
 const riskAlert = ref<RiskAlert | null>(null)
 const showPoolDesc = ref(false)
 const showHealthDetail = ref(false)
+loadCurrentUser()
 const showBasketEvidence = ref(false)
 // 名单画像的解释文字默认收起：那段披露必须留着（不标注等于让人以为买的是「低位
 // 机会」），但它天天不变，长期占掉榜单上方一整块。收起后表头那行数字仍在。

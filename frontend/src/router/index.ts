@@ -18,6 +18,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'heatmap', name: 'heatmap', component: () => import('@/views/Heatmap/Index.vue') },
       { path: 'rotation', name: 'rotation', component: () => import('@/views/Rotation/Index.vue') },
       { path: 'quant', name: 'quant', component: () => import('@/views/Quant/index.vue') },
+      { path: 'smallcap', name: 'smallcap', component: () => import('@/views/SmallCap/Index.vue') },
       { path: 'review', name: 'picks-review', component: () => import('@/views/Review/Index.vue') },
       { path: 'risk-alert', name: 'risk-alert', component: () => import('@/views/RiskAlert/Index.vue') },
       { path: 'stock-analysis', name: 'stock-analysis', component: () => import('@/views/StockAnalysis/index.vue') },

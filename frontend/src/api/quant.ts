@@ -663,6 +663,9 @@ export const quantApi = {
   marketContext: async () =>
     unwrap<MarketContext>(await ApiClient.get('/api/quant/market-context', { _ts: nonce() }, { timeout: 30000 })),
 
+  smallcap: async () =>
+    unwrap<SmallcapResult>(await ApiClient.get('/api/quant/smallcap', { _ts: nonce() }, { timeout: 30000 })),
+
   riskAlert: async () =>
     unwrap<RiskAlert>(await ApiClient.get('/api/quant/risk-alert', { _ts: nonce() }, { timeout: 30000 })),
 
@@ -957,6 +960,30 @@ export interface MLFactorResult {
   age_sec?: number
   generated_at: number
   error?: string
+}
+
+export interface SmallcapItem {
+  symbol: string
+  name: string
+  entry_price: number
+  price: number
+  since_entry_pct: number | null
+  pct_chg?: number | null
+  amount_std_wan: number
+  kept_limit_up: boolean
+}
+export interface SmallcapWeek {
+  week_start: string
+  ret: number | null
+  pool_ret: number
+  symbols: string[]
+}
+export interface SmallcapResult {
+  week_start: string | null
+  as_of: string
+  items: SmallcapItem[]
+  history: SmallcapWeek[]
+  summary: { weeks: number; cum_ret: number; pool_cum_ret: number; win_vs_pool: number; max_drawdown: number } | null
 }
 
 export interface MacroIndexQuote {

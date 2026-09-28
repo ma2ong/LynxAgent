@@ -257,6 +257,13 @@ async def _prewarm_heavy_imports() -> None:
 
 
 @app.on_event("startup")
+async def _start_loop_stall_watch() -> None:
+    """主循环卡住 ≥3s 时记下调用栈，定位长期的 health failed（见 app/core/loop_stall.py）。"""
+    from app.core import loop_stall
+    loop_stall.start(asyncio.get_running_loop())
+
+
+@app.on_event("startup")
 async def _start_board_refresher() -> None:
     """交易时段后台保温各重板块缓存，让首页秒开全貌、各页秒读不超时。"""
     from app.core import board_refresh

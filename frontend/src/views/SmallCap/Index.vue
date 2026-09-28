@@ -65,7 +65,7 @@
         <div class="kpi"><span>组合累计</span><b :class="tone(data.summary.cum_ret)">{{ pct(data.summary.cum_ret, 1) }}</b></div>
         <div class="kpi"><span>随便买中小板</span><b :class="tone(data.summary.pool_cum_ret)">{{ pct(data.summary.pool_cum_ret, 1) }}</b></div>
         <div class="kpi"><span>跑赢的周</span><b>{{ Math.round(data.summary.win_vs_pool * 100) }}%</b></div>
-        <div class="kpi"><span>期间最大回撤</span><b class="down">{{ data.summary.max_drawdown.toFixed(1) }}%</b></div>
+        <div class="kpi"><span>期间最大回撤</span><b class="down">{{ pct(data.summary.max_drawdown, 1) }}</b></div>
       </div>
       <div class="weeks">
         <div v-for="w in data.history" :key="w.week_start" class="week-row">

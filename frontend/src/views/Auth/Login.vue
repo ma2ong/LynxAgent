@@ -6,10 +6,10 @@
       <!-- Login form -->
       <el-form v-if="mode === 'login'" @submit.prevent="onSubmit">
         <el-form-item>
-          <el-input v-model="username" placeholder="用户名" :prefix-icon="User" />
+          <el-input v-model="username" placeholder="用户名" :prefix-icon="User" autocomplete="username" />
         </el-form-item>
         <el-form-item>
-          <el-input v-model="password" type="password" placeholder="密码" :prefix-icon="Lock" show-password />
+          <el-input v-model="password" type="password" placeholder="密码" :prefix-icon="Lock" show-password autocomplete="current-password" />
         </el-form-item>
         <el-button type="primary" :loading="loading" class="submit" @click="onSubmit">登录</el-button>
       </el-form>
@@ -17,26 +17,26 @@
       <!-- Register form -->
       <el-form v-else @submit.prevent="doRegister">
         <el-form-item>
-          <el-input v-model="regForm.username" placeholder="用户名" :prefix-icon="User" />
+          <el-input v-model="regForm.username" placeholder="用户名" :prefix-icon="User" autocomplete="username" />
         </el-form-item>
         <el-form-item>
-          <el-input v-model="regForm.email" placeholder="邮箱或手机号" :prefix-icon="Message" />
+          <el-input v-model="regForm.email" placeholder="邮箱或手机号" :prefix-icon="Message" autocomplete="email" />
         </el-form-item>
         <el-form-item>
-          <el-input v-model="regForm.password" type="password" placeholder="密码" :prefix-icon="Lock" show-password />
+          <el-input v-model="regForm.password" type="password" placeholder="密码" :prefix-icon="Lock" show-password autocomplete="new-password" />
         </el-form-item>
         <el-form-item>
-          <el-input v-model="regForm.confirm_password" type="password" placeholder="确认密码" :prefix-icon="Lock" show-password />
+          <el-input v-model="regForm.confirm_password" type="password" placeholder="确认密码" :prefix-icon="Lock" show-password autocomplete="new-password" />
         </el-form-item>
         <!-- 图形算术验证码：挡脚本批量注册；看不清点图换一题 -->
         <el-form-item>
           <div class="captcha-row">
-            <el-input v-model="regForm.captcha_answer" placeholder="计算结果" inputmode="numeric" />
+            <el-input v-model="regForm.captcha_answer" placeholder="计算结果" inputmode="numeric" autocomplete="off" />
             <img v-if="captchaSvg" :src="captchaSvg" class="captcha-img" alt="验证码" title="看不清？点击换一题" @click="loadCaptcha" />
           </div>
         </el-form-item>
         <el-form-item>
-          <el-checkbox v-model="agreedDisclaimer">
+          <el-checkbox v-model="agreedDisclaimer" class="agree">
             我已阅读并同意
             <router-link to="/legal/terms" target="_blank">《用户协议》</router-link>、
             <router-link to="/legal/privacy" target="_blank">《隐私政策》</router-link>，
@@ -161,6 +161,8 @@ async function doRegister() {
 
 <style scoped>
 .captcha-row { display: flex; gap: 8px; width: 100%; align-items: center; }
+.agree { height: auto; align-items: flex-start; }
+.agree :deep(.el-checkbox__label) { white-space: normal; line-height: 1.5; }
 .captcha-img { height: 32px; border-radius: 4px; cursor: pointer; flex-shrink: 0; }
 .login-wrap {
   height: 100vh;

@@ -335,3 +335,39 @@ def test_first_seen_write_gives_up_instead_of_blocking(store, pick_clock, monkey
 
     monkeypatch.setattr(sqlite3, "connect", locked)
     assert store.record_first_seen("smart", [{"symbol": "600001", "close": 10.0}]) == 0
+
+
+def test_cache_hit_path_logs_final_smart_list(store, pick_clock, monkeypatch):
+    """缓存命中也要留痕：2026-09-28 盘前预热扫描被「开盘前不留痕」挡掉后，
+    当天所有请求都命中缓存，旧代码只在新扫描时留痕，整天的 smart 名单一条没记。"""
+    import asyncio
+    from unittest.mock import patch
+
+    import app.lite_main as lite_main
+
+    monkeypatch.setattr(local_store, "get_local_store", lambda: store)
+    monkeypatch.setattr(lite_main, "_smart_picks_logged_on", "")
+    monkeypatch.setattr(lite_main, "SMART_POOL_SCORE_FLOOR", 0.0)
+    cands = [{"symbol": f"60000{i}", "name": f"股{i}", "score": 90 - i, "smart_score": 90 - i,
+              "close": 10.0, "pct_chg": 0.5, "amount": 5e8, "reasons": []} for i in range(1, 4)]
+    response = {"success": True, "data": {"requested_limit": 3, "daily_as_of": "2026-09-24",
+                                          "items": cands, "structure_candidates": cands}}
+
+    async def quotes(symbols, **_kw):
+        return {s: {"price": 10.0, "change_percent": 0.5, "amount": 5e8,
+                    "updated_at": "2026/09/28 10:00:00"} for s in symbols}
+
+    async def noop(_data):
+        return None
+
+    gate = {"state": "中性", "label": "可参与", "coefficient": 1.0, "note": ""}
+    with patch.object(lite_main, "_cache_get", return_value=gate), \
+         patch.object(lite_main, "_realtime_quotes", new=quotes), \
+         patch.object(lite_main, "_apply_intraday_quality", new=noop), \
+         patch.object(lite_main, "_update_smart_pool_list_basis", new=lambda _d: None):
+        asyncio.run(lite_main._enrich_smart_pool_realtime(response))
+
+    rows = dict(store._conn().execute(
+        "SELECT pool, COUNT(*) FROM picks_history GROUP BY pool").fetchall())
+    assert rows.get("smart") == 3
+    assert rows.get("smart_structure") == 3

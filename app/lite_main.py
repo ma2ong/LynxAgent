@@ -1428,6 +1428,44 @@ def _update_smart_pool_list_basis(data: dict[str, Any]) -> None:
         print(f"list_basis failed: {exc}")
 
 
+_smart_picks_logged_on = ""
+
+
+def _record_smart_picks_once(data: dict[str, Any], items: list[dict[str, Any]]) -> None:
+    """把用户最终看到的名单留痕，每个交易日开盘后的第一次请求记一次。
+
+    必须放在实时定稿这一步：以前只在新扫描时留痕，而 09:00 盘前预热扫描被
+    record_picks 的「开盘前不留痕」挡掉后，当天所有请求都命中缓存、再没有新扫描，
+    整天的 smart 名单一条都没记（2026-09-28 实测），复盘胜率统计直接漏掉这一天。
+    同时留结构基线与时机融合池，才能用同一天、同一口径回答「盘中时机层是否提升质量」。
+    必须在算完 list_basis 之后——否则 previous_pick_date 会把今天自己算进去。
+    """
+    global _smart_picks_logged_on
+    target = int(data.get("requested_limit") or 0)
+    today = datetime.now().strftime("%Y-%m-%d")
+    if target <= 0 or not items or _smart_picks_logged_on == today:
+        return
+    structure = data.get("structure_candidates") or items
+    shadow = [dict(item) for item in structure[: max(1, min(target, SMART_POOL_MAX_ITEMS))]]
+    try:
+        from quantcore.quant.local_store import get_local_store
+
+        store = get_local_store()
+        store.record_picks("smart_structure", shadow)
+        store.record_picks(
+            "smart_timing",
+            [{**item, "score": item.get("quality_score") or item.get("score")} for item in items],
+        )
+        store.record_picks("smart", items)
+    except Exception as exc:  # noqa: BLE001 — 留痕失败不能阻断推荐主流程
+        print(f"record_picks failed: {exc}")
+        return
+    now = datetime.now()
+    # 开盘前 record_picks 只刷新 latest_picks、不写历史，这时不能标记「今天已记」
+    if now.weekday() < 5 and now.hour * 60 + now.minute >= 9 * 60 + 25:
+        _smart_picks_logged_on = today
+
+
 async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any]:
     data = dict(response.get("data") or {})
     structure_candidates = (
@@ -1527,6 +1565,7 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
     )
     items = data.get("items") or []
     _update_smart_pool_list_basis(data)
+    _record_smart_picks_once(data, items)
     # ③b 危险市况不再一刀切关闭：标出可做 T+1 短打的逆势票（依据见 _mark_countertrend_daytrade）
     try:
         data["daytrade_count"] = _mark_countertrend_daytrade(items)
@@ -1748,10 +1787,6 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
         # 而不是留个空洞。弱市里前 N 名恰好全是雷票时，以前整池会被清空显示「今日无达标
         # 个股」——但那不是「全市场没货」，只是「前 N 名有雷」，后面还有排队的。
         target = int(data.get("requested_limit") or 0)
-        structure_shadow = [
-            dict(item)
-            for item in kept[: max(1, min(target or SMART_POOL_MAX_ITEMS, SMART_POOL_MAX_ITEMS))]
-        ]
         # 保留经过结构、形态和七不买筛选后的完整备选池。缓存命中时会给这批候选
         # 全量刷新实时行情，再动态重排最终名单，而不是永远只能在昨天那批里换顺序。
         data["structure_candidates"] = deepcopy(kept)
@@ -1776,24 +1811,8 @@ async def _apply_confluence(response: dict[str, Any]) -> None:
         data["dual_confirm_count"] = sum(1 for it in items if it.get("dual_confirm"))
         data["triple_confirm_count"] = sum(1 for it in items if it.get("triple_confirm"))
         _update_smart_pool_list_basis(data)
-        # 同时留结构基线与时机融合池：否则无法用同一天、同一 T+1/T+5 口径回答
-        # 「盘中时机层是否真的提升质量」。smart 仍等于用户最终看到的名单。
-        # 必须在算完 list_basis 之后——否则 previous_pick_date 会把今天自己算进去。
-        if target > 0 and items:
-            try:
-                from quantcore.quant.local_store import get_local_store as _gls2
-                _pick_store = _gls2()
-                _pick_store.record_picks("smart_structure", structure_shadow)
-                _pick_store.record_picks(
-                    "smart_timing",
-                    [
-                        {**item, "score": item.get("quality_score") or item.get("score")}
-                        for item in items
-                    ],
-                )
-                _pick_store.record_picks("smart", items)
-            except Exception as exc:  # noqa: BLE001 — 留痕失败不能阻断推荐主流程
-                print(f"record_picks failed: {exc}")
+        # 留痕不在这里做：两条新扫描路径之后都会进 _enrich_smart_pool_realtime，
+        # 缓存命中也只走那条，留痕统一放在那里（见 _record_smart_picks_once）。
 
 
 def _attach_list_profile(data: dict[str, Any]) -> None:

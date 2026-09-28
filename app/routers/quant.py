@@ -580,8 +580,13 @@ async def quant_risk_alert():
         except Exception:
             leader_breakdown = None
 
+        # 读回放库会等写锁（同步写库时实测卡住事件循环 3 秒+），跟上面几项一样放线程
+        try:
+            cold_excess = await _run_light(_cold_excess)
+        except Exception:
+            cold_excess = None
         gauge = market_risk_gauge(daily, temp, limitdown_share=limitdown_share,
-                                  breakdown_share=breakdown_share, cold_excess=_cold_excess(),
+                                  breakdown_share=breakdown_share, cold_excess=cold_excess,
                                   index_pcts=index_pcts, leader_breakdown=leader_breakdown)
         # 环境标签与横幅同源，一并回传方便前端对齐
         gauge["market_state"] = ctx.get("state")

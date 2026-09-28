@@ -260,6 +260,7 @@ class LocalQuantStore:
             "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,"
             "volume=excluded.volume,amount=excluded.amount", rows)
         conn.commit()
+        self._kline_symbols_cache = None
         return len(rows)
 
     def load_kline(self, symbol: str, limit: Optional[int] = None) -> pd.DataFrame:
@@ -319,10 +320,25 @@ class LocalQuantStore:
             bars,
         )
         conn.commit()
+        self._kline_symbols_cache = None
         return len(bars)
 
+    _kline_symbols_cache: Optional[tuple] = None
+
     def kline_symbol_count(self) -> int:
-        return self._conn().execute("SELECT COUNT(DISTINCT symbol) FROM daily_kline").fetchone()[0]
+        """本地有日线的股票数。
+
+        全表 COUNT(DISTINCT) 在 2GB 库上要 1.2~3 秒，而后台保温每轮、数据状态接口每次
+        都要问它——曾是事件循环卡顿的头号来源（2026-09-28 loop_stall.log，11 次里 9 次）。
+        这个数只在写入日线时才可能变，所以缓存 5 分钟、写入即失效。
+        """
+        import time as _time
+        cached = self._kline_symbols_cache
+        if cached and _time.monotonic() - cached[0] < 300:
+            return cached[1]
+        n = int(self._conn().execute("SELECT COUNT(DISTINCT symbol) FROM daily_kline").fetchone()[0] or 0)
+        self._kline_symbols_cache = (_time.monotonic(), n)
+        return n
 
     def list_kline_symbols(self, min_rows: int = 0) -> List[str]:
         """列出本地 K 线库里所有代码；min_rows>0 时只返回历史长度足够的代码。"""
@@ -375,7 +391,7 @@ class LocalQuantStore:
 
         conn = self._conn()
         meta_count = int(conn.execute("SELECT COUNT(*) FROM stock_meta").fetchone()[0] or 0)
-        kline_symbols = int(conn.execute("SELECT COUNT(DISTINCT symbol) FROM daily_kline").fetchone()[0] or 0)
+        kline_symbols = self.kline_symbol_count()
         rows = conn.execute(
             "SELECT date, COUNT(DISTINCT symbol) FROM daily_kline GROUP BY date ORDER BY date DESC LIMIT 20"
         ).fetchall()

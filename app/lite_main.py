@@ -2892,7 +2892,7 @@ async def lite_datalake_sync(full: bool = False):
 @app.get("/api/lite/datalake/sync/status")
 async def lite_datalake_sync_status():
     svc = get_sync_service()
-    return {"success": True, "data": svc.status()}
+    return {"success": True, "data": await asyncio.to_thread(svc.status)}
 
 
 @app.get("/api/lite/stock-names")
@@ -2913,7 +2913,7 @@ async def lite_stock_names(codes: str = ""):
 @app.get("/api/lite/datalake/health")
 async def lite_datalake_health(auto_start: bool = True):
     svc = get_sync_service()
-    status = svc.status()
+    status = await asyncio.to_thread(svc.status)
     health = dict(status.get("health") or {})
     auto_started = False
     should_full_sync = auto_start and not health.get("ready") and not status.get("running")
@@ -2949,7 +2949,7 @@ async def lite_datalake_health(auto_start: bool = True):
 async def lite_datalake_sources_health():
     from quantcore.quant.data_sources import data_source_health
 
-    sync_status = get_sync_service().status()
+    sync_status = await asyncio.to_thread(get_sync_service().status)
     health = data_source_health(sync_status.get("health") or {})
     health["sync"] = {
         "running": bool(sync_status.get("running")),

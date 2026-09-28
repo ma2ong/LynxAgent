@@ -91,7 +91,8 @@ async def _maybe_auto_sync() -> bool:
 
     try:
         svc = get_sync_service()
-        status = svc.status()
+        # status() 要查日线库（冷缓存时 1~3 秒），放线程里，别在事件循环上同步查库
+        status = await asyncio.to_thread(svc.status)
     except Exception as exc:  # noqa: BLE001
         logger.warning("board refresh [auto-sync] status failed: %s", exc)
         return False

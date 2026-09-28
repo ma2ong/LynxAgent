@@ -210,6 +210,8 @@ def main_long():
     panel = load_panel(since="2020-06-01", start="2021-01-01", lite=True)
     panel["S"] = composite(panel, weights())
     s10 = top_excess(panel, "S", "c10").dropna()
+    # 逐日序列落盘，供与其他策略对齐（如小市值组合的「此消彼长」检验）
+    s10.rename("top20_c10_excess").to_csv(ROOT / "experiments" / "results" / "structure_top20_c10_daily.csv")
     sp = quint_spread(panel, "ret20", "c10")
     yr = pd.DataFrame({"top20": s10, "ret20_spread": sp})
     print("\n=== 长样本：结构前20 超额 / 全市场20日涨幅五分位价差（T+10，pp，年度均值）===")

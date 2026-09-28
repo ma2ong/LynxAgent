@@ -106,7 +106,8 @@ def run(k, universe_mask, label, factor="std6", top=TOP, quiet=False):
 def main():
     k = load()
     sme = k["symbol"].str.startswith(("002", "003"))
-    run(k, sme, "原策略：中小板综 × 6日成交额标准差最小 5 只 × 周频")
+    base = run(k, sme, "原策略：中小板综 × 6日成交额标准差最小 5 只 × 周频")
+    base[["d", "ret", "pool", "mkt"]].to_csv(ROOT / "experiments" / "results" / "alpha70_weekly.csv", index=False)
     main_board = ~k["symbol"].str.startswith(("8", "4", "92"))
     run(k, main_board, "对照：全市场（剔除北交所）同规则")
     print("\n=== 稳健性：中小板池，不同只数 / 因子（累计收益%、最大回撤%、逐年超额同池 pp） ===")

@@ -88,3 +88,31 @@ def test_stale_snapshot_does_not_fabricate_a_day(monkeypatch):
     assert ctx["intraday"] is False
     assert [d["date"] for d in ctx["daily"]] == ["2026-07-22"]
     assert ctx["latest_day"]["median_pct"] == -1.27
+
+
+def test_divergence_wording_follows_market_direction(monkeypatch):
+    """2026-09-28：个股中位 −1.83%、指数均值 −3.2%，旧文案却写「普涨但权重股拖累指数」。"""
+    from quantcore.quant import engine
+
+    engine._MARKET_CTX_CACHE.clear()
+
+    class _Store:
+        def recent_daily_breadth(self, days=5):
+            return [{"date": "2026-07-22", "median_pct": -1.8, "breadth_up": 0.16, "count": 5200}]
+
+        def latest_real_bar_date(self):
+            return "2026-07-22"
+
+        def recent_returns(self, window=5):
+            return {}
+
+    monkeypatch.setattr(engine, "get_local_store", lambda: _Store())
+    monkeypatch.setattr(engine, "_fetch_tencent_quotes", lambda syms: {})
+    monkeypatch.setattr("quantcore.quant.macro_bar.fetch_index_quotes", lambda: [])
+    monkeypatch.setattr("quantcore.quant.macro_bar.fetch_index_history", lambda as_of="", window=5: [
+        {"code": "sh000001", "name": "上证指数", "date": "2026-07-22", "last_pct": -1.7, "window_pct": -2.0},
+        {"code": "sz399006", "name": "创业板指", "date": "2026-07-22", "last_pct": -4.5, "window_pct": -6.0},
+    ])
+    ctx = engine.market_context()
+    assert "普涨" not in ctx["divergence"]
+    assert "个股跌得比指数浅" in ctx["divergence"]

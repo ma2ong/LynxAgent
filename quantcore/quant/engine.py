@@ -353,10 +353,14 @@ def market_context(snapshot: Optional[Dict[str, Dict]] = None) -> Dict[str, obje
         if index_items:
             idx_last = sum(float(i["last_pct"]) for i in index_items) / len(index_items)
             gap = idx_last - d_median
+            # 措辞要跟涨跌方向走：2026-09-28 个股中位 −1.83%、上涨 16%，指数均值 −3.2%，
+            # 旧文案照样写「普涨但权重股拖累指数」，和同一屏的「普跌」自相矛盾。
             if gap >= 1.0:
-                divergence = "指数强于个股——权重拉指数，中位股没跟上，赚指数不赚钱"
+                divergence = ("指数强于个股——权重拉指数，中位股没跟上，赚指数不赚钱" if idx_last >= 0
+                              else "个股跌得比指数深——权重护盘，多数个股跌幅更大")
             elif gap <= -1.0:
-                divergence = "个股强于指数——普涨但权重股拖累指数，题材/小盘活跃"
+                divergence = ("个股强于指数——普涨但权重股拖累指数，题材/小盘活跃" if d_median >= 0
+                              else "个股跌得比指数浅——指数被大票重挫拖累，多数个股相对抗跌")
 
         day_label = _day_label(d_median, d_breadth)
         rebound = state == "偏冷" and d_breadth >= 0.50 and d_median > 0

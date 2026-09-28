@@ -42,7 +42,7 @@
         </span>
       </div>
       <div class="market-pulse">
-        <div v-if="marketCtx?.divergence" class="mb-diverge">⚠ {{ marketCtx.divergence }}</div>
+        <!-- 背离提示已由后端拼进 advice 末尾，这里不再单独显示一遍 -->
         <div class="mb-advice">{{ marketCtx?.advice || '正在评估大盘环境…' }}</div>
         <div v-if="marketCtx?.daily?.length" class="mb-daily">
           <span class="mb-daily-label">近5日：</span>
@@ -346,20 +346,14 @@ const loadColdEvidence = async () => {
   if (coldEvidence.value) return
   try {
     const replay = await quantApi.replayResults()
-    const parts: string[] = []
-    let bestCold: { label: string; avg: number } | null = null
-    for (const pool of replay?.pools || []) {
-      const cold = (pool.regimes || []).find((row) => row.regime === '偏冷')
-      if (!cold) continue
-      const label = pool.pool === 'pattern' ? '形态池' : pool.pool === 'smart' ? '智能池' : pool.pool
-      parts.push(`${label} ${cold.avg_excess > 0 ? '+' : ''}${cold.avg_excess}pp（中位 ${cold.median_excess}pp，${cold.picks} 样本）`)
-      if (!bestCold || cold.avg_excess > bestCold.avg) bestCold = { label, avg: cold.avg_excess }
-    }
-    if (!parts.length) return
-    const advice = bestCold && bestCold.avg >= 0.5
-      ? `——弱市里${bestCold.label}历史上仍有正超额，但仓位仍应克制；其余池贴零或为负，优先只跟${bestCold.label}。`
-      : '——各池弱市均无有效超额，建议轻仓或观望。'
-    coldEvidence.value = `历史回放偏冷期 T+5 超额：${parts.join('；')}${advice}`
+    // 给普通用户的一句话：只讲用户真正用的一键智选在历史弱市里的表现，不罗列内部池代号与 pp/中位/样本数
+    const smart = (replay?.pools || []).find((pool) => pool.pool === 'smart')
+    const cold = (smart?.regimes || []).find((row) => row.regime === '偏冷')
+    if (!cold) return
+    const avg = Number(cold.avg_excess)
+    coldEvidence.value = avg >= 0.5
+      ? `历史上类似的弱市里，一键智选推荐的股票 5 天平均仍比大盘多涨 ${avg.toFixed(1)} 个百分点——可以参与，但仓位要克制。`
+      : `历史上类似的弱市里，一键智选推荐的股票 5 天平均${avg < 0 ? `比大盘少涨 ${Math.abs(avg).toFixed(1)}` : '和大盘差不多'}${avg < 0 ? ' 个百分点' : ''}——建议轻仓或观望。`
   } catch { /* 无回放结果时不展示 */ }
 }
 
@@ -629,7 +623,6 @@ onUnmounted(stopHeroPolling)
 .mb-index { margin-top: 4px; }
 .mb-idx { font-size: 12px; color: var(--el-text-color-regular); b { font-weight: 700; } }
 .mb-idx-note { font-size: 11px; color: var(--el-text-color-secondary); }
-.mb-diverge { font-size: 11px; font-weight: 600; color: #d46b08; }
 .market-pulse { display: flex; align-items: baseline; gap: 12px 20px; margin-top: 4px; flex-wrap: wrap; }
 .mb-advice { font-size: 12px; font-weight: 650; color: var(--el-text-color-primary); }
 .mb-daily { font-size: 11px; color: var(--el-text-color-secondary);

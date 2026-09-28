@@ -183,6 +183,27 @@
           </p>
         </div>
 
+        <!-- 最近的坏消息也要同屏：2026-07 起追涨风格失灵（experiments/structure_decay.py）。
+             产品里对应的是智选页的「追涨风格正在失灵」红条，按上一批已兑现名单实时亮灭。 -->
+        <div class="panel">
+          <div class="panel-head">
+            <span class="tag down">TABLE 02</span>
+            <h3>2026 年 7 月起：追涨风格失灵</h3>
+            <span class="meta">结构分前 20 · 持有 10 个交易日 · 相对候选均值</span>
+          </div>
+          <div class="stats">
+            <div class="stat"><span class="stat-val up">+2.42pp</span><span class="stat-label">2025-09 ~ 2026-06</span></div>
+            <div class="stat"><span class="stat-val down">−8.36pp</span><span class="stat-label">2026-07</span></div>
+            <div class="stat"><span class="stat-val down">−3.72pp</span><span class="stat-label">2026-08</span></div>
+            <div class="stat"><span class="stat-val down">−3.28pp</span><span class="stat-label">2026-09</span></div>
+          </div>
+          <p class="panel-note">
+            不是哪个因子算坏了：全市场「近 20 日涨得最多」的那一档同期整体跑输，结构分押的正是这一档。
+            这种时候智选页会亮红条提示「追涨风格正在失灵」——历史上此时下一批 10 日平均再跑输约 1.8 个百分点，
+            只有约 1/3 跑赢。名单照常给，但我们不会让你在这种时候以为它还灵。
+          </p>
+        </div>
+
         <div class="panel">
           <div class="panel-head">
             <span class="tag down">CHART 01</span>
@@ -556,21 +577,22 @@
             </div>
           </div>
 
-          <!-- 自选股 + 数据中心 -->
+          <!-- 小市值组合 + 自选股。数据中心 2026-09-29 起只对管理员开放，从官网撤下。 -->
           <div class="card">
-            <div class="win-head"><b>我的自选股 · 数据中心</b><span class="spacer"></span><span>常驻</span></div>
+            <div class="win-head"><b>小市值组合 · 我的自选股</b><span class="spacer"></span><span>周频 · 常驻</span></div>
             <div class="card-copy bordered">
+              <h3>小市值周频组合</h3>
+              <ul class="ticks">
+                <li>每周一开盘换仓，持有中小板里成交最平稳的 5 只，拿满一周</li>
+                <li>2020-09 起本地复刻累计 +359%，7 年里 5 年跑赢；最大回撤 −33%</li>
+                <li>只算了仍在上市的股票，退市的没计入，真实收益会更低</li>
+              </ul>
+            </div>
+            <div class="card-copy">
               <h3>我的自选股</h3>
               <ul class="ticks">
                 <li>收藏个股，实时跟踪涨跌与触发的预警</li>
                 <li>名单里的票可一键加入，不用手抄代码</li>
-              </ul>
-            </div>
-            <div class="card-copy">
-              <h3>数据中心</h3>
-              <ul class="ticks">
-                <li>本地全市场日线的覆盖范围与更新状态，看得到数据本身</li>
-                <li>回放用的就是这份库，不是另一套「演示数据」</li>
               </ul>
             </div>
           </div>
@@ -1130,7 +1152,7 @@ const fitNo = [
 const freeItems = [
   '全部选股池与每日名单，条数不因免费而缩水',
   '行业热力 / 板块轮动 / 涨停热点 / 风险预警',
-  '个股深研 / 选股复盘 / 自选股 / 数据中心',
+  '小市值周频组合 / 个股深研 / 选股复盘 / 自选股',
   '历史回放数据与全部复盘战绩，含为负的那部分',
   '不限次数，没有任何需要付费才能看到的部分',
 ]

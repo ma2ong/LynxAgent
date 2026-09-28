@@ -9,13 +9,13 @@
           <span class="brand-text">ASTOCKPICK</span>
         </a>
         <nav class="links">
-          <a href="#method">METHOD</a>
-          <a href="#audit">AUDIT</a>
-          <a href="#result">RESULTS</a>
-          <a href="#product">PRODUCT</a>
-          <a href="#day">A DAY</a>
-          <a href="#rejected">REJECTED</a>
-          <a href="#pricing">PRICING</a>
+          <a href="#method">方法</a>
+          <a href="#audit">规则审计</a>
+          <a href="#result">历史结果</a>
+          <a href="#product">功能</a>
+          <a href="#day">一天怎么用</a>
+          <a href="#rejected">被否决的规则</a>
+          <a href="#pricing">价格</a>
         </nav>
         <div class="nav-cta">
           <template v-if="loggedIn">
@@ -29,13 +29,14 @@
       </div>
     </header>
 
-    <!-- 行情条：静态快照，不调接口。官网未登录也要能整页打开。 -->
-    <div class="ticker">
+    <!-- 行情条：读公开接口的真实行情；取不到就整条不显示——不能拿写死的数字冒充实时行情。
+         其余部分仍是纯静态，接口挂了官网照样整页打开。 -->
+    <div v-if="tickers.length" class="ticker">
       <div class="wrap ticker-inner">
         <span v-for="t in tickers" :key="t.label" class="ticker-cell">
           {{ t.label }}
           <b :class="t.tone">{{ t.value }}</b>
-          <em v-if="t.extra">{{ t.extra }}</em>
+          <em v-if="t.extra" :class="t.tone">{{ t.extra }}</em>
         </span>
       </div>
     </div>
@@ -64,7 +65,7 @@
 
         <aside class="hero-panel">
           <div class="panel-cap">
-            <span class="strong">今日智能选股</span><span class="spacer"></span><span>TOP 20 · 08-27</span>
+            <span class="strong">智能选股 · 示例</span><span class="spacer"></span><span>2026-08-27 快照</span>
           </div>
           <div class="pick-head">
             <span>#</span><span>名称 / 代码</span><span class="r">结构分</span><span class="r">T+5</span>
@@ -711,7 +712,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import BrandLogo from '@/components/Layout/BrandLogo.vue'
 
-// 官网是纯静态展示页：不调任何后端接口，未登录也能完整打开。
+// 官网是静态展示页：除顶部行情条读一个公开接口外不调后端，未登录也能完整打开。
 // 业绩数字来自 docs/superpowers/specs/2026-07-13-replay-validation-report.md 与
 // experiments/ 的实测结论；板块示意图的数值来自 2026-08-19 的界面快照。
 // 改数字前先回那两处核对口径。
@@ -725,6 +726,7 @@ const root = ref<HTMLElement | null>(null)
 let observer: IntersectionObserver | null = null
 
 onMounted(() => {
+  loadTickers()
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
   if (reduce || !root.value) return
   const targets = Array.from(root.value.querySelectorAll<HTMLElement>('[data-reveal]'))
@@ -751,13 +753,29 @@ onUnmounted(() => {
 const fmt = (v: number) => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(2)
 const roman = ['i', 'ii', 'iii', 'iv', 'v']
 
-const tickers = [
-  { label: '上证指数', value: '3990.29', extra: '0.00%', tone: '' },
-  { label: '深证成指', value: '14622.56', extra: '', tone: '' },
-  { label: '创业板指', value: '3705.56', extra: '', tone: '' },
-  { label: '涨跌', value: '1233 / 3207', extra: '', tone: '' },
-  { label: '风险', value: '警惕 44.6', extra: '', tone: 'warn' },
-]
+type Ticker = { label: string; value: string; extra: string; tone: string }
+const tickers = ref<Ticker[]>([])
+
+async function loadTickers() {
+  try {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 8000)
+    const res = await fetch('/api/lite/macro-bar', { signal: ctrl.signal })
+    clearTimeout(timer)
+    const data = (await res.json())?.data
+    const rows: Ticker[] = (data?.indices || []).map((i: { name: string; price: number; change_percent: number }) => ({
+      label: i.name,
+      value: i.price.toFixed(2),
+      extra: `${i.change_percent >= 0 ? '+' : '−'}${Math.abs(i.change_percent).toFixed(2)}%`,
+      tone: i.change_percent > 0 ? 'up' : i.change_percent < 0 ? 'down' : '',
+    }))
+    const b = data?.breadth
+    if (b) rows.push({ label: '涨 / 跌', value: `${b.up} / ${b.down}`, extra: data.updated_at || '', tone: '' })
+    tickers.value = rows
+  } catch {
+    tickers.value = []
+  }
+}
 
 const heroPicks = [
   { no: '01', name: '农发种业', code: '600313', score: 89, ret: 4.2 },
@@ -1246,7 +1264,8 @@ const faqs = [
 .ticker-cell:first-child { padding-left: 0; }
 .ticker-cell:last-child { border-right: 0; padding-right: 0; }
 .ticker-cell b { color: var(--ink); font-weight: 500; }
-.ticker-cell b.warn { color: var(--up-ink); font-weight: 600; }
+.ticker-cell .up { color: var(--up); }
+.ticker-cell .down { color: var(--down); }
 .ticker-cell em { font-style: normal; margin-left: 6px; color: var(--ink-3); }
 
 /* ── 首屏 ── */

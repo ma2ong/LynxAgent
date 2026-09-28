@@ -388,6 +388,10 @@
               <template #default="{ row }">
                 <b>{{ row.name }}</b>
                 <div class="score-pct">{{ row.symbol }}</div>
+                <el-tag v-if="row.timing_status === 'blocked'" size="small" type="danger" effect="plain"
+                  title="已涨停或距离涨停过近，等回落并重新出现量价确认">不可追入</el-tag>
+                <el-tag v-else-if="row.timing_actionable && !buyLocked(row)" size="small" type="success" effect="dark"
+                  title="结构入选后，盘中量价也已二次确认">量价已确认</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="行业/板块" width="110">
@@ -418,70 +422,8 @@
                 <span v-else class="panel-pending">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="价位参考" width="156">
-              <template #default="{ row }">
-                <div v-if="row.timing_status === 'blocked'" class="trade-plan-cell risk-paused">
-                  <el-tag size="small" type="danger" effect="dark">不可追入</el-tag>
-                  <span>已涨停或距离涨停过近</span>
-                  <em>等待回落并重新出现量价确认</em>
-                </div>
-                <div
-                  v-else-if="['pending', 'unconfirmed', 'watch'].includes(row.timing_status || 'pending')"
-                  class="trade-plan-cell risk-paused"
-                >
-                  <el-tag size="small" :type="row.timing_status === 'watch' ? 'warning' : 'info'" effect="plain">
-                    {{ row.timing_label || '等待量价确认' }}
-                  </el-tag>
-                  <span>暂不显示买入价格</span>
-                  <em>结构入选不等于当前可买，等待时机层确认</em>
-                </div>
-                <div v-else-if="row.timing_status === 'confirmed' && !row.timing_actionable" class="trade-plan-cell risk-paused">
-                  <el-tag size="small" type="warning" effect="plain">{{ row.timing_label }}</el-tag>
-                  <span>下一交易日重新确认</span>
-                  <em>收盘复盘或历史触发信号不能按原价格追入</em>
-                </div>
-                <div v-else-if="buyLocked(row)" class="trade-plan-cell risk-paused">
-                  <el-tag size="small" type="danger" effect="dark">暂停新增买入</el-tag>
-                  <span>当前仅作为观察名单</span>
-                  <em>市场风险降至警惕/安全后再显示买入计划</em>
-                </div>
-                <div v-else-if="riskLocked && row.daytrade_ok" class="trade-plan-cell daytrade">
-                  <el-tag size="small" type="warning" effect="dark">T+1 口径</el-tag>
-                  <span v-if="row.trade_plan?.buy_price">触发 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
-                  <span v-if="row.trade_plan?.stop_loss" class="tp-stop">
-                    下沿 {{ formatNumber(row.trade_plan.stop_loss) }}
-                  </span>
-                  <em class="tp-warn">{{ row.daytrade_note }}</em>
-                </div>
-                <div v-else-if="row.trade_plan && row.trade_plan.buy_price" class="trade-plan-cell">
-                  <el-tag v-if="row.timing_actionable" size="small" type="success" effect="dark" class="limit-up-tag">
-                    盘中量价已确认
-                  </el-tag>
-                  <!-- 逆势大跌即使结构分较高，也必须先通过时机层；通过后仍保留风险提示。 -->
-                  <el-tooltip v-if="row.entry_warning" effect="dark" placement="left"
-                              :content="row.entry_warning.note">
-                    <el-tag size="small" type="danger" effect="dark" class="limit-up-tag">
-                      {{ row.entry_warning.text }} · 需持满5日
-                    </el-tag>
-                  </el-tooltip>
-                  <template v-if="row.timing_actionable && row.radar_signal?.entry_low">
-                    <span>
-                      区间 <b>{{ formatNumber(row.radar_signal.entry_low) }}–{{ formatNumber(row.radar_signal.entry_high) }}</b>
-                    </span>
-                    <span class="tp-stop">失效 {{ formatNumber(row.radar_signal.invalidation_price) }}</span>
-                    <span class="tp-target">上限 {{ formatNumber(row.radar_signal.chase_limit) }}</span>
-                    <em>有效至 {{ row.radar_signal.valid_until?.slice(11, 16) || '本次扫描区间' }}</em>
-                  </template>
-                  <template v-else>
-                    <span>触发 <b>{{ formatNumber(row.trade_plan.buy_price) }}</b></span>
-                    <span class="tp-stop">下沿 {{ formatNumber(row.trade_plan.stop_loss) }}（{{ row.trade_plan.stop_loss_pct }}%）</span>
-                    <span class="tp-target">上沿 {{ formatNumber(row.trade_plan.take_profit) }}（+{{ row.trade_plan.take_profit_pct }}%）</span>
-                    <em>盈亏比 {{ row.trade_plan.risk_reward_ratio ?? '-' }}:1 · {{ row.trade_plan.basis === 'atr' ? 'ATR' : '比例' }}</em>
-                  </template>
-                </div>
-                <span v-else>-</span>
-              </template>
-            </el-table-column>
+            <!-- 「价位参考」列已删（Allen 2026-09-28）：九成行都是「暂不显示买入价格」的长句，
+                 真正影响动作的只有两种状态，缩成名称下的小标签；交易计划在理由抽屉里。 -->
             <!-- 「形态·强度」「入选理由」两列（合计 550px）合成一列，只放决策要看的：风险警示、
                  追高程度、最强的一个形态；其余折成 +N，点开就是理由抽屉（那里列全）。
                  以前 13 列约 1620px，1440 宽的笔记本只能横向滚，右侧固定列还盖住内容。 -->
@@ -1615,31 +1557,6 @@ const openChart = async (row: any) => {
 .pcf-label { color: var(--el-text-color-secondary); }
 .pcf-hint { font-size: 12px; color: var(--el-text-color-placeholder); }
 
-.trade-plan-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  font-size: 12px;
-  line-height: 1.5;
-
-  b { font-weight: 700; }
-  .tp-stop { color: var(--el-color-success); }
-  .tp-target { color: var(--el-color-danger); }
-  em {
-    font-style: normal;
-    color: var(--el-text-color-secondary);
-    font-size: 11px;
-  }
-  .limit-up-tag {
-    align-self: flex-start;
-    margin-bottom: 2px;
-  }
-  .tp-warn { color: var(--el-color-danger); }
-  &.risk-paused {
-    color: var(--el-color-danger);
-    em { color: var(--el-color-danger-light-3); }
-  }
-}
 
 .mini-summary {
   display: flex;
@@ -1985,7 +1902,6 @@ const openChart = async (row: any) => {
 .panel-pending { color: var(--el-text-color-placeholder); }
 .panel-summary { margin: 0 0 10px; font-size: 13px; }
 .panel-note { margin: 10px 0 0; font-size: 12px; color: var(--el-text-color-placeholder); }
-.trade-plan-cell.daytrade { border-left: 2px solid var(--el-color-warning); padding-left: 6px; }
 .score-pct { font-size: 11px; color: var(--el-text-color-placeholder); margin-top: 2px; }
 
 /* 头部密度：原来标题+数据健康+池说明+风险横幅要吃掉 583px（视口 889px 的 66%），

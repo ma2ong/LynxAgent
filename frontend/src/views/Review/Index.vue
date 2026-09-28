@@ -37,7 +37,13 @@
       <span class="ctx-advice">{{ marketCtx.advice }}</span>
     </div>
 
-    <div v-if="pools.length && alignedSince" class="align-note">
+    <!-- 公开用户只关心自己用的一键智选；对照池是研究用的，默认收起（2026-09-28） -->
+    <div v-if="pools.length > 1" class="controls-toggle">
+      <a class="desc-toggle" @click="showControls = !showControls">
+        {{ showControls ? '收起研究对照组' : '显示研究对照组（结构基线 / 形态 / 强势股）' }}
+      </a>
+    </div>
+    <div v-if="showControls && pools.length && alignedSince" class="align-note">
       <b>跨池对比看「可比」那一行</b>
       <span>
         各池上线日期不同（最早 {{ earliestPool }}，最晚 {{ alignedSince }}），窗口内经历的行情天数不一样，
@@ -46,7 +52,7 @@
     </div>
 
     <section v-if="pools.length" class="pool-grid">
-      <div v-for="p in pools" :key="p.pool" class="pool-card">
+      <div v-for="p in shownPools" :key="p.pool" class="pool-card">
         <div class="pool-title">
           <b>{{ poolLabel(p.pool) }}</b>
           <small>{{ p.picks }} 条留痕<template v-if="p.first_pick_date"> · 自 {{ p.first_pick_date }}</template></small>
@@ -82,10 +88,9 @@
     <section v-if="items.length" class="panel">
       <div class="panel-head">
         <h2>留痕明细</h2>
-        <el-radio-group v-model="poolFilter" size="small">
+        <el-radio-group v-if="showControls" v-model="poolFilter" size="small">
           <el-radio-button value="">全部</el-radio-button>
           <el-radio-button value="smart">一键智选推荐</el-radio-button>
-          <el-radio-button value="smart_timing">时机融合 v1</el-radio-button>
           <el-radio-button value="smart_structure">结构基线（对照）</el-radio-button>
           <el-radio-button value="pattern">形态智选（对照）</el-radio-button>
           <el-radio-button value="strength">强势股（对照）</el-radio-button>
@@ -220,7 +225,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { quantApi, type MarketContext, type PicksPoolStat, type PicksStatsItem, type QuantDataHealth, type ReplayPoolSummary, type ReplayStatus, type ReplaySummary } from '@/api/quant'
 import { echarts, type ECharts } from '@/utils/echarts'
@@ -228,7 +233,8 @@ import { echarts, type ECharts } from '@/utils/echarts'
 const loading = ref(false)
 const error = ref('')
 const days = ref(30)
-const poolFilter = ref('')
+const poolFilter = ref('smart')
+const showControls = ref(false)
 const pools = ref<PicksPoolStat[]>([])
 const items = ref<PicksStatsItem[]>([])
 const marketCtx = ref<MarketContext | null>(null)
@@ -270,8 +276,9 @@ const poolLabel = (key: string) => POOL_LABELS[key] || key
 
 // 新时机层与原结构候选同时留痕，才能用同一天、同一 T+1/T+5 口径验证改造是否有效；
 // 形态与强势股继续作为更长期的影子对照组。
+// smart_timing 已不展示：盘中追涨重排 2026-09-24 撤掉后它与 smart 逐条相同，并列只会让人看两遍同一组数。
 const VISIBLE_POOLS = [
-  'smart', 'smart_timing', 'smart_structure', 'pattern', 'strength',
+  'smart', 'smart_structure', 'pattern', 'strength',
 ]
 const keepVisible = <T extends { pool: string }>(list: T[]) =>
   list.filter((p) => VISIBLE_POOLS.includes(p.pool))
@@ -284,6 +291,8 @@ const earliestPool = computed(() => {
   return dates.length ? dates.reduce((a, b) => (a < b ? a : b)) : ''
 })
 
+const shownPools = computed(() => (showControls.value ? pools.value : pools.value.filter((p) => p.pool === 'smart')))
+watch(showControls, (on) => { if (!on) poolFilter.value = 'smart' })
 const filteredItems = computed(() =>
   poolFilter.value ? items.value.filter((it) => it.pool === poolFilter.value) : items.value,
 )
@@ -534,6 +543,7 @@ onBeforeUnmount(() => {
   span { display: inline; font-size: 11px; }
 }
 
+.controls-toggle { margin: -4px 0 8px; font-size: 12px; }
 .align-note {
   display: flex;
   align-items: baseline;

@@ -300,4 +300,11 @@ onBeforeUnmount(() => {
 .chart-wrap { position: relative; flex: 1; min-height: 0; }
 .chart { width: 100%; height: 100%; }
 .cov-note { color: var(--el-text-color-placeholder); }
+/* 手机端：标题行一行放不下，说明文字与切换按钮换行，别被裁掉（2026-09-29） */
+@media (max-width: 760px) {
+  .page-head { flex-wrap: wrap; }
+  .page-head .sub { white-space: normal; flex-basis: 100%; }
+  .page-head .actions { margin-left: 0; flex-wrap: wrap; flex-shrink: 1; }
+  .industry-jump { width: 100%; }
+}
 </style>

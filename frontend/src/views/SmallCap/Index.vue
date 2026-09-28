@@ -28,25 +28,25 @@
         <span v-if="data?.week_start" class="dim">{{ data.week_start }} 开盘建仓 · 下周一开盘换仓</span>
       </div>
       <el-table v-if="data?.items.length" :data="data.items" size="small" v-loading="loading">
-        <el-table-column label="股票" min-width="130">
+        <el-table-column label="股票" :min-width="isMobile ? 110 : 130">
           <template #default="{ row }">
             <a class="stk" @click="openStock(row.symbol)">{{ row.name }}</a>
             <span class="dim code">{{ row.symbol }}</span>
             <el-tag v-if="row.kept_limit_up" size="small" type="danger" effect="plain" title="上周持有、换仓前一日涨停，按规则本周继续持有">涨停续持</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="周一开盘价" width="110" align="right">
+        <el-table-column label="周一开盘" :width="isMobile ? 76 : 110" align="right">
           <template #default="{ row }">{{ row.entry_price.toFixed(2) }}</template>
         </el-table-column>
-        <el-table-column label="现价" width="100" align="right">
+        <el-table-column label="现价" :width="isMobile ? 66 : 100" align="right">
           <template #default="{ row }">{{ row.price.toFixed(2) }}</template>
         </el-table-column>
-        <el-table-column label="本周以来" width="110" align="right">
+        <el-table-column label="本周以来" :width="isMobile ? 76 : 110" align="right">
           <template #default="{ row }">
             <b :class="tone(row.since_entry_pct)">{{ pct(row.since_entry_pct) }}</b>
           </template>
         </el-table-column>
-        <el-table-column label="近 6 日成交额波动" width="150" align="right">
+        <el-table-column v-if="!isMobile" label="近 6 日成交额波动" width="150" align="right">
           <template #default="{ row }"><span class="dim">{{ row.amount_std_wan.toFixed(0) }} 万</span></template>
         </el-table-column>
       </el-table>
@@ -119,6 +119,8 @@ const YEARS = [
 ]
 
 const router = useRouter()
+// 手机端去掉成交额波动列、压窄其余列，五列在 390px 内放得下（与 AppLayout 的 760px 断点一致）
+const isMobile = window.matchMedia('(max-width: 760px)').matches
 const data = ref<SmallcapResult | null>(null)
 const loading = ref(false)
 

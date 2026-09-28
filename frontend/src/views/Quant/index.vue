@@ -358,8 +358,41 @@
             :title="`当前市场环境下达标标的仅 ${smartPoolResult.items.length} 只`"
             description="名单只收综合排序够门槛的，够几只给几只；今天少说明全市场就没几只够分（或部分候选被风控剔除）。可参考顶部大盘环境提示控制仓位。"
           />
+          <!-- 手机端用卡片：表格在 390px 宽里只剩分数和操作按钮，股名被截成三个字，
+               现价、首推后这些要横滑才看得到（2026-09-29）。 -->
+          <div v-if="smartPoolResult?.items.length && isMobile" class="pick-cards">
+            <div v-for="row in smartDisplayItems" :key="row.symbol" class="pick-card">
+              <div class="pc-top">
+                <div class="pc-name">
+                  <b>{{ row.name }}</b>
+                  <span class="score-pct">{{ row.symbol }} · {{ row.industry || row.board || '-' }}</span>
+                </div>
+                <div class="pc-score"><b>{{ Number(row.quality_score ?? row.score).toFixed(1) }}</b><span class="score-pct">综合分</span></div>
+              </div>
+              <div class="pc-mid">
+                <span>现价 <b>{{ formatNumber(row.close) }}</b>
+                  <em :class="changeClass(row.pct_chg)">{{ signedPercent(row.pct_chg) }}</em></span>
+                <span v-if="row.since_first_pct != null">首推后
+                  <b :class="changeClass(row.since_first_pct)">{{ signedPercent(row.since_first_pct) }}</b></span>
+                <el-tag v-if="row.timing_status === 'blocked'" size="small" type="danger" effect="plain">不可追入</el-tag>
+                <el-tag v-else-if="row.timing_actionable && !buyLocked(row)" size="small" type="success" effect="dark">量价已确认</el-tag>
+              </div>
+              <div class="pc-tags">
+                <el-tag v-for="f in row.risk_flags || []" :key="f.key" class="capability-tag" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="dark">⚠ {{ f.name }}</el-tag>
+                <el-tag v-if="row.entry_position?.ret20 != null" class="capability-tag" :type="row.entry_position.ret20 >= 15 ? 'danger' : 'info'" effect="plain">
+                  近20日 {{ signedPercent(row.entry_position.ret20) }}
+                </el-tag>
+                <el-tag v-if="topPattern(row)" class="capability-tag" type="primary" effect="plain">{{ topPattern(row)?.name }}</el-tag>
+              </div>
+              <div class="pc-actions">
+                <el-button type="primary" link size="small" @click="addOneToFavorites(row)">加入自选</el-button>
+                <el-button link type="primary" size="small" @click="openChart(row)">看图</el-button>
+                <el-button link type="primary" size="small" @click="openWhy(row, 'smart')">理由{{ moreEvidenceCount(row) ? ` +${moreEvidenceCount(row)}` : '' }}</el-button>
+              </div>
+            </div>
+          </div>
           <el-table
-            v-if="smartPoolResult?.items.length"
+            v-else-if="smartPoolResult?.items.length"
             ref="smartTableRef"
             class="smart-pool-table"
             :data="smartDisplayItems"
@@ -517,6 +550,10 @@ const localUniverseSize = computed(() =>
 const whyVisible = ref(false)
 const whyRow = ref<any | null>(null)
 const whyPool = ref<'smart' | 'pattern'>('smart')
+// 与 AppLayout 的 760px 断点一致
+const mobileQuery = window.matchMedia('(max-width: 760px)')
+const isMobile = ref(mobileQuery.matches)
+mobileQuery.addEventListener('change', (e) => { isMobile.value = e.matches })
 // 关键依据列只放一个形态：优先「三不卖」（持有类确认），其次强度最高的
 const topPattern = (row: any) => {
   const list = (row.patterns || []).filter((p: any) => p.key !== 'dryup_ignite')
@@ -1830,6 +1867,18 @@ const openChart = async (row: any) => {
   font-size: 12px;
 }
 
+.pick-cards { display: flex; flex-direction: column; gap: 8px; }
+.pick-card { border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 10px 12px; background: var(--el-bg-color); }
+.pc-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.pc-name { display: flex; flex-direction: column; min-width: 0; }
+.pc-name b { font-size: 15px; }
+.pc-score { display: flex; flex-direction: column; align-items: flex-end; }
+.pc-score b { font-size: 18px; color: var(--el-color-primary); }
+.pc-mid { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 6px 0; font-size: 13px; }
+.pc-mid em { font-style: normal; margin-left: 4px; }
+.pc-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.pc-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
+
 @media (max-width: 900px) {
   .tool-layout {
     grid-template-columns: 1fr;
@@ -1980,5 +2029,19 @@ const openChart = async (row: any) => {
   .smart-pool-table :deep(.el-table__header-wrapper) {
     top: calc(-18px + var(--sticky-head-h, 87px));
   }
+}
+
+/* 手机端：顶部提示区是网格，不换行的文字会把列撑到 578px（屏宽 390），右半截被裁掉读不到。
+   列宽封顶到容器、文字一律换行（2026-09-29）。 */
+@media (max-width: 760px) {
+  .decision-context { grid-template-columns: minmax(0, 1fr); }
+  .decision-context > * { min-width: 0; }
+  .decision-context span, .basis-tip, .env-gate-note, .profile-note span {
+    white-space: normal; overflow: visible; text-overflow: clip;
+  }
+  .basis-note, .env-gate, .basket-head { flex-wrap: wrap; }
+  .risk-lock-body { flex-wrap: wrap; white-space: normal; }
+  :deep(.el-alert__content), :deep(.el-alert__title) { min-width: 0; white-space: normal; }
+  .head-tags { flex-wrap: wrap; flex-shrink: 1; min-width: 0; }
 }
 </style>

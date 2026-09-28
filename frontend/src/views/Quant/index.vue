@@ -382,21 +382,21 @@
                  时候显示「—」，反而像数据出错。功能保留在个股深研，并转入留痕+复盘：
                  后台每日给当日名单打分入库，攒够样本后用 experiments/panel_eval.py
                  量它有没有预测力 —— 有就加权重，没有就删干净。 -->
-            <el-table-column prop="symbol" label="代码" width="80" />
-            <el-table-column label="名称" width="116">
+            <!-- 代码并入名称列；「三重/双确认」徽标移进理由抽屉：14/20 只都带，红底紧贴股名
+                 像是强烈推荐，而这个组合没有单独验证过收益（2026-09-28）。 -->
+            <el-table-column label="名称" width="104">
               <template #default="{ row }">
-                <span>{{ row.name }}</span>
-                <el-tag v-if="row.triple_confirm" size="small" type="danger" effect="dark" class="dc-tag" title="结构因子 + 低位形态 + 相对强度 三重确认">三重</el-tag>
-                <el-tag v-else-if="row.dual_confirm" size="small" type="success" effect="dark" class="dc-tag" title="结构因子 + 低位形态 双确认">双确认</el-tag>
+                <b>{{ row.name }}</b>
+                <div class="score-pct">{{ row.symbol }}</div>
               </template>
             </el-table-column>
             <el-table-column label="行业/板块" width="110">
               <template #default="{ row }">{{ row.industry || row.board || '-' }}</template>
             </el-table-column>
-            <el-table-column label="现价" width="72"><template #default="{ row }">{{ formatNumber(row.close) }}</template></el-table-column>
-            <el-table-column label="涨跌幅" width="72" align="right">
+            <el-table-column label="现价 / 今日" width="84" align="right">
               <template #default="{ row }">
-                <span :class="changeClass(row.pct_chg)">{{ signedPercent(row.pct_chg) }}</span>
+                <b>{{ formatNumber(row.close) }}</b>
+                <div :class="changeClass(row.pct_chg)">{{ signedPercent(row.pct_chg) }}</div>
               </template>
             </el-table-column>
             <!-- 首推价／首推后：当日涨跌幅里混着「开盘到上榜之间」那一段，用户根本没机会参与。
@@ -482,85 +482,25 @@
                 <span v-else>-</span>
               </template>
             </el-table-column>
-            <el-table-column label="形态 · 强度" min-width="250">
-              <template #default="{ row }">
-                <!-- 结构因子分全市场上限约 79.6，所以「79 分」是前 0.1% 而非「只有七八十分」。
-                     分数本身不可横向解读，百分位可以，故一并显示。 -->
-                <el-tag class="capability-tag" type="info" effect="plain"
-                  :title="`日K结构因子分（不含盘中量价）；综合排序 ${Number(row.quality_score ?? row.score).toFixed(1)} 分才是上榜依据`">
-                  结构 {{ displayScore(row) }}<template v-if="row.score_percentile != null">
-                    · 前 {{ row.score_percentile < 1 ? row.score_percentile.toFixed(1) : Math.round(row.score_percentile) }}%</template>
-                </el-tag>
-                <el-tag v-if="row.confluence_bonus" class="capability-tag" type="warning" effect="dark"
-                  :title="`结构因子之上，形态/强度共振加成 +${row.confluence_bonus}（已计入排序，量化分保持结构分不动）`">
-                  共振+{{ row.confluence_bonus }}
-                </el-tag>
-                <!-- 地量点火：唯一带匹配对照增量的形态，单独出一个标签把剂量摊开
-                     （沉寂几天 / 放大几倍 / 点火后第几天），而不是混在通用形态标签里。
-                     过闸才加分，没过闸也照常显示 —— 让人看见「形态在但板块没跟上」。 -->
-                <el-tag v-if="row.ignite" class="capability-tag"
-                  :type="row.ignite.gated ? 'danger' : 'info'"
-                  :effect="row.ignite.gated ? 'dark' : 'plain'"
-                  :title="row.ignite.gated
-                    ? `地量点火当日：沉寂 ${row.ignite.quiet_days} 天后成交额放大到 ${row.ignite.amount_ratio} 倍，距 20 日线 ${row.ignite.dist_ma20}%，板块 20 日动量前 ${Math.round((1 - row.ignite.sector_mom_pct) * 100)}%。排序 +${row.ignite.bonus}。
-有效窗口约 3 个交易日（T+5 口径实测失效）。
-证据：匹配对照增量 +0.16pp、7 年方向一致，但置信区间下沿为负——统计上与 0 分不开，属观察期规则。`
-                    : (row.ignite.fresh
-                        ? `形态成立但板块未过闸：板块 ${row.ignite.sector || '未知'} 的 20 日动量分位 ${row.ignite.sector_mom_pct == null ? '取不到' : Math.round(row.ignite.sector_mom_pct * 100)}，低于 70 分位线，不加分。去掉板块条件后增量从 +0.16 掉到 +0.03。`
-                        : `点火已是 ${row.ignite.days_since} 个交易日前，窗口还剩约 ${3 - row.ignite.days_since} 天。加分只给点火当日（审计入场口径就是那一天），这里只作提示。`)">
-                  {{ row.ignite.fresh ? '地量点火' : `地量点火 D+${row.ignite.days_since}` }}
-                  · 沉寂{{ row.ignite.quiet_days }}天 · {{ row.ignite.amount_ratio }}倍<template v-if="row.ignite.gated"> · +{{ row.ignite.bonus }}</template>
-                </el-tag>
-                <el-tag v-for="pattern in (row.patterns || []).filter(p => p.key !== 'dryup_ignite').slice(0, MAX_PATTERN_TAGS)" :key="pattern.key || pattern.name"
-                  class="capability-tag"
-                  :type="pattern.category === '三不卖' ? 'success' : 'primary'"
-                  :effect="pattern.category === '三不卖' ? 'dark' : 'plain'"
-                  :title="pattern.reason">
-                  <template v-if="pattern.category === '三不卖'">🔒 </template>{{ pattern.name }} {{ formatScore(pattern.strength) }}
-                </el-tag>
-                <!-- 超出的形态折进一个 +N：一行动辄十几个标签是行高失控的主因，
-                     而排序只看分数，标签是佐证，全部铺开反而让一屏看不到几只票。 -->
-                <el-tag v-if="(row.patterns || []).length > MAX_PATTERN_TAGS" class="capability-tag more-tag" effect="plain"
-                  :title="(row.patterns || []).slice(MAX_PATTERN_TAGS).map(p => `${p.name} ${formatScore(p.strength)}`).join('\n')">
-                  +{{ (row.patterns || []).length - MAX_PATTERN_TAGS }}
-                </el-tag>
-                <el-tag v-if="row.strength && row.strength.ema_stack" class="capability-tag" type="success" effect="plain"
-                  title="站上 EMA8 且 EMA21、且多头排列（强度确认）">EMA多头</el-tag>
-                <el-tag v-else-if="row.strength && row.strength.above_ema8 && row.strength.above_ema21" class="capability-tag" effect="plain"
-                  title="站上 EMA8 与 EMA21（趋势确认）">站上双均线</el-tag>
-                <el-tag v-if="row.strength && row.strength.dist_from_low != null" class="capability-tag" effect="plain"
-                  title="距 250 日最低点涨幅（已证明的上升趋势）">距低点 +{{ Math.round(row.strength.dist_from_low) }}%</el-tag>
-                <!-- 入场位置：这只票是「刚启动」还是「已经涨完一大段」。
-                     ≥15% 标红提示追高风险——这是本池的系统性取向，不是个别现象。 -->
-                <el-tag v-if="row.entry_position?.ret20 != null" class="capability-tag"
-                  :type="row.entry_position.ret20 >= 15 ? 'danger' : 'info'" effect="plain"
-                  :title="`入选前近 20 个交易日的涨幅。已涨得多说明启动早、追高风险大；本池中位约 +25%`">
-                  近20日 {{ signedPercent(row.entry_position.ret20) }}
-                </el-tag>
-                <el-tag v-if="row.entry_position?.dist_high20 != null" class="capability-tag" effect="plain"
-                  title="现价距近 20 日最高价。贴着高点买入，等于没有回撤缓冲">
-                  离高点 {{ signedPercent(row.entry_position.dist_high20) }}
-                </el-tag>
-                <span v-if="!row.confluence_bonus && !(row.patterns || []).length && !row.strength && !row.ignite" class="panel-pending">—</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="入选理由" min-width="300">
+            <!-- 「形态·强度」「入选理由」两列（合计 550px）合成一列，只放决策要看的：风险警示、
+                 追高程度、最强的一个形态；其余折成 +N，点开就是理由抽屉（那里列全）。
+                 以前 13 列约 1620px，1440 宽的笔记本只能横向滚，右侧固定列还盖住内容。 -->
+            <el-table-column label="关键依据" min-width="210">
               <template #default="{ row }">
                 <el-tooltip v-for="f in row.risk_flags || []" :key="f.key" :content="f.reason" placement="top">
-                  <el-tag class="capability-tag" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="dark">
-                    ⚠ {{ f.name }}
-                  </el-tag>
+                  <el-tag class="capability-tag" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="dark">⚠ {{ f.name }}</el-tag>
                 </el-tooltip>
-                <el-tag v-if="row.ai_factor_score" class="capability-tag" type="success" effect="plain"
-                  title="AI 因子模型 Top-K 排名分（机器学习评分因子，已计入综合排序）">
-                  AI因子 {{ Number(row.ai_factor_score).toFixed(0) }}
+                <el-tag v-if="row.entry_position?.ret20 != null" class="capability-tag"
+                  :type="row.entry_position.ret20 >= 15 ? 'danger' : 'info'" effect="plain"
+                  title="入选前近 20 个交易日的涨幅。已涨得多说明启动早、追高风险大">
+                  近20日 {{ signedPercent(row.entry_position.ret20) }}
                 </el-tag>
-                <el-tag v-for="reason in (row.reasons || []).slice(0, MAX_REASON_TAGS)" :key="reason" class="capability-tag" effect="plain">
-                  {{ reason }}
+                <el-tag v-if="topPattern(row)" class="capability-tag" type="primary" effect="plain" :title="topPattern(row)?.reason">
+                  {{ topPattern(row)?.name }}
                 </el-tag>
-                <el-tag v-if="(row.reasons || []).length > MAX_REASON_TAGS" class="capability-tag more-tag" effect="plain"
-                  :title="(row.reasons || []).slice(MAX_REASON_TAGS).join('\n')">
-                  +{{ (row.reasons || []).length - MAX_REASON_TAGS }}
+                <el-tag v-if="moreEvidenceCount(row) > 0" class="capability-tag more-tag" effect="plain"
+                  style="cursor: pointer" @click="openWhy(row, 'smart')">
+                  +{{ moreEvidenceCount(row) }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -635,6 +575,15 @@ const localUniverseSize = computed(() =>
 const whyVisible = ref(false)
 const whyRow = ref<any | null>(null)
 const whyPool = ref<'smart' | 'pattern'>('smart')
+// 关键依据列只放一个形态：优先「三不卖」（持有类确认），其次强度最高的
+const topPattern = (row: any) => {
+  const list = (row.patterns || []).filter((p: any) => p.key !== 'dryup_ignite')
+  if (!list.length) return null
+  return list.find((p: any) => p.category === '三不卖')
+    || [...list].sort((a: any, b: any) => Number(b.strength || 0) - Number(a.strength || 0))[0]
+}
+const moreEvidenceCount = (row: any) =>
+  Math.max(0, (row.patterns || []).length - (topPattern(row) ? 1 : 0)) + (row.reasons || []).length
 const openWhy = (row: any, pool: 'smart' | 'pattern') => {
   whyRow.value = row
   whyPool.value = pool
@@ -847,10 +796,6 @@ const showBasketEvidence = ref(false)
 // 名单画像的解释文字默认收起：那段披露必须留着（不标注等于让人以为买的是「低位
 // 机会」），但它天天不变，长期占掉榜单上方一整块。收起后表头那行数字仍在。
 const showProfileTip = ref(false)
-// 每行最多铺多少个标签，其余折进「+N」（悬停可看全）。目的是在一屏里多显示几只票 ——
-// 标签是佐证不是排序依据，全部铺开会把单行撑到 200px 以上，一屏只剩三四只。
-const MAX_PATTERN_TAGS = 4
-const MAX_REASON_TAGS = 3
 // 重合度高说明这就是上一份名单，标红提示——避免被当成「今天又选中了同一批」
 const basisOverlapHigh = computed(() => {
   const b = smartPoolResult.value?.list_basis
@@ -2071,7 +2016,7 @@ const openChart = async (row: any) => {
 /* —— 紧凑版面 ——
    页头堆了六层（更新提示 / 标签页 / 工具条 / 推荐计数 / 环境仓位+结构底池 / 入场说明），
    加上每行铺满标签，1080p 下一屏只能看到三只票。这里只压缩留白与行高，不删任何信息：
-   标签超出部分折进「+N」（见 MAX_PATTERN_TAGS / MAX_REASON_TAGS），悬停仍可看全。 */
+   标签只留「关键依据」一列的三类，其余折进「+N」，点开理由抽屉看全。 */
 .decision-context { gap: 4px; margin-bottom: 4px; }
 .env-gate, .basket-note { padding: 4px 10px; font-size: 12px; }
 .basis-note { padding: 4px 10px; font-size: 12px; }

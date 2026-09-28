@@ -18,6 +18,20 @@
         </div>
       </section>
 
+      <!-- 智选表格只留「关键依据」一列，其余形态/强度标签都在这里列全 -->
+      <section v-if="row.patterns?.length || row.confluence_bonus || row.strength || row.triple_confirm || row.dual_confirm">
+        <h4>形态与强度</h4>
+        <el-tag v-if="row.triple_confirm" class="reason-tag" type="danger" effect="plain">三重确认：结构 + 低位形态 + 相对强度</el-tag>
+        <el-tag v-else-if="row.dual_confirm" class="reason-tag" type="success" effect="plain">双确认：结构 + 低位形态</el-tag>
+        <el-tag v-if="row.confluence_bonus" class="reason-tag" type="warning" effect="plain">共振加成 +{{ row.confluence_bonus }}（已计入排序）</el-tag>
+        <el-tag v-for="p in row.patterns || []" :key="p.key || p.name" class="reason-tag" effect="plain" :title="p.reason">
+          {{ p.name }}<template v-if="p.strength != null"> {{ Number(p.strength).toFixed(0) }}</template>
+        </el-tag>
+        <el-tag v-if="row.strength?.ema_stack" class="reason-tag" type="success" effect="plain">EMA 多头排列</el-tag>
+        <el-tag v-if="row.strength?.dist_from_low != null" class="reason-tag" effect="plain">距 250 日低点 +{{ Math.round(row.strength.dist_from_low) }}%</el-tag>
+        <el-tag v-if="row.entry_position?.dist_high20 != null" class="reason-tag" effect="plain">离 20 日高点 {{ Number(row.entry_position.dist_high20).toFixed(1) }}%</el-tag>
+      </section>
+
       <section v-if="row.reasons?.length">
         <h4>入选理由</h4>
         <el-tag v-for="r in row.reasons" :key="r" class="reason-tag" effect="plain">{{ r }}</el-tag>

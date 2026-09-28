@@ -22,12 +22,16 @@ def client(monkeypatch, tmp_path):
     return TestClient(api)
 
 
-def _register(client, username, ip):
-    return client.post(
-        "/api/auth/register",
-        json={"username": username, "email": f"{username}@x.com", "password": "secret123"},
-        headers={"cf-connecting-ip": ip},
-    )
+def _solved_captcha(client):
+    from app.core import captcha
+    cid = client.get("/api/auth/captcha").json()["data"]["captcha_id"]
+    return {"captcha_id": cid, "captcha_answer": str(captcha._pending[cid][0])}
+
+
+def _register(client, username, ip, **extra):
+    body = {"username": username, "email": f"{username}@x.com", "password": "secret123",
+            **_solved_captcha(client), **extra}
+    return client.post("/api/auth/register", json=body, headers={"cf-connecting-ip": ip})
 
 
 def test_sixth_attempt_in_an_hour_is_throttled(client):
@@ -73,3 +77,17 @@ def test_registration_gate_runs_before_throttle(client, monkeypatch):
     for _ in range(8):
         resp = _register(client, "nobody", "3.3.3.3")
         assert resp.status_code == 403
+
+
+def test_wrong_or_reused_captcha_is_rejected(client):
+    assert _register(client, "cap1", "4.4.4.4", captcha_answer="-999").status_code == 400
+    solved = _solved_captcha(client)
+    assert _register(client, "cap2", "4.4.4.4", **solved).status_code == 200
+    # 同一题验过就作废，不能拿一个答案刷多个号
+    assert _register(client, "cap3", "4.4.4.4", **solved).status_code == 400
+
+
+def test_missing_captcha_is_rejected(client):
+    r = client.post("/api/auth/register", json={"username": "nocap", "email": "n@x.com", "password": "secret123"},
+                    headers={"cf-connecting-ip": "5.5.5.5"})
+    assert r.status_code == 400 and "验证码" in r.json()["detail"]

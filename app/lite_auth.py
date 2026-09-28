@@ -69,6 +69,8 @@ class RegisterRequest(BaseModel):
     email: str  # 邮箱或手机号，见 is_valid_contact
     password: str = Field(min_length=6)
     confirm_password: Optional[str] = None
+    captcha_id: Optional[str] = None
+    captcha_answer: Optional[str] = None
 
 
 class RefreshRequest(BaseModel):
@@ -446,6 +448,9 @@ async def register(data: RegisterRequest, request: Request):
         raise HTTPException(status_code=403, detail="本站为邀请制，暂不开放注册。请联系管理员开通账号。")
     if _register_throttled(_client_ip(request)):
         raise HTTPException(status_code=429, detail="注册过于频繁，请 1 小时后再试")
+    from app.core import captcha
+    if not captcha.verify(data.captcha_id, data.captcha_answer):
+        raise HTTPException(status_code=400, detail="验证码错误或已过期，请换一题重试")
     if data.confirm_password and data.confirm_password != data.password:
         raise HTTPException(status_code=400, detail="两次输入的密码不一致")
     contact = str(data.email).strip()
@@ -453,6 +458,12 @@ async def register(data: RegisterRequest, request: Request):
         raise HTTPException(status_code=400, detail="请填写有效的邮箱或手机号")
     user = store.create_user(data.username, contact, data.password, is_admin=False)
     return {"success": True, "data": user, "message": "注册成功"}
+
+
+@router.get("/captcha")
+async def get_captcha():
+    from app.core import captcha
+    return {"success": True, "data": captcha.issue(), "message": "ok"}
 
 
 @router.post("/logout")

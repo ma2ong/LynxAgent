@@ -108,7 +108,7 @@ async def _security_headers(request, call_next):
 _PUBLIC_API = {
     "/api/health",
     "/api/auth/login", "/api/auth/register", "/api/auth/refresh", "/api/auth/logout",
-    "/api/auth/reset-password", "/api/auth/verify-email",
+    "/api/auth/reset-password", "/api/auth/verify-email", "/api/auth/captcha",
     "/api/lite/macro-bar",
 }
 
@@ -2653,7 +2653,11 @@ async def _run_lite_smart_pool_task(task_id: str, strategy: str, limit: int,
 
 @app.post("/api/lite/smart-pool/tasks")
 async def start_lite_smart_pool_task(strategy: str = "balanced", limit: int = 20,
-                                     universe_limit: int = 10000, force_refresh: bool = False):
+                                     universe_limit: int = 10000, force_refresh: bool = False,
+                                     user: dict[str, Any] = Depends(get_current_lite_user)):
+    # 强制重算＝跳过缓存跑一次全市场扫描（约 1~2 分钟 CPU）。公开注册后任何账号都能调接口，
+    # 只让管理员用；普通用户照常走 15 分钟缓存 + 同参数任务去重，结果一样新鲜。
+    force_refresh = bool(force_refresh and user.get("is_admin"))
     safe_limit = max(5, min(limit, SMART_POOL_MAX_ITEMS))
     # 与 _compute_lite_smart_pool 同口径：全市场评分，才和回放验证的池是同一个池
     safe_universe = max(safe_limit * 2, min(universe_limit, 10000))

@@ -28,6 +28,13 @@
         <el-form-item>
           <el-input v-model="regForm.confirm_password" type="password" placeholder="确认密码" :prefix-icon="Lock" show-password />
         </el-form-item>
+        <!-- 图形算术验证码：挡脚本批量注册；看不清点图换一题 -->
+        <el-form-item>
+          <div class="captcha-row">
+            <el-input v-model="regForm.captcha_answer" placeholder="计算结果" inputmode="numeric" />
+            <img v-if="captchaSvg" :src="captchaSvg" class="captcha-img" alt="验证码" title="看不清？点击换一题" @click="loadCaptcha" />
+          </div>
+        </el-form-item>
         <el-form-item>
           <el-checkbox v-model="agreedDisclaimer">
             我已阅读并同意
@@ -53,7 +60,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock, Message } from '@element-plus/icons-vue'
@@ -66,7 +73,19 @@ const username = ref('')
 const password = ref('')
 const loading = ref(false)
 
-const regForm = ref({ username: '', email: '', password: '', confirm_password: '' })
+const regForm = ref({ username: '', email: '', password: '', confirm_password: '', captcha_id: '', captcha_answer: '' })
+const captchaSvg = ref('')
+async function loadCaptcha() {
+  try {
+    const res = await ApiClient.get<any>('/api/auth/captcha', { _ts: Date.now() })
+    regForm.value.captcha_id = res?.data?.captcha_id || ''
+    regForm.value.captcha_answer = ''
+    captchaSvg.value = res?.data?.svg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(res.data.svg)}` : ''
+  } catch {
+    captchaSvg.value = ''
+  }
+}
+watch(mode, (m) => { if (m === 'register') loadCaptcha() }, { immediate: true })
 const agreedDisclaimer = ref(false)
 
 const onSubmit = async () => {
@@ -118,20 +137,31 @@ async function doRegister() {
     ElMessage.warning('两次输入的密码不一致')
     return
   }
+  if (!regForm.value.captcha_answer.trim()) {
+    ElMessage.warning('请填写验证码计算结果')
+    return
+  }
   loading.value = true
   try {
     await ApiClient.post('/api/auth/register', regForm.value)
-    ElMessage.success('注册成功，请登录')
-    mode.value = 'login'
   } catch (e: any) {
     ElMessage.error(e?.message || '注册失败')
-  } finally {
+    loadCaptcha()          // 验证码一题只能验一次，失败后必须换题
     loading.value = false
+    return
   }
+  // 注册完直接登录进应用，别让新用户再把账号密码敲一遍
+  username.value = regForm.value.username
+  password.value = regForm.value.password
+  loading.value = false
+  ElMessage.success('注册成功，正在进入…')
+  await onSubmit()
 }
 </script>
 
 <style scoped>
+.captcha-row { display: flex; gap: 8px; width: 100%; align-items: center; }
+.captcha-img { height: 32px; border-radius: 4px; cursor: pointer; flex-shrink: 0; }
 .login-wrap {
   height: 100vh;
   display: flex;

@@ -249,6 +249,11 @@ class LocalQuantStore:
         if df is None or df.empty:
             return 0
         conn = self._conn()
+        # 计数缓存只在「新股票第一次落日线」时失效：给老股票追加 bar 不改变股票数。
+        # 以前每次写入都作废，夜间同步 5000 只时状态接口每次都回退到全表 COUNT(DISTINCT)，
+        # 事件循环照样被拖慢（2026-09-29 loop_stall.log 凌晨 15 次）。
+        is_new = self._kline_symbols_cache is not None and conn.execute(
+            "SELECT 1 FROM daily_kline WHERE symbol=? LIMIT 1", (symbol,)).fetchone() is None
         rows = []
         for _, r in df.iterrows():
             d = str(r.get("date"))[:10]
@@ -260,7 +265,8 @@ class LocalQuantStore:
             "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,"
             "volume=excluded.volume,amount=excluded.amount", rows)
         conn.commit()
-        self._kline_symbols_cache = None
+        if is_new:
+            self._kline_symbols_cache = None
         return len(rows)
 
     def load_kline(self, symbol: str, limit: Optional[int] = None) -> pd.DataFrame:
@@ -320,7 +326,7 @@ class LocalQuantStore:
             bars,
         )
         conn.commit()
-        self._kline_symbols_cache = None
+        # 单日快照写的都是已在库的股票；偶有新上市的，由计数缓存 5 分钟过期兜底
         return len(bars)
 
     _kline_symbols_cache: Optional[tuple] = None
@@ -330,7 +336,7 @@ class LocalQuantStore:
 
         全表 COUNT(DISTINCT) 在 2GB 库上要 1.2~3 秒，而后台保温每轮、数据状态接口每次
         都要问它——曾是事件循环卡顿的头号来源（2026-09-28 loop_stall.log，11 次里 9 次）。
-        这个数只在写入日线时才可能变，所以缓存 5 分钟、写入即失效。
+        这个数只在新股票第一次落日线时才会变，所以缓存 5 分钟、仅新股票写入时失效。
         """
         import time as _time
         cached = self._kline_symbols_cache

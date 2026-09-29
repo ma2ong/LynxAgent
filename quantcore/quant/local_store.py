@@ -254,11 +254,16 @@ class LocalQuantStore:
         # 事件循环照样被拖慢（2026-09-29 loop_stall.log 凌晨 15 次）。
         is_new = self._kline_symbols_cache is not None and conn.execute(
             "SELECT 1 FROM daily_kline WHERE symbol=? LIMIT 1", (symbol,)).fetchone() is None
-        rows = []
-        for _, r in df.iterrows():
-            d = str(r.get("date"))[:10]
-            rows.append((symbol, d, _f(r.get("open")), _f(r.get("high")), _f(r.get("low")),
-                         _f(r.get("close")), _f(r.get("volume")), _f(r.get("amount"))))
+        # 逐列转换而不是 iterrows：同步 5000 只 × 800 根时，逐行构造 Series 是纯 Python 热循环，
+        # 长时间占着 GIL，全量重建期间整个服务的请求都被拖慢（2026-09-29 深度报告 112 秒）。
+        n = len(df)
+
+        def col(name: str) -> list:
+            return [_f(v) for v in df[name].tolist()] if name in df.columns else [0.0] * n
+
+        dates = [str(v)[:10] for v in df["date"].tolist()] if "date" in df.columns else ["None"] * n
+        rows = list(zip([symbol] * n, dates, col("open"), col("high"), col("low"),
+                        col("close"), col("volume"), col("amount")))
         conn.executemany(
             "INSERT INTO daily_kline(symbol,date,open,high,low,close,volume,amount) "
             "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(symbol,date) DO UPDATE SET "

@@ -24,8 +24,8 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
-# 涨跌停判定阈值。用 9.8 而不是 10.0：ST 股是 5%，科创/创业板是 20%，
-# 这里只做情绪的粗略温度，不做精确的涨停统计（那在 limit_up 模块里）。
+# 涨跌停判定阈值（粗略口径）：主板 10%（含 ST），科创/创业 20%、北交所 30% 这里不区分，
+# 只做情绪的粗略温度，不做精确的涨停统计（精确的在 limit_up 模块，走 board_limit_pct）。
 LIMIT_PCT = 9.8
 HISTORY_DAYS = 60          # 页面上画多长的曲线
 MA_LONG = 60               # 需要的最长均线，决定要多读多少历史

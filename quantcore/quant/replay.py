@@ -92,8 +92,9 @@ def _ensure_tables(store: LocalQuantStore) -> None:
 
 
 def _limit_up_threshold(symbol: str) -> float:
-    """按板块近似涨停幅度：创业板/科创板 20cm，其余 10cm（ST 5% 无法从代码判别，接受近似）。"""
-    return 0.195 if symbol.startswith(("30", "68")) else 0.095
+    """按板块涨跌幅上限 × 0.95 判「入选当日已封板」（北交所 30%；ST 与所在板块同幅度）。"""
+    from .risk_check import board_limit_pct
+    return board_limit_pct(symbol) / 100.0 * 0.95
 
 
 REGIME_WINDOW = 5  # 与 engine.market_context 的 recent_daily_breadth(days=5) 对齐

@@ -22,6 +22,7 @@ from .limit_up_taxonomy import (
     resolve_limit_up_concept,
 )
 from .market_sentiment import _limit_cause, _limit_threshold, _segment
+from .risk_check import board_limit_pct
 
 
 def _realtime_limit_rows(target_date: str, realtime_quotes: Optional[Dict[str, Dict[str, object]]]) -> pd.DataFrame:
@@ -178,7 +179,7 @@ def compute_limit_up_distribution(target_date: str, realtime_quotes: Optional[Di
                 "industry": r["industry"],
                 "is_one_price": bool(r["is_one_price"]),
                 "is_big": bool(r["is_big"]),
-                "is_20pct": _limit_threshold(str(r["symbol"])) > 0.15,
+                "is_20pct": board_limit_pct(str(r["symbol"]).zfill(6)) == 20.0,   # 北交所是 30%，不打这个标
                 "close": round(float(r["close"]), 2),
                 "pct_chg": round(float(r["pct"]) * 100, 2),
                 "amount_yi": round(float(r["amount"]) / 1e8, 2),

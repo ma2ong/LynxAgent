@@ -30,8 +30,14 @@ def _segment(symbol: str) -> str:
 
 
 def _limit_threshold(symbol: str) -> float:
-    s = str(symbol).zfill(6)
-    return 0.195 if s.startswith(("30", "688")) else 0.097
+    """判涨跌停用的阈值（比例）：板块上限 × 0.97 的容差。
+
+    以前是自写的一份：创业/科创 19.5%、其余一律 9.7%——北交所（30%）涨 10% 就被算成涨停。
+    板块上限统一走 risk_check.board_limit_pct，不再各写一份。ST 股按新规与所在板块同幅度
+    （主板 10%，2026-09-28 实测主板 ST 有 14 只收在 −5%~−10% 之间，旧的 5% 已不适用）。
+    """
+    from .risk_check import board_limit_pct
+    return board_limit_pct(str(symbol).zfill(6)) / 100.0 * 0.97
 
 
 def _cap_band(symbol: str) -> str:

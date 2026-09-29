@@ -154,11 +154,15 @@ _ml_factor_scheduler: "AsyncIOScheduler | None" = None
 
 
 async def _refresh_full_market_factor() -> None:
-    """后台重算全市场因子模型并写入缓存；offload 到线程，避免阻塞事件循环。"""
+    """后台重算因子模型并写入缓存（计算本身在子进程，见 ml.service._compute_isolated）。
+
+    参数必须与一键智选 _load_ai_factor_pool 请求的一致（5000 只 / k=80）：缓存按参数分 key，
+    原来这里用全市场 0 / k=50，与智选的 key 永远对不上，智选每次缓存过期都自己在 Web 进程里重训。
+    """
     from quantcore.quant.ml.service import run_ml_factor
     try:
-        # (universe_limit=0 全市场, horizon=5, k=50, mode, neutralize, retrain_every, min_rows, force)
-        await asyncio.to_thread(run_ml_factor, 0, 5, 50, "rolling", True, 20, 250, True)
+        # (universe_limit, horizon, k, mode, neutralize, retrain_every, min_rows, force)
+        await asyncio.to_thread(run_ml_factor, 5000, 5, 80, "rolling", True, 20, 250, True)
     except Exception as exc:  # noqa: BLE001
         import warnings
         warnings.warn(f"ML factor daily refresh failed: {exc}", RuntimeWarning, stacklevel=1)

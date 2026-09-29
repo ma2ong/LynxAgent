@@ -77,6 +77,30 @@ def _compute(universe_limit, horizon, k, mode, neutralize, retrain_every, min_ro
     }
 
 
+_POOL = None
+_POOL_LOCK = Lock()
+
+
+def _compute_isolated(*args) -> Dict[str, object]:
+    """在独立子进程里跑 _compute：建全市场面板 + 滚动训练是几分钟的 pandas 重计算，
+    放在 Web 进程的线程里会长时间抢占 GIL，把整个服务卡住（2026-09-29 loop_stall.log：
+    build_panel 连续 7 次卡住事件循环 3~8 秒）。调用方线程只是等结果，不占 GIL。"""
+    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
+
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            _POOL = ProcessPoolExecutor(max_workers=1)
+        pool = _POOL
+    try:
+        return pool.submit(_compute, *args).result()
+    except BrokenProcessPool:
+        with _POOL_LOCK:
+            _POOL = None
+        raise
+
+
 def run_ml_factor(
     universe_limit: int = 500,
     horizon: int = 5,
@@ -96,7 +120,7 @@ def run_ml_factor(
             if hit and now - hit[0] < _TTL:
                 return {**hit[1], "cached": True, "age_sec": int(now - hit[0])}
 
-    payload = _compute(universe_limit, horizon, k, mode, neutralize, retrain_every, min_rows)
+    payload = _compute_isolated(universe_limit, horizon, k, mode, neutralize, retrain_every, min_rows)
     if "error" not in payload:
         with _LOCK:
             _CACHE[key] = (now, payload)
@@ -105,7 +129,7 @@ def run_ml_factor(
 
 def _worker(key, args):
     try:
-        payload = _compute(*args)
+        payload = _compute_isolated(*args)
         if "error" not in payload:
             with _LOCK:
                 _CACHE[key] = (time.time(), payload)

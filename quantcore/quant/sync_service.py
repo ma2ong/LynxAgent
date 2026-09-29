@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -314,6 +314,14 @@ class MarketSyncService:
             symbols = [str(meta.get("symbol")) for meta in universe]
             try:
                 snap_bars, snap_date = self._fetch_snapshot_bars(symbols)
+                # 收盘前不把当天快照写成日线：那是盘中某一刻的半截 bar，带着真实成交额，
+                # 既骗过占位自愈（只认 amount=0），也骗过健康检查（按当天 bar 数判完整），
+                # 收盘后的补数就不会触发。2026-09-28 10:30 盘中同步写入后，当天 1664 只的
+                # 收盘价一直是 10:30 的价，智选结构分/小市值组合整天用的是半截数据。
+                # 盘中页面本来就直接读实时行情，这一步写库没有收益。
+                if snap_date == today.strftime("%Y-%m-%d") and datetime.now().time() < dtime(15, 5):
+                    snap_bars = []
+                    self._progress["snapshot_skipped"] = "盘中快照不落库，收盘后再写当日日线"
                 if snap_bars:
                     self.store.bulk_upsert_kline_snapshot(snap_bars)
                 self._progress["snapshot_count"] = len(snap_bars)
@@ -347,10 +355,15 @@ class MarketSyncService:
             self._progress["total"] = len(targets)
             self._progress["done"] = 0
 
+            today_str = today.strftime("%Y-%m-%d")
+
             def work(meta):
                 symbol = str(meta.get("symbol"))
                 start = full_start if full else incr_start
                 df = self._fetch_kline(symbol, start)
+                # 同上：盘中逐股日线接口也会带当天未收盘的那根 bar，收盘前不落库
+                if df is not None and not df.empty and datetime.now().time() < dtime(15, 5):
+                    df = df[df["date"].astype(str).str[:10] != today_str]
                 return self.store.upsert_kline(symbol, df)
 
             done = 0

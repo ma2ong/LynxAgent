@@ -14,6 +14,8 @@ import os
 import re
 from typing import Dict, List, Optional
 
+AI_DISABLED = True
+
 # provider -> 环境变量名（与 config_manager._get_env_api_key 对齐）
 _PROVIDER_ENV = {
     "dashscope": "DASHSCOPE_API_KEY",
@@ -40,6 +42,11 @@ def _client_and_model(deep: bool = False, override: Optional[dict] = None):
     override 用于 BYOK：调用方传入某个用户自己的 {provider, base_url, model, api_key}，
     优先于仓库配置与环境变量。产品本身不再配站点密钥，所以实际路径基本都走 override。
     """
+    # 总开关：所有 AI 功能 2026-09-29 按 Allen 要求停用。所有大模型调用都经过这里，
+    # 在这一处关掉，无论环境变量或用户是否配了密钥，available() 恒为 False、chat() 恒返回空，
+    # 各调用方走既有的纯规则降级路径。要恢复需 Allen 明确同意后再改这里。
+    if AI_DISABLED:
+        return None, None
     if override and override.get("api_key"):
         try:
             from openai import OpenAI

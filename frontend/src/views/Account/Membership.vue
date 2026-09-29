@@ -2,69 +2,15 @@
   <div class="membership">
     <div class="page-head">
       <h2>用户设置</h2>
-      <p>配置你自己的 AI API Key、查看今日调用次数，以及退出登录。</p>
+      <p>微信推送、账号与退出登录。</p>
     </div>
 
-    <!-- BYOK：用户自带密钥。站点统一配一把的话，任何注册用户都能改服务端配置，
-         那是个权限洞；而且产品不收费，推理成本不该由站长垫。 -->
+
     <el-card class="card">
-      <div class="card-title">
-        <h3>AI 功能（自带 API Key）</h3>
-        <el-tag size="small" :type="keyMeta ? 'success' : 'info'">
-          {{ keyMeta ? '已配置' : '未配置' }}
-        </el-tag>
-      </div>
-
-      <div v-if="keyMeta" class="key-bound">
-        <div><span>服务商</span><b>{{ providerLabel(keyMeta.provider) }}</b></div>
-        <div><span>模型</span><b>{{ keyMeta.model }}</b></div>
-        <div><span>密钥</span><b>••••••••{{ keyMeta.key_tail }}</b></div>
-        <div><span>更新于</span><b>{{ (keyMeta.updated_at || '').slice(0, 16).replace('T', ' ') }}</b></div>
-      </div>
-
-      <el-form label-position="top" class="key-form" @submit.prevent>
-        <el-form-item label="服务商">
-          <el-select v-model="keyForm.provider" style="width: 100%" @change="onProviderChange">
-            <el-option v-for="p in providers" :key="p.key" :label="p.label" :value="p.key" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="API Key">
-          <el-input v-model="keyForm.api_key" type="password" show-password clearable
-                    placeholder="粘贴你自己的密钥，保存后不再回显" />
-        </el-form-item>
-        <el-form-item label="接口地址">
-          <el-input v-model="keyForm.base_url" placeholder="https://api.deepseek.com" clearable />
-        </el-form-item>
-        <el-form-item label="模型名">
-          <el-input v-model="keyForm.model" placeholder="deepseek-chat" clearable />
-        </el-form-item>
-        <div class="key-actions">
-          <el-button :loading="keyTesting" @click="testKey">测试连接</el-button>
-          <el-button type="primary" :loading="keySaving" @click="saveKey">保存</el-button>
-          <el-button v-if="keyMeta" type="danger" plain :loading="keyDeleting" @click="deleteKey">删除</el-button>
-        </div>
-      </el-form>
-
-      <p class="free-note dim">
-        密钥加密后存在本机数据库，接口从不回传明文。费用由你的服务商账户结算，本站不经手。
-        不填也不影响使用：页面上其余内容全部由本地规则计算。
-      </p>
-    </el-card>
-
-    <!-- 用量降为一行：额度已取消，这里只剩「今天调了几次」这一个事实，
-         不值得再占一整张卡片。 -->
-    <el-card v-if="info" class="card">
-      <h3>用量与说明</h3>
-      <p class="usage-plain">
-        今日 AI 调用 <b>{{ info.used_today }}</b> 次 · 不限次数
-        <em v-if="!info.ai_enabled">（未配置 API Key，AI 功能未启用）</em>
-      </p>
+      <h3>说明</h3>
       <p class="free-note">
         本产品全部功能免费，没有付费档。选股池、名单、回放数据和复盘战绩都完整开放，
-        且全部由本地规则计算，不依赖 AI。
-      </p>
-      <p class="free-note dim">
-        只有个股深研的「深度多智能体分析」需要 AI 模型，那一项才用得上上面配置的密钥。
+        全部由本地规则计算，不使用 AI。
       </p>
     </el-card>
 
@@ -181,14 +127,11 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { SwitchButton } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
-import { ApiClient } from '@/api/request'
 import { currentUser, clearCurrentUser } from '@/stores/user'
 import AdminUsers from '@/views/Admin/Users.vue'
 import RuleLifecycle from '@/views/Admin/RuleLifecycle.vue'
 import {
-  fetchBillingMe,
   fetchRuntimeValidation,
-  type BillingMe,
   type RuntimeConfigValidation,
 } from '@/api/billing'
 import {
@@ -201,7 +144,7 @@ import {
 
 const router = useRouter()
 
-// 二次确认：这个按钮就在 API Key 表单下面，误点一次就得重新登录
+// 二次确认：误点一次就得重新登录
 const confirmLogout = async () => {
   try {
     await ElMessageBox.confirm('退出后需要重新登录才能使用。确定退出吗？', '退出登录', {
@@ -215,84 +158,10 @@ const confirmLogout = async () => {
   router.push('/login')
 }
 
-const info = ref<BillingMe | null>(null)
 const runtime = ref<RuntimeConfigValidation | null>(null)
 const wechatStatus = ref<WechatPushStatus | null>(null)
 const savingPush = ref(false)
 const testingPush = ref(false)
-
-// ---- BYOK ----
-const providers = ref<any[]>([])
-const keyMeta = ref<any>(null)
-const keyTesting = ref(false)
-const keySaving = ref(false)
-const keyDeleting = ref(false)
-const keyForm = reactive({ provider: 'deepseek', api_key: '', base_url: '', model: '' })
-
-const providerLabel = (k: string) => providers.value.find((p) => p.key === k)?.label || k
-
-function onProviderChange(k: string) {
-  const p = providers.value.find((x) => x.key === k)
-  if (p) { keyForm.base_url = p.base_url; keyForm.model = p.model }
-}
-
-async function loadKey() {
-  try {
-    const [ps, me] = await Promise.all([
-      ApiClient.get<any>('/api/ai-key/providers'),
-      ApiClient.get<any>('/api/ai-key/me'),
-    ])
-    providers.value = ps?.data || []
-    keyMeta.value = me?.data || null
-    if (keyMeta.value) {
-      keyForm.provider = keyMeta.value.provider
-      keyForm.base_url = keyMeta.value.base_url
-      keyForm.model = keyMeta.value.model
-    } else {
-      onProviderChange(keyForm.provider)
-    }
-  } catch { /* 未登录或接口不可用时不阻塞页面 */ }
-}
-
-async function testKey() {
-  if (!keyForm.api_key.trim()) { ElMessage.warning('请先填入密钥'); return }
-  keyTesting.value = true
-  try {
-    const res: any = await ApiClient.post('/api/ai-key/test', { ...keyForm })
-    if (res?.success) ElMessage.success(res.message || '连接正常')
-    else ElMessage.error(res?.message || '连接失败')
-  } catch (e: any) {
-    ElMessage.error(e?.message || '连接失败')
-  } finally { keyTesting.value = false }
-}
-
-async function saveKey() {
-  if (!keyForm.api_key.trim()) { ElMessage.warning('请先填入密钥'); return }
-  keySaving.value = true
-  try {
-    const res: any = await ApiClient.post('/api/ai-key/save', { ...keyForm })
-    if (res?.success) {
-      keyMeta.value = res.data
-      keyForm.api_key = ''
-      ElMessage.success('已保存，AI 功能已开启')
-      await loadPage()
-    } else ElMessage.error(res?.message || '保存失败')
-  } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
-  } finally { keySaving.value = false }
-}
-
-async function deleteKey() {
-  keyDeleting.value = true
-  try {
-    await ApiClient.delete('/api/ai-key/me')
-    keyMeta.value = null
-    ElMessage.success('已删除')
-    await loadPage()
-  } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
-  } finally { keyDeleting.value = false }
-}
 
 const pushForm = reactive({
   serverchan_key: '',
@@ -303,12 +172,10 @@ const pushForm = reactive({
 
 async function loadPage() {
   try {
-    const [billingRes, pushRes, runtimeRes] = await Promise.all([
-      fetchBillingMe(),
+    const [pushRes, runtimeRes] = await Promise.all([
       fetchWechatStatus(),
       fetchRuntimeValidation(),
     ])
-    info.value = (billingRes?.data as BillingMe) ?? null
     wechatStatus.value = (pushRes?.data as WechatPushStatus) ?? null
     runtime.value = (runtimeRes?.data as RuntimeConfigValidation) ?? null
   } catch (e: any) {
@@ -362,7 +229,7 @@ async function unbindWechat() {
   }
 }
 
-onMounted(() => { loadPage(); loadKey() })
+onMounted(loadPage)
 </script>
 
 <style scoped lang="scss">

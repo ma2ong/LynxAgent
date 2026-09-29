@@ -206,68 +206,7 @@ async def screen_stocks(req: QuantScreenRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/ml/factor-model")
-async def ml_factor_model(
-    universe_limit: int = 500,
-    horizon: int = 5,
-    k: int = 50,
-    mode: str = "rolling",
-    neutralize: bool = True,
-    retrain_every: int = 20,
-    force: bool = False,
-    user: dict = require_quota("factor_model", feature="lab", cost=0),
-):
-    """LightGBM 因子模型：滚动再训练 + Top-K 选股 + 回测净值。
-
-    非阻塞：命中缓存返回 status=ready，否则后台计算返回 status=computing（前端轮询）。
-    universe_limit<=0 表示全市场。结果缓存 6 小时。
-    """
-    try:
-        from quantcore.quant.ml.service import request_ml_factor
-        return await asyncio.to_thread(
-            request_ml_factor, universe_limit, horizon, k, mode, neutralize, retrain_every, 250, force
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-class SerenityDeepRequest(BaseModel):
-    theme: str
-    event: str = ""
-    beneficiaries: List[dict] = Field(default_factory=list)
-
-
-@router.get("/serenity/events")
-async def serenity_events(force: bool = False, max_news: int = 10,
-                          user: dict = Depends(get_current_lite_user)):
-    """serenity 事件驱动选股：每日扫新闻→受益股卡片。非阻塞缓存。"""
-    try:
-        from quantcore.quant.serenity_service import request_events
-        if not user.get("is_admin"):
-            force = False
-        max_news = max(1, min(int(max_news), 10))
-        result = await asyncio.to_thread(request_events, force, max_news)
-        if isinstance(result, dict) and result.get("status") == "ready":
-            try:
-                from app.lite_notifications import notification_store
-                await asyncio.to_thread(notification_store.notify_favorite_catalysts, result.get("events") or [])
-            except Exception:
-                pass
-        return result
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/serenity/deep")
-async def serenity_deep(req: SerenityDeepRequest,
-                        user: dict = require_quota("serenity_deep", feature="serenity_deep")):
-    """对某题材跑完整 serenity 5 步深度报告。"""
-    try:
-        from quantcore.quant.serenity_service import deep_for_theme
-        return await asyncio.to_thread(deep_for_theme, req.theme, req.event, req.beneficiaries)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
+# 机器学习因子模型、serenity 大模型事件扫描的手动接口 2026-09-29 随所有 AI 功能一并下线。
 
 @router.post("/backtest")
 async def backtest_strategy(req: QuantBacktestRequest,

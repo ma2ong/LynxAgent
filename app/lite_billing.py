@@ -143,13 +143,8 @@ async def billing_me(user: dict = Depends(get_current_lite_user)):
     plan = PLANS[plan_key]
     used = billing.used_today(user["id"])
     unlimited = plan["daily_llm"] <= NO_DAILY_LIMIT
-    # ai_enabled：这个用户自己有没有配可用的 LLM 密钥（BYOK）。站点本身不配密钥，
-    # 所以这里只看用户。前端据此显示「未配置」而不是让人点下去撞报错。
-    try:
-        from app.core.user_llm_keys import get_store
-        ai_enabled = get_store().resolve(user["id"]) is not None
-    except Exception:  # noqa: BLE001 — 探测失败一律按不可用处理
-        ai_enabled = False
+    # 所有 AI 功能（含用户自带密钥）2026-09-29 按 Allen 要求停用，一律返回未启用
+    ai_enabled = False
     return {
         "success": True,
         "data": {

@@ -50,7 +50,6 @@ def _compute(scores: list[float]) -> dict[str, Any]:
          patch.object(lite_main, "_cache_set"), \
          patch.object(lite_main, "_persistent_cache_set"), \
          patch.object(lite_main, "run_scan", new=_async_return(pool)), \
-         patch.object(lite_main, "_load_ai_factor_pool", return_value={"status": "pending", "scores": {}}), \
          patch.object(lite_main, "_confluence_enrich_items", new=lambda _items: None), \
          patch.object(lite_main, "_enrich_smart_pool_industries", new=_async_identity()):
         res = asyncio.run(lite_main._compute_lite_smart_pool(limit=20, universe_limit=5000))
@@ -305,7 +304,6 @@ def test_manual_generation_bypasses_old_pool_cache():
          patch.object(lite_main, "_cache_set"), \
          patch.object(lite_main, "_persistent_cache_set"), \
          patch.object(lite_main, "run_scan", new=_async_return(pool)), \
-         patch.object(lite_main, "_load_ai_factor_pool", return_value={"status": "pending", "scores": {}}), \
          patch.object(lite_main, "_enrich_smart_pool_industries", new=_async_identity()):
         result = asyncio.run(
             lite_main._compute_lite_smart_pool(
@@ -632,7 +630,7 @@ def test_cache_only_serves_previous_list_after_bar_date_rolls(monkeypatch):
 
     monkeypatch.setattr("quantcore.quant.local_store.get_local_store", lambda: _Store())
     monkeypatch.setattr(lite_main, "_cache_get", lambda key, ttl: None)
-    prev_key = (f"smart-pool:factor-v19-no-intraday-chase:{lite_main.SMART_POOL_INTRADAY_WEIGHT}:"
+    prev_key = (f"smart-pool:factor-v20-no-ai-factor:{lite_main.SMART_POOL_INTRADAY_WEIGHT}:"
                 f"2026-09-24:balanced:20:5525")
     _persistent_cache_set(prev_key, {"success": True, "data": {"items": [{"symbol": "600000"}],
                                                               "daily_as_of": "2026-09-24"}})

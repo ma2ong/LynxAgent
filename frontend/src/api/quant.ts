@@ -103,9 +103,6 @@ export interface QuantSmartPoolItem {
     valid_until?: string
     actionable?: boolean
   }
-  ai_factor_score?: number
-  ai_factor_rank?: number | null
-  ai_factor_source?: string
   signal: string
   close?: number
   pct_chg?: number | null
@@ -179,11 +176,6 @@ export interface QuantSmartPoolResult {
   score_floor_fallback?: boolean
   score_floor_qualified?: number
   score_floor_extra?: number
-  ai_factor?: {
-    status?: string
-    pick_date?: string
-    universe?: number
-  }
   position_gate?: {
     state?: string
     temp?: number
@@ -475,7 +467,6 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     source: raw?.source || 'lite-smart-pool',
     universe_size: raw?.universe_size || items.length,
     analyzed: raw?.analyzed || raw?.universe_size || items.length,
-    ai_factor: raw?.ai_factor,
     daily_as_of: raw?.daily_as_of,
     realtime_as_of: raw?.realtime_as_of,
     realtime_status: raw?.realtime_status,
@@ -637,22 +628,11 @@ export const quantApi = {
   riskCheck: async (symbol: string) =>
     unwrap<RiskCheckResult>(await ApiClient.get('/api/quant/risk-check', { symbol, _ts: nonce() }, { timeout: 30000 })),
 
-  // ---- 个股深研增强：投资者画像 / 红旗（走 LLM）----
+  // ---- 个股深研增强：五方评委打分 / 风险红旗（均为规则实现）----
   investorPanel: async (symbol: string) =>
     unwrap<any>(await ApiClient.get('/api/quant/stock/investor-panel', { symbol }, { timeout: 120000 })),
   redFlags: async (symbol: string) =>
     unwrap<any>(await ApiClient.get('/api/quant/stock/red-flags', { symbol }, { timeout: 120000 })),
-
-  factorModel: async (params: {
-    universe_limit?: number
-    horizon?: number
-    k?: number
-    mode?: 'rolling' | 'once'
-    neutralize?: boolean
-    retrain_every?: number
-    force?: boolean
-  } = {}) =>
-    unwrap<MLFactorResult>(await ApiClient.get('/api/quant/ml/factor-model', params, { timeout: 300000 })),
 
   picksStats: async (days = 30, pool = '', includeItems = true) =>
     unwrap<PicksStatsResult>(await ApiClient.get(
@@ -945,26 +925,6 @@ export interface MLFactorMetrics {
   n_periods: number
 }
 
-export interface MLFactorResult {
-  status?: 'ready' | 'computing' | 'error'
-  elapsed_sec?: number
-  mode: string
-  universe: number
-  horizon: number
-  k: number
-  neutralized: boolean
-  n_models?: number
-  ic: { rank_ic_mean: number; rank_icir: number; ic_mean: number; n_days: number }
-  metrics: { topk: MLFactorMetrics; benchmark: MLFactorMetrics; long_short: MLFactorMetrics }
-  pick_date: string
-  picks: MLFactorPick[]
-  top_features: Record<string, number>
-  curves: { dates: string[]; topk: number[]; benchmark: number[]; long_short: number[] }
-  cached: boolean
-  age_sec?: number
-  generated_at: number
-  error?: string
-}
 
 export interface MacroIndexQuote {
   code: string

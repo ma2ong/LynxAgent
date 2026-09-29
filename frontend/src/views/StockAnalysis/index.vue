@@ -325,9 +325,9 @@
         </div>
       </div>
 
-      <!-- AI 评委打分（按需加载，消耗 AI 额度）-->
+      <!-- 五方评委打分（规则打分，按需加载）-->
       <div class="card" v-if="data.header?.symbol">
-        <div class="card-title">AI 评委打分<small class="src">（5 位不同风格投资人独立打分）</small></div>
+        <div class="card-title">五方评委打分<small class="src">（5 种投资风格的规则打分）</small></div>
         <div v-if="panelLoading" class="panel-empty">评委评分中…</div>
         <template v-else-if="panel && !panel.empty">
           <div class="panel-head">
@@ -354,8 +354,8 @@
         </template>
         <div v-else-if="panel && panel.empty" class="panel-empty">{{ panel.message || '暂无评委打分' }}</div>
         <div v-else class="panel-cta">
-          <el-button type="primary" plain :loading="panelLoading" @click="loadPanel">生成 AI 评委打分</el-button>
-          <span class="cta-hint">5 位风格投资人独立打分 · 消耗 1 次 AI 额度</span>
+          <el-button type="primary" plain :loading="panelLoading" @click="loadPanel">生成五方评委打分</el-button>
+          <span class="cta-hint">5 种投资风格的规则打分，同样输入永远同样结果</span>
         </div>
       </div>
 
@@ -488,94 +488,6 @@
         </div>
       </div>
 
-      <!-- 深度多智能体分析：需要用户自带 API Key -->
-      <div class="card deep-card">
-        <div class="card-title">
-          深度多智能体分析
-          <el-tag v-if="aiEnabled" size="small" type="info" effect="plain">约30-60秒</el-tag>
-          <el-tag v-else size="small" type="info" effect="plain">需自带 API Key</el-tag>
-        </div>
-        <template v-if="!aiEnabled">
-          <p class="deep-hint">
-            这一项需要 AI 模型生成叙述性研究结论。上面的同业对位和页面其余内容都是本地
-            规则算出来的，不依赖 AI，照常可用。
-          </p>
-          <p class="deep-hint dim">
-            想用的话在<router-link to="/account/membership">「设置」页</router-link>填入你自己的 API Key，
-            费用由你的服务商账户结算，本站不经手。
-          </p>
-        </template>
-        <template v-else-if="!deepStarted">
-          <p class="deep-hint">多智能体分析行业/估值/风险/跟踪计划，生成结构化研究结论。</p>
-          <el-button type="primary" plain @click="startDeep">启动深度分析</el-button>
-        </template>
-        <div v-else-if="deepLoading" class="deep-spin">
-          <el-steps :active="deepStep" finish-status="success" align-center class="deep-steps">
-            <el-step title="获取数据" />
-            <el-step title="分析链条" />
-            <el-step title="独立复核" />
-          </el-steps>
-          <el-progress :percentage="deepProgress" :stroke-width="8" />
-          <div class="deep-status-grid">
-            <div v-for="item in deepStatusItems" :key="item.title" :class="{ active: item.active, done: item.done }">
-              <b>{{ item.title }}</b>
-              <span>{{ item.desc }}</span>
-            </div>
-          </div>
-          <span>多智能体分析中，已用 {{ deepElapsed }} 秒，可停留等待结果。</span>
-        </div>
-        <div v-else-if="deepResult" class="deep-result">
-          <div v-if="deepAgentReview" class="agent-review">
-            <div class="agent-review-head">
-              <div>
-                <span>多智能体审查</span>
-                <b>{{ deepAgentReview.final_action }}</b>
-              </div>
-              <el-tag type="success" effect="plain">共识 {{ deepAgentReview.consensus_score }}</el-tag>
-            </div>
-            <div class="agent-grid">
-              <div v-for="agent in deepAgentReview.agents" :key="agent.role" class="agent-card">
-                <div class="agent-title">
-                  <span>{{ agent.role }}</span>
-                  <el-tag size="small" effect="plain">{{ agent.stance }}</el-tag>
-                </div>
-                <div class="agent-confidence">置信度 {{ Math.round((agent.confidence || 0) * 100) }}%</div>
-                <ul>
-                  <li v-for="point in agent.points" :key="point">{{ point }}</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-          <div v-if="deepAudit" class="audit-box">
-            <div class="audit-head">
-              <span>研究自检</span>
-              <el-tag size="small" :type="deepAudit.confidence >= 0.65 ? 'success' : 'warning'">
-                置信度 {{ Math.round(deepAudit.confidence * 100) }}%
-              </el-tag>
-            </div>
-            <p>{{ deepAudit.verdict }}</p>
-            <div class="audit-cols">
-              <div>
-                <b>证据链</b>
-                <ul><li v-for="item in deepAudit.evidence" :key="item.name">{{ item.name }}：{{ item.value }}</li></ul>
-              </div>
-              <div>
-                <b>数据缺口</b>
-                <ul><li v-for="item in (deepAudit.gaps?.length ? deepAudit.gaps : ['暂无明显数据缺口'])" :key="item">{{ item }}</li></ul>
-              </div>
-              <div>
-                <b>风控自检</b>
-                <ul><li v-for="item in (deepAudit.risk_checks?.length ? deepAudit.risk_checks : ['暂无硬性风控拦截'])" :key="item">{{ item }}</li></ul>
-              </div>
-            </div>
-          </div>
-          <div v-for="s in deepSections" :key="s.title" class="deep-section">
-            <div class="ds-title">{{ s.title }}</div>
-            <div class="ds-body">{{ s.body }}</div>
-          </div>
-        </div>
-        <el-alert v-else-if="deepError" :title="deepError" type="error" :closable="false" />
-      </div>
     </template>
 
     <el-alert
@@ -599,8 +511,6 @@ import { Search, Clock, Close, ArrowLeft } from '@element-plus/icons-vue'
 import { ApiClient } from '@/api/request'
 import { quantApi, type RiskCheckResult } from '@/api/quant'
 
-// AI 是否可用由服务端决定（有没有配 LLM 密钥），前端只负责如实展示。
-const aiEnabled = ref(false)
 const peerData = ref<any>(null)
 const peerClass = (p: number | null) =>
   p == null ? '' : p >= 70 ? 'pv-lead' : p <= 30 ? 'pv-lag' : 'pv-mid'
@@ -611,18 +521,12 @@ const loadPeerPosition = async (sym: string) => {
     peerData.value = res?.data?.available ? res.data : null
   } catch { peerData.value = null }
 }
-const loadAiStatus = async () => {
-  try {
-    const res: any = await ApiClient.get('/api/billing/me')
-    aiEnabled.value = !!res?.data?.ai_enabled
-  } catch { aiEnabled.value = false }
-}
 
 const symbolInput = ref('')
 const loading = ref(false)
 const data = ref<any>(null)
 
-// AI 评委打分（按需，走 LLM 计配额）
+// 五方评委打分（按需；规则实现，不调模型）
 const panel = ref<any>(null)
 const panelLoading = ref(false)
 const scoreColor = (s: number) => (s >= 62 ? '#ef232a' : s >= 45 ? '#e6a23c' : '#14b143')
@@ -735,14 +639,6 @@ function clearHistory() {
   localStorage.removeItem(HISTORY_KEY)
 }
 
-const deepStarted = ref(false)
-const deepLoading = ref(false)
-const deepResult = ref<any>(null)
-const deepError = ref('')
-const deepStep = ref(0)
-const deepElapsed = ref(0)
-let deepTimer: ReturnType<typeof setTimeout> | null = null
-let deepElapsedTimer: ReturnType<typeof setInterval> | null = null
 
 const PERF_LABELS: Record<string, string> = {
   d1: '1日', d5: '5日', m1: '1月', m3: '3月', ytd: '年初至今', y1: '1年',
@@ -753,11 +649,6 @@ const FACTOR_LABELS: Record<string, string> = {
   liquidity: '流动性', macd: 'MACD', bollinger: '布林', capital_flow: '资金流',
 }
 
-const DEEP_TITLES: Record<string, string> = {
-  overall_conclusion: '综合结论', operation_advice: '跟踪观察',
-  technical_analysis: '技术面分析', industry_analysis: '行业分析',
-  valuation_analysis: '估值分析', risk_assessment: '风险评估', tracking_plan: '跟踪计划',
-}
 
 const signalTagType = computed(() => {
   const s = data.value?.rating?.signal
@@ -789,36 +680,6 @@ const hasPerfData = computed(() => {
   return p && Object.values(p).some((v) => v != null)
 })
 
-const deepSections = computed(() => {
-  if (!deepResult.value) return []
-  return Object.entries(DEEP_TITLES)
-    .filter(([k]) => deepResult.value[k])
-    .map(([k, title]) => ({ title, body: deepResult.value[k] }))
-})
-
-const deepAudit = computed(() => deepResult.value?.analysis_audit || null)
-const deepAgentReview = computed(() => deepResult.value?.agent_review || null)
-const deepProgress = computed(() => Math.min(92, deepStep.value * 28 + Math.floor(deepElapsed.value / 4)))
-const deepStatusItems = computed(() => [
-  {
-    title: '数据准备',
-    desc: '同步行情、财务、新闻和量化因子',
-    active: deepStep.value === 1,
-    done: deepStep.value > 1,
-  },
-  {
-    title: '研究生成',
-    desc: '组合行业、估值、风险和跟踪计划',
-    active: deepStep.value === 2,
-    done: deepStep.value > 2,
-  },
-  {
-    title: '独立复核',
-    desc: '检查证据链、风险缺口和结论一致性',
-    active: deepStep.value >= 3,
-    done: Boolean(deepResult.value),
-  },
-])
 
 const fmt = (v?: number | null, dp = 2) =>
   v == null ? '-' : v >= 1e8 ? `${(v / 1e8).toFixed(dp)}亿` : v.toFixed(dp)
@@ -964,9 +825,6 @@ const analyze = async (raw?: string) => {
   data.value = null
   panel.value = null
   riskCheck.value = null
-  deepStarted.value = false
-  deepResult.value = null
-  deepError.value = ''
   try {
     const riskPromise = loadRiskCheck(s)  // 与主分析并行，先到先渲染
     const peerPromise = loadPeerPosition(s)  // 同上：同业对位要读几十只同业日线，别串行等
@@ -987,57 +845,6 @@ const analyze = async (raw?: string) => {
   }
 }
 
-const startDeep = async () => {
-  deepStarted.value = true
-  deepLoading.value = true
-  deepError.value = ''
-  deepStep.value = 1
-  deepElapsed.value = 0
-  if (deepElapsedTimer) clearInterval(deepElapsedTimer)
-  deepElapsedTimer = setInterval(() => {
-    deepElapsed.value += 1
-    if (deepElapsed.value > 12 && deepStep.value < 2) deepStep.value = 2
-    if (deepElapsed.value > 28 && deepStep.value < 3) deepStep.value = 3
-  }, 1000)
-  const sym = symbolInput.value.trim()
-  try {
-    const res: any = await ApiClient.post('/api/analysis/single', {
-      symbol: sym, depth: 3, use_llm: true,
-    })
-    const taskId = res?.data?.task_id
-    if (!taskId) throw new Error('未获取到任务ID')
-    deepStep.value = 2
-    pollDeep(taskId)
-  } catch (e: any) {
-    if (deepElapsedTimer) { clearInterval(deepElapsedTimer); deepElapsedTimer = null }
-    deepLoading.value = false
-    deepError.value = e?.message || '启动失败'
-  }
-}
-
-const pollDeep = (taskId: string) => {
-  deepTimer = setTimeout(async () => {
-    try {
-      const res: any = await ApiClient.get(`/api/analysis/tasks/${taskId}/status`)
-      const status = res?.data?.status
-      if (status === 'completed') {
-        const r: any = await ApiClient.get(`/api/analysis/tasks/${taskId}/result`)
-        deepResult.value = r?.data || null
-        deepStep.value = 3
-        if (deepElapsedTimer) { clearInterval(deepElapsedTimer); deepElapsedTimer = null }
-        deepLoading.value = false
-      } else if (status === 'failed') {
-        deepError.value = res?.data?.error || '深度分析失败'
-        if (deepElapsedTimer) { clearInterval(deepElapsedTimer); deepElapsedTimer = null }
-        deepLoading.value = false
-      } else {
-        pollDeep(taskId)
-      }
-    } catch {
-      pollDeep(taskId)
-    }
-  }, 3000)
-}
 
 async function backfillHistoryNames() {
   const missing = history.value.filter((h) => !h.name).map((h) => h.code)
@@ -1055,7 +862,6 @@ async function backfillHistoryNames() {
 }
 
 onMounted(() => {
-  loadAiStatus()
   backfillHistoryNames()
   const symbol = String(route.query.symbol || route.query.stock || '').trim()
   if (symbol) analyze(symbol)
@@ -1063,8 +869,6 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (deepTimer) clearTimeout(deepTimer)
-  if (deepElapsedTimer) clearInterval(deepElapsedTimer)
   klineChart?.dispose()
 })
 </script>
@@ -1376,112 +1180,12 @@ onUnmounted(() => {
 .watch-list { margin-top: 12px; border-top: 1px dashed var(--el-border-color-lighter); padding-top: 10px; }
 .watch-row { display: flex; gap: 10px; font-size: 13px; padding: 4px 0; }
 .watch-row .wk { flex: 0 0 88px; color: var(--el-text-color-secondary); }
-.deep-hint.dim { color: var(--el-text-color-secondary); }
-.deep-hint { font-size: 13px; color: var(--el-text-color-secondary); margin-bottom: 12px; }
-.deep-spin { display: flex; flex-direction: column; gap: 12px; color: var(--el-text-color-secondary); padding: 12px 0; }
-.deep-steps { width: 100%; }
-.deep-status-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-.deep-status-grid div {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  padding: 9px 10px;
-  background: var(--el-fill-color-extra-light);
-}
-.deep-status-grid div.active {
-  border-color: var(--el-color-primary-light-5);
-  background: var(--el-color-primary-light-9);
-}
-.deep-status-grid div.done {
-  border-color: var(--el-color-success-light-5);
-  background: var(--el-color-success-light-9);
-}
-.deep-status-grid b {
-  display: block;
-  color: var(--el-text-color-primary);
-  font-size: 13px;
-  margin-bottom: 3px;
-}
-.deep-status-grid span {
-  display: block;
-  font-size: 12px;
-  line-height: 1.45;
-}
-.deep-section { margin-bottom: 16px; &:last-child { margin-bottom: 0; } }
-.ds-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
-.ds-body { font-size: 13px; line-height: 1.8; white-space: pre-wrap; color: var(--el-text-color-regular); }
-.agent-review {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 14px;
-  background: var(--el-fill-color-extra-light);
-}
-.agent-review-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-.agent-review-head span {
-  display: block;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  margin-bottom: 2px;
-}
-.agent-review-head b { font-size: 18px; }
-.agent-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 10px;
-}
-.agent-card {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  padding: 10px;
-  background: var(--el-bg-color);
-}
-.agent-title {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  font-weight: 700;
-  font-size: 13px;
-}
-.agent-confidence {
-  margin-top: 6px;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-.agent-card ul {
-  margin: 8px 0 0;
-  padding-left: 16px;
-  line-height: 1.65;
-  font-size: 12px;
-}
-.audit-box {
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 14px;
-  background: var(--el-fill-color-extra-light);
-}
-.audit-head { display: flex; align-items: center; justify-content: space-between; font-weight: 700; margin-bottom: 6px; }
-.audit-box p { margin: 0 0 10px; color: var(--el-text-color-secondary); font-size: 13px; }
-.audit-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.audit-cols b { font-size: 13px; }
-.audit-cols ul { margin: 6px 0 0; padding-left: 16px; font-size: 12px; line-height: 1.7; }
 
 /* Colors */
 .up { color: #ef232a; }
 .down { color: #14b143; }
 
-/* AI 评委打分 */
+/* 五方评委打分 */
 .card-title .src { font-weight: 400; font-size: 11px; color: var(--el-text-color-secondary); }
 .panel-empty { color: var(--el-text-color-secondary); padding: 24px 0; text-align: center; }
 .panel-cta { display: flex; align-items: center; gap: 12px; padding: 10px 0; flex-wrap: wrap; }
@@ -1524,8 +1228,7 @@ onUnmounted(() => {
   .price { font-size: 24px; }
   .kline-chart { height: 320px; }
   .metric-list,
-  .perf-grid,
-  .deep-status-grid {
+  .perf-grid {
     grid-template-columns: 1fr;
   }
   .news-item {

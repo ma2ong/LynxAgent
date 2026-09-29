@@ -5,12 +5,10 @@
 app/core/analysis_store，引擎与名录查询在 app/core/engine——都在模块顶部正常 import，
 不再需要懒导入绕环。路径不变（无 prefix）。
 
-`_run_lite_single_analysis_task` 是后台 LLM 分析 runner：有 key 时会真的发起 LLM 调用，
-单测覆盖不到，改它必须在预览环境实跑 POST /api/analysis/single 并轮询任务状态验证。
+单股大模型深度分析（POST /api/analysis/single）2026-09-29 随所有 AI 功能停用，只返回停用提示。
 """
 from __future__ import annotations
 
-import asyncio
 import secrets
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -24,13 +22,11 @@ from app.core.analysis_report import (
     enrich_lite_result_with_deep_analysis,
     enrich_lite_result_with_professional_analysis,
 )
-from app.core.analysis_store import _index_report_fts, _save_analysis_history
 from app.core.engine import get_stock_pool_items, lite_quant_engine, resolve_stock
 from app.core.market_data import _apply_realtime_quote, _realtime_quotes
 from app.core.schema import ensure_lite_analysis_history_table
 from app.lite_auth import get_current_lite_user, store
-from app.lite_billing import PLANS, billing, effective_plan, require_quota
-from quantcore.shared.disclaimer import attach_disclaimer
+from app.lite_billing import PLANS, billing, effective_plan
 
 router = APIRouter(tags=["analysis"])
 
@@ -92,157 +88,10 @@ async def analysis_tasks(limit: int = 10, offset: int = 0):
     }
 
 
-async def _run_lite_single_analysis_task(
-    task_id: str,
-    raw_symbol: str,
-    parameters: dict[str, Any],
-    username: str,
-    now: str,
-) -> None:
-    symbol = raw_symbol
-    stock_meta = None
-    result = None
-    status = "completed"
-    error_message = None
-    current_step = "SaaS Lite 量化与深度分析已完成"
-    try:
-        stock_meta = await resolve_stock(raw_symbol, parameters.get("market_type", "A股"))
-        symbol = stock_meta["symbol"] if stock_meta else raw_symbol
-        lite_analysis_tasks[task_id].update(
-            {
-                "symbol": symbol,
-                "stock_symbol": symbol,
-                "stock_name": (stock_meta or {}).get("name") or symbol,
-                "progress": 25,
-                "progress_percentage": 25,
-                "current_step": "量化画像已生成，正在运行深度多智能体分析",
-                "message": "量化画像已生成，正在运行深度多智能体分析",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-        quant_result = asdict(lite_quant_engine.analyze(symbol))
-        result = build_lite_analysis_result(task_id, symbol, quant_result, parameters, now, stock_meta)
-        result = await enrich_lite_result_with_deep_analysis(task_id, symbol, result, parameters, stock_meta)
-        lite_analysis_tasks[task_id].update(
-            {
-                "progress": 75,
-                "progress_percentage": 75,
-                "current_step": "深度分析已完成，正在补充实时行情与专业研判",
-                "message": "深度分析已完成，正在补充实时行情与专业研判",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-        quotes = await _realtime_quotes([symbol])
-        quote = quotes.get(symbol)
-        if quote and result:
-            price = quote.get("price") or quote.get("close")
-            pct = quote.get("change_percent") if quote.get("change_percent") is not None else quote.get("pct_chg")
-            if price is not None:
-                result["current_price"] = price
-            if pct is not None:
-                result["price_change_percent"] = pct
-            if quote.get("change") is not None:
-                result["price_change"] = quote["change"]
-            if quote.get("volume") is not None:
-                result["volume"] = quote["volume"]
-            result["quote_source"] = quote.get("quote_source")
-            result["quote_updated_at"] = quote.get("updated_at")
-        if result:
-            result = await enrich_lite_result_with_professional_analysis(symbol, result, quant_result, stock_meta, quote)
-        _save_analysis_history(
-            username=username,
-            symbol=symbol,
-            stock_name=stock_meta.get("name") if stock_meta else None,
-            market=parameters.get("market_type", "A股"),
-            overall_rating=result.get("overall_rating") if result else None,
-            score=result.get("quant_score") if result else None,
-        )
-        if result:
-            report_content = " ".join(
-                [
-                    result.get("macro", ""),
-                    result.get("moat", ""),
-                    str(result.get("overall_rating", "")),
-                ]
-            )
-            _index_report_fts(
-                report_id=task_id,
-                symbol=symbol,
-                stock_name=stock_meta.get("name", symbol) if stock_meta else symbol,
-                rating=result.get("overall_rating", ""),
-                content=report_content,
-            )
-    except Exception as exc:
-        result = None
-        status = "failed"
-        error_message = str(exc)
-        current_step = "SaaS Lite 深度分析失败"
-
-    if result is not None:
-        attach_disclaimer(result)
-    lite_analysis_tasks[task_id].update(
-        {
-            "symbol": symbol,
-            "stock_symbol": symbol,
-            "status": status,
-            "progress": 100,
-            "progress_percentage": 100,
-            "current_step": current_step,
-            "message": current_step,
-            "error_message": error_message,
-            "result_data": result,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-    )
-
-
 @router.post("/api/analysis/single")
-async def single_analysis(req: LiteSingleAnalysisRequest, user: dict[str, Any] = require_quota("deep_analysis")):
-    raw_symbol = (req.symbol or req.stock_code or "").strip()
-    if not raw_symbol:
-        return {"success": False, "data": None, "message": "请输入股票代码", "code": 400}
-
-    # BYOK：用这个用户自己的密钥。没配就直说，不要让人点下去等半分钟再撞报错。
-    from app.core.user_llm_keys import get_store
-    llm_override = get_store().resolve(user["id"])
-    if not llm_override:
-        return {
-            "success": False,
-            "data": None,
-            "code": "ai_key_missing",
-            "message": "深度分析需要 AI 模型。请在「用量」页填入你自己的 API Key 后使用。",
-        }
-    parameters = {**(req.parameters or {}), "_llm_override": llm_override}
-
-    task_id = "lite_" + secrets.token_hex(8)
-    now = datetime.now(timezone.utc).isoformat()
-    lite_analysis_tasks[task_id] = {
-        "task_id": task_id,
-        "analysis_id": task_id,
-        "symbol": raw_symbol,
-        "stock_symbol": raw_symbol,
-        "status": "running",
-        "progress": 5,
-        "progress_percentage": 5,
-        "current_step": "已创建深度分析任务，正在后台运行",
-        "message": "已创建深度分析任务，正在后台运行",
-        "error_message": None,
-        "result_data": None,
-        "created_at": now,
-        "updated_at": now,
-    }
-    import threading
-
-    threading.Thread(
-        target=lambda: asyncio.run(_run_lite_single_analysis_task(task_id, raw_symbol, parameters, user["username"], now)),
-        daemon=True,
-    ).start()
-
-    return {
-        "success": True,
-        "data": {"task_id": task_id, "analysis_id": task_id, "status": "running"},
-        "message": "深度多智能体分析已启动，前端将自动轮询结果",
-    }
+async def single_analysis(req: LiteSingleAnalysisRequest):
+    """大模型深度分析（用户自带密钥）2026-09-29 随所有 AI 功能一并停用。"""
+    return {"success": False, "data": None, "code": "ai_disabled", "message": "AI 深度分析已停用"}
 
 
 @router.post("/api/analysis/batch")

@@ -133,7 +133,6 @@ app.include_router(admin_router)
 from app.routers.notifications import router as notifications_router  # noqa: E402
 from app.routers.config import router as config_router  # noqa: E402
 from app.routers.paper import router as paper_router  # noqa: E402
-from app.routers.ai_key import router as ai_key_router
 from app.routers.favorites import router as favorites_router  # noqa: E402
 from app.routers.reports import router as reports_router  # noqa: E402
 from app.routers.analysis import router as analysis_router  # noqa: E402
@@ -143,66 +142,22 @@ app.include_router(notifications_router)
 app.include_router(config_router)
 app.include_router(paper_router)
 app.include_router(favorites_router)
-app.include_router(ai_key_router)
 app.include_router(reports_router)
 app.include_router(analysis_router)
 app.include_router(insights_router)
 app.include_router(intraday_router)
 
-# ---- 每日全市场 AI 因子模型刷新（收盘 + 数据同步后入缓存）----
+# ---- 后台定时任务（回放自愈、收盘后统计预热）----
+# AI 因子模型每日训练、serenity 大模型事件扫描 2026-09-29 按 Allen 要求随所有 AI 功能一并停用。
 _ml_factor_scheduler: "AsyncIOScheduler | None" = None
-
-
-async def _refresh_full_market_factor() -> None:
-    """后台重算因子模型并写入缓存（计算本身在子进程，见 ml.service._compute_isolated）。
-
-    参数必须与一键智选 _load_ai_factor_pool 请求的一致（5000 只 / k=80）：缓存按参数分 key，
-    原来这里用全市场 0 / k=50，与智选的 key 永远对不上，智选每次缓存过期都自己在 Web 进程里重训。
-    """
-    from quantcore.quant.ml.service import run_ml_factor
-    try:
-        # (universe_limit, horizon, k, mode, neutralize, retrain_every, min_rows, force)
-        await asyncio.to_thread(run_ml_factor, 5000, 5, 80, "rolling", True, 20, 250, True)
-    except Exception as exc:  # noqa: BLE001
-        import warnings
-        warnings.warn(f"ML factor daily refresh failed: {exc}", RuntimeWarning, stacklevel=1)
 
 
 @app.on_event("startup")
 async def _start_ml_factor_scheduler() -> None:
-    """启动时注册每日全市场因子模型刷新任务（可用环境变量关闭/改时间）。"""
+    """启动时注册后台定时任务（回放断点自愈、收盘后信号统计预热）。"""
     global _ml_factor_scheduler
-    if os.getenv("ML_FACTOR_REFRESH_ENABLED", "true").lower() in ("0", "false", "no"):
-        return
-    cron = os.getenv("ML_FACTOR_REFRESH_CRON", "0 18 * * 1-5")  # 工作日 18:00，收盘+K线同步之后
     tz = os.getenv("ML_FACTOR_REFRESH_TZ", "Asia/Shanghai")
     _ml_factor_scheduler = AsyncIOScheduler(timezone=tz)
-    _ml_factor_scheduler.add_job(
-        _refresh_full_market_factor,
-        CronTrigger.from_crontab(cron, timezone=tz),
-        id="ml_factor_full_market_daily",
-        name="全市场AI因子模型每日刷新",
-        replace_existing=True,
-        misfire_grace_time=3600,
-    )
-
-    # serenity 事件扫描：每工作日 9:30 / 13:30 刷新一次入缓存
-    async def _refresh_serenity_events() -> None:
-        from quantcore.quant.serenity_service import run_events_sync
-        try:
-            await asyncio.to_thread(run_events_sync, True, 30)
-        except Exception as exc:  # noqa: BLE001
-            import warnings
-            warnings.warn(f"serenity daily refresh failed: {exc}", RuntimeWarning, stacklevel=1)
-
-    _ml_factor_scheduler.add_job(
-        _refresh_serenity_events,
-        CronTrigger.from_crontab(os.getenv("SERENITY_REFRESH_CRON", "30 9,13 * * 1-5"), timezone=tz),
-        id="serenity_events_daily",
-        name="serenity事件扫描刷新",
-        replace_existing=True,
-        misfire_grace_time=3600,
-    )
     # 回放自愈：进程被杀会留下 status='running' 的僵尸 run；每 10 分钟检查并自动续跑
     # （replay_scan 按 symbol 断点缓存，续跑只做增量；运行中/无僵尸时为 no-op）。
     async def _job_replay_resume() -> None:
@@ -445,10 +400,9 @@ SMART_POOL_BREAKOUT_SLOTS = max(0, int(float(os.getenv("LYNX_SMART_BREAKOUT_SLOT
 
 SMART_POOL_RECOMMENDER = {
     "name": "全市场综合优选",
-    "description": "系统自动优先筛短中期进攻型股票，并叠加 AI 因子模型 Top-K 排名作为机器学习评分因子。",
+    "description": "系统自动优先筛短中期进攻型股票。",
     "weights": {
         "quant": 0.18,
-        "ai_factor": 0.10,
         "trend": 0.25,
         "momentum": 0.22,
         "rsi": 0.06,
@@ -799,71 +753,6 @@ def _smart_pool_candidates(events: list[dict[str, Any]]) -> list[dict[str, str]]
     for item in _watch_symbols() + DEFAULT_SMART_POOL_UNIVERSE:
         ordered.setdefault(item["symbol"], item.get("name") or item["symbol"])
     return [{"symbol": symbol, "name": name} for symbol, name in ordered.items()]
-
-
-def _load_ai_factor_pool(limit: int, universe_limit: int) -> dict[str, Any]:
-    """Load cached LightGBM Top-K picks for one-click smart-pool scoring.
-
-    Missing cache starts the background factor job and returns quickly.
-    """
-    try:
-        from quantcore.quant.ml.service import request_ml_factor
-
-        result = request_ml_factor(
-            universe_limit=max(100, min(int(universe_limit or 500), 5000)),
-            horizon=5,
-            k=max(50, min(200, limit * 4)),
-            mode="rolling",
-            neutralize=True,
-            retrain_every=20,
-            min_rows=250,
-            force=False,
-        )
-    except Exception as exc:
-        return {"status": "error", "error": str(exc), "scores": {}, "picks": []}
-
-    if result.get("status") not in {None, "ready"} or result.get("error"):
-        return {"status": result.get("status") or "computing", "error": result.get("error"), "scores": {}, "picks": []}
-
-    picks = list(result.get("picks") or [])
-    total = max(1, len(picks) - 1)
-    scores: dict[str, dict[str, Any]] = {}
-    normalized_picks: list[dict[str, str]] = []
-    for idx, pick in enumerate(picks, start=1):
-        symbol = str(pick.get("symbol") or "").strip().zfill(6)
-        if not re.fullmatch(r"\d{6}", symbol):
-            continue
-        rank_score = round(100.0 - ((idx - 1) / total) * 30.0, 1) if len(picks) > 1 else 100.0
-        scores[symbol] = {
-            "score": rank_score,
-            "rank": idx,
-            "raw_score": pick.get("score"),
-            "pick_date": result.get("pick_date"),
-        }
-        normalized_picks.append({"symbol": symbol, "name": str(pick.get("name") or symbol)})
-    return {
-        "status": "ready",
-        "scores": scores,
-        "picks": normalized_picks,
-        "pick_date": result.get("pick_date"),
-        "universe": result.get("universe"),
-    }
-
-
-def _ai_factor_proxy_score(factors: dict[str, Any], ml_features: dict[str, Any] | None = None) -> float:
-    if ml_features and ml_features.get("feature_score") is not None:
-        try:
-            return round(float(ml_features.get("feature_score") or 0), 1)
-        except (TypeError, ValueError):
-            pass
-    try:
-        trend = float(factors.get("trend") or 0)
-        momentum = float(factors.get("momentum") or 0)
-        liquidity = float(factors.get("liquidity") or 0)
-        risk = float(factors.get("risk_control") or 0)
-    except (TypeError, ValueError):
-        return 0.0
-    return round(max(0.0, min(100.0, trend * 0.35 + momentum * 0.30 + liquidity * 0.20 + risk * 0.15)), 1)
 
 
 async def _smart_pool_quant(symbol: str) -> dict[str, Any]:
@@ -2065,7 +1954,8 @@ async def _compute_lite_smart_pool_unlocked(
         safe_universe = max(safe_limit * 2, min(safe_universe, universe_count))
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
-    cache_prefix = f"smart-pool:factor-v19-no-intraday-chase:{SMART_POOL_INTRADAY_WEIGHT}:"
+    # v20（2026-09-29）：停用 AI 因子，且不再因 AI 模型就绪切到备用算法
+    cache_prefix = f"smart-pool:factor-v20-no-ai-factor:{SMART_POOL_INTRADAY_WEIGHT}:"
     cache_suffix = f":{strategy}:{safe_limit}:{safe_universe}"
     cache_key = (
         # v18（2026-08-28）：修好共振加成里的「强度」分支——它的缩进原先落在 except 块内，
@@ -2110,9 +2000,8 @@ async def _compute_lite_smart_pool_unlocked(
     if strategy == "swing_short":
         return await _compute_lite_swing_pool(safe_limit, safe_universe, cache_key, task_id)
 
-    _smart_pool_task_update(task_id, progress=14, phase="ai_factor", message="读取 AI 因子候选池")
-    ai_factor_pool = await asyncio.to_thread(_load_ai_factor_pool, safe_limit, safe_universe)
-    ai_factor_scores: dict[str, dict[str, Any]] = ai_factor_pool.get("scores") or {}
+    # AI 因子（LightGBM Top-K / 特征代理分，10% 混入综合分）2026-09-29 按 Allen 要求停用：
+    # 从未经回放审计，且模型未就绪时改用代理分，同一天名单会随缓存状态变。所有 AI 功能一并停掉。
 
     # Keep the stock-screening smart pool aligned with Quant Center's one-click recommendation.
     quant_scan_error: Exception | None = None
@@ -2156,14 +2045,7 @@ async def _compute_lite_smart_pool_unlocked(
             reasons = [str(item) for item in (raw.get("reasons") or []) if item]
             if amount > 0 and not any("成交" in reason for reason in reasons):
                 reasons.insert(1, f"成交额 {amount / 100000000:.2f} 亿")
-            ai_factor = ai_factor_scores.get(symbol)
-            ml_features = (raw.get("integrations") or {}).get("ml_features") if isinstance(raw.get("integrations"), dict) else {}
-            ai_factor_score = float(ai_factor.get("score") or 0) if ai_factor else _ai_factor_proxy_score(factors, ml_features or {})
-            display_score = round(score * 0.9 + ai_factor_score * 0.1, 1) if ai_factor_score else score
-            if ai_factor:
-                reasons.insert(0, f"AI因子TopK第{ai_factor.get('rank')}名 {ai_factor_score:.0f}")
-            elif ai_factor_score:
-                reasons.insert(0, f"AI因子即时分 {ai_factor_score:.0f}")
+            display_score = score
             item = {
                 "symbol": symbol,
                 "code": symbol,
@@ -2179,9 +2061,6 @@ async def _compute_lite_smart_pool_unlocked(
                 "quant_score": score,
                 "daily_structure_score": to_float(raw.get("daily_structure_score"), score),
                 "intraday_strength_score": to_float(raw.get("intraday_strength_score"), score),
-                "ai_factor_score": round(ai_factor_score, 1),
-                "ai_factor_rank": ai_factor.get("rank") if ai_factor else None,
-                "ai_factor_source": "lightgbm_topk" if ai_factor else "ml_feature_proxy",
                 "trigger_score": to_float(factors.get("trend"), 0),
                 "catalyst_score": to_float(raw.get("catalyst_score"), 0),
                 "risk_score": to_float(factors.get("risk_control"), 0),
@@ -2216,37 +2095,33 @@ async def _compute_lite_smart_pool_unlocked(
             await asyncio.to_thread(_industry.enrich_industries, items)
         except Exception:
             pass
-        if ai_factor_pool.get("status") != "ready":
-            response = {
-                "strategy": "quant_center_smart_pool",
-                "preset": {
-                    "name": "全市场综合优选",
-                    "description": f"完整日K先筛强结构备选池，再按盘中实时量价、板块共振与追高风控动态重排，只输出当前最优的前 {safe_limit} 只。",
-                },
-                "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
-                "universe_size": quant_pool.get("universe_size") or len(items),
-                "analyzed": quant_pool.get("analyzed") or len(items),
-                "daily_as_of": quant_pool.get("daily_as_of") or daily_as_of,
-                "realtime_as_of": quant_pool.get("realtime_as_of") or "",
-                "ranking_basis": quant_pool.get("ranking_basis") or "",
-                "force_refreshed": force_refresh,
-                # 目标只数：_apply_confluence 剔除雷票后按它回填裁剪
-                "requested_limit": safe_limit,
-                "items": items,
-                "ai_factor": {
-                    "status": ai_factor_pool.get("status"),
-                    "pick_date": ai_factor_pool.get("pick_date"),
-                    "universe": ai_factor_pool.get("universe"),
-                },
-                "source_note": "同源于量化中心结构候选，并在强结构备选池内叠加 AI 因子、形态强度与盘中实时量价动态排名；盘中层正在独立留痕验证，仅供研究与模拟使用。",
-            }
-            wrapped_response = {"success": True, "data": response, "message": "ok"}
-            await _apply_confluence(wrapped_response)
-            if _smart_pool_response_has_items(wrapped_response):
-                _persistent_cache_set(cache_key, wrapped_response)
-                _cache_set(cache_key, wrapped_response)
-            _smart_pool_task_update(task_id, progress=95, phase="realtime", message="模型完成，刷新实时价格")
-            return await _enrich_smart_pool_realtime(wrapped_response)
+        # 以前这里是 if AI 因子未就绪：就绪时会跳过主算法、改走备用加权算法——名单用哪套算法取决于
+        # 后台模型有没有训练完。AI 已停用，固定走主算法（与回放同源）；备用算法只在主算法出错时兜底。
+        response = {
+            "strategy": "quant_center_smart_pool",
+            "preset": {
+                "name": "全市场综合优选",
+                "description": f"完整日K先筛强结构备选池，再按盘中实时量价、板块共振与追高风控动态重排，只输出当前最优的前 {safe_limit} 只。",
+            },
+            "updated_at": datetime.now().strftime("%Y/%m/%d %H:%M:%S"),
+            "universe_size": quant_pool.get("universe_size") or len(items),
+            "analyzed": quant_pool.get("analyzed") or len(items),
+            "daily_as_of": quant_pool.get("daily_as_of") or daily_as_of,
+            "realtime_as_of": quant_pool.get("realtime_as_of") or "",
+            "ranking_basis": quant_pool.get("ranking_basis") or "",
+            "force_refreshed": force_refresh,
+            # 目标只数：_apply_confluence 剔除雷票后按它回填裁剪
+            "requested_limit": safe_limit,
+            "items": items,
+            "source_note": "同源于量化中心结构候选，在强结构备选池内叠加形态强度与板块共振排序；仅供研究与模拟使用。",
+        }
+        wrapped_response = {"success": True, "data": response, "message": "ok"}
+        await _apply_confluence(wrapped_response)
+        if _smart_pool_response_has_items(wrapped_response):
+            _persistent_cache_set(cache_key, wrapped_response)
+            _cache_set(cache_key, wrapped_response)
+        _smart_pool_task_update(task_id, progress=95, phase="realtime", message="模型完成，刷新实时价格")
+        return await _enrich_smart_pool_realtime(wrapped_response)
     except Exception as exc:
         quant_scan_error = exc
         print(f"Quant Center smart pool failed, falling back to lite smart pool: {exc}")
@@ -2265,8 +2140,6 @@ async def _compute_lite_smart_pool_unlocked(
             bucket["labels"].add(EVENT_TYPE_LABELS.get(event.get("event_type", ""), event.get("event_type", "事件")))
 
     candidates_by_symbol = {item["symbol"]: item for item in _smart_pool_candidates(events)}
-    for item in ai_factor_pool.get("picks") or []:
-        candidates_by_symbol.setdefault(item["symbol"], item)
     realtime_snapshot: dict[str, dict[str, Any]] = {}
     try:
         realtime_snapshot = await asyncio.wait_for(
@@ -2367,9 +2240,6 @@ async def _compute_lite_smart_pool_unlocked(
         risk_score = _risk_quality_score(risk)
         liquidity_score = float(factors.get("liquidity") or 50)
         quant_score = float(quant.get("score") or 0)
-        ai_factor = ai_factor_scores.get(symbol)
-        ml_features = (quant.get("integrations") or {}).get("ml_features") or {}
-        ai_factor_score = float(ai_factor.get("score") or 0) if ai_factor else _ai_factor_proxy_score(factors, ml_features)
         trend_score = float(factors.get("trend") or 0)
         momentum_score = float(factors.get("momentum") or 0)
         rsi_score = float(factors.get("rsi") or 0)
@@ -2402,7 +2272,6 @@ async def _compute_lite_smart_pool_unlocked(
         weights = preset["weights"]
         final_score = round(
             quant_score * weights["quant"]
-            + ai_factor_score * weights["ai_factor"]
             + trend_score * weights["trend"]
             + momentum_score * weights["momentum"]
             + rsi_score * weights["rsi"]
@@ -2417,10 +2286,6 @@ async def _compute_lite_smart_pool_unlocked(
         reasons.append(f"实时涨跌幅 {pct_chg:+.2f}%")
         if quant_score >= 72:
             reasons.append(f"量化分 {quant_score:.1f}")
-        if ai_factor:
-            reasons.append(f"AI因子TopK第{ai_factor.get('rank')}名 {ai_factor_score:.0f}")
-        elif ai_factor_score:
-            reasons.append(f"AI因子即时分 {ai_factor_score:.0f}")
         if trend_score >= 70:
             reasons.append(f"趋势因子 {trend_score:.0f}")
         if momentum_score >= 70:
@@ -2453,9 +2318,6 @@ async def _compute_lite_smart_pool_unlocked(
             "attack_tier": "primary" if passed_gate else "secondary",
             "signal": quant.get("signal") or "watch",
             "quant_score": round(quant_score, 1),
-            "ai_factor_score": round(ai_factor_score, 1),
-            "ai_factor_rank": ai_factor.get("rank") if ai_factor else None,
-            "ai_factor_source": "lightgbm_topk" if ai_factor else "ml_feature_proxy",
             "trigger_score": trigger_score,
             "catalyst_score": round(catalyst_score, 1),
             "risk_score": risk_score,
@@ -2512,11 +2374,6 @@ async def _compute_lite_smart_pool_unlocked(
         "ranking_basis": "日K结构因子负责入池，盘中量价与板块共振负责最终排序",
         "force_refreshed": force_refresh,
         "universe_size": len(candidates),
-        "ai_factor": {
-            "status": ai_factor_pool.get("status"),
-            "pick_date": ai_factor_pool.get("pick_date"),
-            "universe": ai_factor_pool.get("universe"),
-        },
         "items": items,
         "source_note": (
             "结构候选叠加 AI 因子、形态强度和盘中量价时机确认，"

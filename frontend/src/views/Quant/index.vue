@@ -223,14 +223,6 @@
                   ? (smartPoolResult.timing_gate.phase_label || '已更新')
                   : '等待最新扫描' }}
               </el-tag>
-              <el-tag
-                v-if="smartPoolResult.ai_factor"
-                size="small"
-                :type="smartPoolResult.ai_factor.status === 'ready' ? 'success' : 'warning'"
-                effect="plain"
-              >
-                AI因子 {{ smartPoolResult.ai_factor.status === 'ready' ? `已接入 ${smartPoolResult.ai_factor.pick_date || ''}` : '后台计算中' }}
-              </el-tag>
             </div>
           </div>
           <div v-if="smartPoolResult?.items.length" class="decision-context">

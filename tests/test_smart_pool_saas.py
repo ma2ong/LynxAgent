@@ -645,3 +645,29 @@ def test_cache_only_serves_previous_list_after_bar_date_rolls(monkeypatch):
         "balanced", 20, 10000, cache_only=True))
     assert result["data"]["items"][0]["symbol"] == "600000"
     assert result["data"]["daily_as_of"] == "2026-09-24"
+
+
+def test_enriched_response_drops_candidates_but_cache_keeps_them():
+    """候选全量占响应体 75%，前端从不读：返回时剥掉，但缓存里那份必须原样保留（下次重排要用）。"""
+    cands = [{"symbol": f"60000{i}", "smart_score": 90 - i, "score": 90 - i, "close": 10.0,
+              "pct_chg": 0.5, "amount": 5e8, "reasons": []} for i in range(1, 4)]
+    response = {"success": True, "data": {"requested_limit": 3, "daily_as_of": "2026-09-28",
+                                          "items": cands, "structure_candidates": cands}}
+
+    async def quotes(symbols, **_kw):
+        return {s: {"price": 10.0, "change_percent": 0.5, "amount": 5e8,
+                    "updated_at": "2026/09/29 10:00:00"} for s in symbols}
+
+    async def noop(_data):
+        return None
+
+    gate = {"state": "中性", "label": "可参与", "coefficient": 1.0, "note": ""}
+    with patch.object(lite_main, "_cache_get", return_value=gate), \
+         patch.object(lite_main, "_realtime_quotes", new=quotes), \
+         patch.object(lite_main, "_apply_intraday_quality", new=noop), \
+         patch.object(lite_main, "_update_smart_pool_list_basis", new=lambda _d: None), \
+         patch.object(lite_main, "_record_smart_picks_once", new=lambda *_a: None):
+        result = asyncio.run(lite_main._enrich_smart_pool_realtime(response))
+
+    assert "structure_candidates" not in result["data"]
+    assert len(response["data"]["structure_candidates"]) == 3

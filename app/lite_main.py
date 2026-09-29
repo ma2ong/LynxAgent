@@ -1639,6 +1639,9 @@ async def _enrich_smart_pool_realtime(response: dict[str, Any]) -> dict[str, Any
     except Exception as exc:  # noqa: BLE001 — 首推价只是展示项，失败不能拖垮名单
         print(f"attach first_seen failed: {exc}")
     data["items"] = items
+    # 候选全量只给后端重排用（下一次请求读的是缓存里那份，不是这里的副本），前端从不读它，
+    # 却占响应体 75%（18 万/24 万字节）；走海外节点时这就是好几秒（2026-09-29）。
+    data.pop("structure_candidates", None)
     enriched = dict(response)
     enriched["data"] = data
     return enriched

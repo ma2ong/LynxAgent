@@ -818,7 +818,21 @@ async def lite_limit_up_distribution(date: str | None = None):
     """涨停热点分布：单日连板梯队 × 概念板块矩阵（基于本地日线）。"""
     from quantcore.quant.limit_up import compute_limit_up_distribution
     from quantcore.quant.limit_up_taxonomy import limit_up_taxonomy_version
-    target = date or datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
+    target = date or today
+    realtime_quotes: dict = {}
+    if target >= today:
+        try:
+            realtime_quotes = await _run_data_task(_load_realtime_quotes_snapshot, 30, timeout=8.0)
+        except Exception:
+            realtime_quotes = {}
+        # 日期跟快照自报的行情日走，不跟本机日期：开盘前/周末/节假日快照还停在上一交易日，
+        # 按本机日期会把昨天收盘标成「今天 实时」（2026-09-29 08:07 实测页面显示 09-29
+        # 涨停 36 家，其实是 09-28 的）。这时改用那一天的完整日线，不再冒充实时。
+        from quantcore.quant.engine import _snapshot_stamp
+        snap_date = _snapshot_stamp(realtime_quotes)[0]
+        if not date and snap_date and snap_date < today:
+            target, realtime_quotes = snap_date, {}
     cache_key = f"limit_up:{limit_up_taxonomy_version()}:{target}"
     cached = lite_insights_cache.get(cache_key)
     if cached:
@@ -826,13 +840,6 @@ async def lite_limit_up_distribution(date: str | None = None):
         if (datetime.now(timezone.utc) - ts).total_seconds() < 600:  # 10-min cache
             return {"success": True, "data": payload}
     try:
-        realtime_quotes = {}
-        today = datetime.now().strftime("%Y-%m-%d")
-        if target >= today:
-            try:
-                realtime_quotes = await _run_data_task(_load_realtime_quotes_snapshot, 30, timeout=8.0)
-            except Exception:
-                realtime_quotes = {}
         data = await _run_data_task(compute_limit_up_distribution, target, realtime_quotes, timeout=25.0)
         lite_insights_cache[cache_key] = (datetime.now(timezone.utc), data)
         return {"success": True, "data": data}

@@ -389,11 +389,24 @@ class MarketSyncService:
             self._progress["done"] = 0
 
             today_str = today.strftime("%Y-%m-%d")
+            # 熔断：连续 N 只拉不到任何数据 ≈ 数据源在限流/封禁。继续打只会延长封禁，且每只要
+            # 走完所有回退源（约 16 秒）。2026-09-29 两次全量重建触发腾讯 WAF，之后 5000 多只
+            # 全部空转，进度照走、错误数还是 0，看起来像在正常同步。
+            breaker = {"empty_streak": 0, "tripped": False}
+            BREAKER_LIMIT = 20
 
             def work(meta):
+                if breaker["tripped"]:
+                    return 0
                 symbol = str(meta.get("symbol"))
                 start = full_start if (full or symbol.zfill(6) in ex_rights_syms) else incr_start
                 df = self._fetch_kline(symbol, start)
+                if df is None or df.empty:
+                    breaker["empty_streak"] += 1
+                    if breaker["empty_streak"] >= BREAKER_LIMIT:
+                        breaker["tripped"] = True
+                    return 0
+                breaker["empty_streak"] = 0
                 # 同上：盘中逐股日线接口也会带当天未收盘的那根 bar，收盘前不落库
                 if df is not None and not df.empty and datetime.now().time() < dtime(15, 5):
                     df = df[df["date"].astype(str).str[:10] != today_str]
@@ -413,6 +426,12 @@ class MarketSyncService:
                         done += 1
                         self._progress["done"] = done
                         self._progress["written_rows"] = written_rows
+            if breaker["tripped"]:
+                self._progress["errors_count"] = int(self._progress["errors_count"]) + 1
+                self._progress["last_error"] = (
+                    f"日线数据源连续 {BREAKER_LIMIT} 只拉取为空（疑似被限流/封禁），已提前结束本次回补；"
+                    f"已完成 {done}/{len(targets)}，稍后自动重试")
+                self._progress["breaker_tripped"] = True
 
             self._progress["phase"] = "fundamental"
             try:

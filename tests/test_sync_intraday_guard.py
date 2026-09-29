@@ -70,3 +70,17 @@ def test_ex_rights_symbol_gets_full_history_refetch(tmp_path, monkeypatch):
     svc.run_sync(full=False, block=True)
     assert starts, "除权股必须被纳入回补"
     assert starts[0] < (date.today() - timedelta(days=400)).isoformat()   # 用的是全量起点
+
+
+def test_breaker_stops_when_source_returns_nothing(tmp_path, monkeypatch):
+    """数据源被封时每只都拉空：连续 20 只后必须停手，并把原因写进 last_error。"""
+    svc, store, t, y = _svc(tmp_path, monkeypatch, 15, 30)
+    universe = [{"symbol": f"{600000 + i:06d}", "name": f"股{i}"} for i in range(100)]
+    monkeypatch.setattr(svc, "_fetch_universe", lambda: universe)
+    calls = []
+    monkeypatch.setattr(svc, "_fetch_kline", lambda sym, start: calls.append(sym) or pd.DataFrame())
+    svc.run_sync(full=True, block=True)
+    st = svc.status()
+    assert len(calls) < 40                      # 没有把 100 只全打一遍
+    assert st.get("breaker_tripped") is True
+    assert "限流" in st.get("last_error", "")

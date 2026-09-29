@@ -522,51 +522,6 @@ def _risk_scan_cached(realtime_quotes: Optional[dict] = None,
     return result
 
 
-_SMALLCAP_CACHE: dict = {}
-
-
-@router.get("/smallcap")
-async def smallcap_portfolio():
-    """小市值周频组合（规则见 quantcore/quant/smallcap.py）。
-
-    组合与历史只随日线变化，缓存 10 分钟；每次请求只刷新本周 5 只的实时价。
-    换仓当天（本周第一个交易日）顺手把名单记进 picks_history，之后可以用真实留痕复盘。
-    """
-    import time as _time
-    from datetime import datetime as _dt
-
-    from quantcore.quant.engine import _fetch_tencent_quotes
-    from quantcore.quant.local_store import get_local_store
-    from quantcore.quant.smallcap import compute
-
-    cached = _SMALLCAP_CACHE.get("v")
-    if not cached or _time.time() - cached[0] > 600:
-        data = await _run_light(compute, get_local_store())
-        _SMALLCAP_CACHE["v"] = (_time.time(), data)
-    else:
-        data = cached[1]
-    data = {**data, "items": [dict(it) for it in data.get("items") or []]}
-    try:
-        quotes = await _run_light(_fetch_tencent_quotes, [it["symbol"] for it in data["items"]])
-    except Exception:  # noqa: BLE001 — 取不到实时价就用最近收盘，不影响组合本身
-        quotes = {}
-    for it in data["items"]:
-        q = quotes.get(it["symbol"]) or {}
-        price = float(q.get("price") or 0)
-        if price > 0 and it.get("entry_price"):
-            it["price"] = round(price, 2)
-            it["since_entry_pct"] = round((price / it["entry_price"] - 1) * 100, 2)
-            it["pct_chg"] = q.get("pct_chg")
-    if data.get("week_start") == _dt.now().strftime("%Y-%m-%d") and data["items"]:
-        try:
-            await _run_light(get_local_store().record_picks, "smallcap",
-                             [{**it, "close": it["entry_price"], "score": it["amount_std_wan"]}
-                              for it in data["items"]])
-        except Exception as exc:  # noqa: BLE001 — 留痕失败不能拖垮页面
-            print(f"smallcap record failed: {exc}")
-    return {"success": True, "data": data}
-
-
 _RISK_ALERT_CACHE: dict = {}
 _RISK_ALERT_LOCK = asyncio.Lock()
 

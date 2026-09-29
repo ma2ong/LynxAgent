@@ -239,19 +239,11 @@
             <div v-if="smartPoolResult.style_health?.failing" class="style-alert">
               <b class="style-alert-head">⚠ 追涨风格正在失灵</b>
               <span>
-                上一批推荐（{{ smartPoolResult.style_health.pick_date }}）持有
-                {{ smartPoolResult.style_health.hold_days }} 个交易日平均
+                上一批（{{ smartPoolResult.style_health.pick_date.slice(5) }}）持有
+                {{ smartPoolResult.style_health.hold_days }} 天平均
                 <b>{{ signedPercent(smartPoolResult.style_health.pick_ret) }}</b>，同期市场
-                <b>{{ signedPercent(smartPoolResult.style_health.market_ret) }}</b>，
-                只有 {{ Math.round(smartPoolResult.style_health.win_rate * 100) }}% 上涨。
-                历史上这种时候，下一批 10 日平均再跑输约 1.8 个百分点、只有约 1/3 跑赢市场——
-                今天的名单建议只观察或轻仓，等风格恢复。
-              </span>
-              <!-- 依据 experiments/style_switch_check.py：红条亮的 177 周里小市值组合周超额 +0.50pp（t 2.62），
-                   不亮时 −0.01；5/6 年成立。只在红条里给入口，平时不推。 -->
-              <span class="style-alt">
-                这种行情下，<router-link to="/smallcap">小市值周频组合</router-link>历史上反而更好：
-                过去 5 年同样亮红条的 177 周里，平均每周跑赢中小板 0.5 个百分点，56% 的周跑赢（未计退市股，实际会偏低）。
+                <b>{{ signedPercent(smartPoolResult.style_health.market_ret) }}</b>，{{ Math.round(smartPoolResult.style_health.win_rate * 100) }}% 上涨。
+                历史上此时下一批 10 日平均再跑输约 1.8 个百分点，建议只观察或轻仓。
               </span>
             </div>
             <div
@@ -407,10 +399,14 @@
             @selection-change="handleSmartSelectionChange"
           >
             <el-table-column type="selection" width="36" fixed />
-            <el-table-column label="综合排序" width="82" fixed>
+            <el-table-column label="综合分" width="70" fixed>
+              <template #header>
+                <el-tooltip content="日K结构分与共振加成的综合排序分，只用于当天排序，不同日期之间不可比" placement="top">
+                  <span>综合分</span>
+                </el-tooltip>
+              </template>
               <template #default="{ row }">
                 <b>{{ Number(row.quality_score ?? row.score).toFixed(1) }}</b>
-                <div class="score-pct">仅用于本次排序</div>
               </template>
             </el-table-column>
             <!-- 结构分 / 时机确认 / AI因子 三列已并入右侧（2026-08-25）：
@@ -1646,11 +1642,13 @@ const openChart = async (row: any) => {
 .few-picks-tip {
   margin-bottom: 8px;
 }
+/* 单栏自上而下：原左右两栏网格里，右栏一行字被拉成和左栏红条一样高，留一大块空白，
+   第三条还被挤到下面只露半截（Allen 2026-09-29 截图）。每条提示按内容高度，间距统一。 */
 .decision-context {
-  display: grid;
-  grid-template-columns: minmax(320px, .72fr) minmax(560px, 1.28fr);
+  display: flex;
+  flex-direction: column;
   gap: 6px;
-  margin-bottom: 6px;
+  margin-bottom: 10px;
 }
 .env-gate {
   display: flex; flex-wrap: nowrap; align-items: baseline; gap: 6px 10px;
@@ -1698,8 +1696,6 @@ const openChart = async (row: any) => {
   border-left: 4px solid var(--el-color-danger);
   color: var(--el-text-color-regular);
   .style-alert-head { color: var(--el-color-danger); margin-right: 8px; font-size: 14px; }
-  .style-alt { display: block; margin-top: 4px; color: var(--el-text-color-primary); }
-  .style-alt a { color: var(--el-color-primary); font-weight: 600; }
 }
 .profile-note {
   margin: 0; padding: 6px 10px; border-radius: 8px; font-size: 13px;
@@ -1912,9 +1908,6 @@ const openChart = async (row: any) => {
   }
 
   .smart-summary,
-  .decision-context {
-    grid-template-columns: 1fr;
-  }
 
   .smart-summary .table-actions,
   .summary-meta,
@@ -1951,7 +1944,7 @@ const openChart = async (row: any) => {
 /* 紧凑表格：一页多显 */
 :deep(.el-table__cell) { padding: 4px 0; }
 :deep(.el-table .cell) { line-height: 1.3; font-size: 12px; padding-left: 6px; padding-right: 6px; }
-:deep(.smart-pool-table .cell) { padding-left: 4px; padding-right: 4px; }
+:deep(.smart-pool-table .cell) { padding-left: 10px; padding-right: 10px; }
 :deep(.el-table th.el-table__cell) { padding: 6px 0; }
 :deep(.el-tag) { height: 20px; line-height: 18px; padding: 0 5px; font-size: 11px; }
 
@@ -1990,10 +1983,9 @@ const openChart = async (row: any) => {
    页头堆了六层（更新提示 / 标签页 / 工具条 / 推荐计数 / 环境仓位+结构底池 / 入场说明），
    加上每行铺满标签，1080p 下一屏只能看到三只票。这里只压缩留白与行高，不删任何信息：
    标签只留「关键依据」一列的三类，其余折进「+N」，点开理由抽屉看全。 */
-.decision-context { gap: 4px; margin-bottom: 4px; }
-.env-gate, .basket-note { padding: 4px 10px; font-size: 12px; }
-.basis-note { padding: 4px 10px; font-size: 12px; }
-.profile-note { padding: 4px 10px; font-size: 12px; }
+.decision-context { gap: 6px; margin-bottom: 10px; }
+/* 提示条统一内边距与字号，视觉上是同一组 */
+.env-gate, .basket-note, .basis-note, .profile-note, .style-alert { padding: 7px 12px; font-size: 13px; }
 .summary-meta { gap: 4px 8px; padding-top: 3px; }
 .pattern-cat-filter { margin: 2px 0 6px; }
 
@@ -2004,7 +1996,7 @@ const openChart = async (row: any) => {
 /* 单行高度：标签的外边距与行高是主因，表格纵向 padding 次之 */
 .capability-tag { margin: 0 4px 3px 0; }
 .more-tag { opacity: .7; cursor: help; }
-.smart-pool-table :deep(.el-table__cell) { padding: 6px 0; }
+.smart-pool-table :deep(.el-table__cell) { padding: 8px 0; }
 .smart-pool-table :deep(.cell) { line-height: 1.45; }
 
 /* 表头吸顶。表格不再限高（20 只全排在页面里，只留一条页面滚动条），滚到第 15 只时列名
@@ -2042,7 +2034,6 @@ const openChart = async (row: any) => {
 /* 手机端：顶部提示区是网格，不换行的文字会把列撑到 578px（屏宽 390），右半截被裁掉读不到。
    列宽封顶到容器、文字一律换行（2026-09-29）。 */
 @media (max-width: 760px) {
-  .decision-context { grid-template-columns: minmax(0, 1fr); }
   .decision-context > * { min-width: 0; }
   .decision-context span, .basis-tip, .env-gate-note, .profile-note span {
     white-space: normal; overflow: visible; text-overflow: clip;

@@ -24,7 +24,6 @@
       >
         <el-menu-item index="/dashboard"><el-icon><Odometer /></el-icon><span>盘面总览</span></el-menu-item>
         <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
-        <el-menu-item index="/smallcap"><el-icon><Coin /></el-icon><span>小市值组合</span></el-menu-item>
         <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
         <el-menu-item index="/rotation"><el-icon><Refresh /></el-icon><span>板块轮动</span></el-menu-item>
         <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
@@ -62,7 +61,7 @@ import { useRoute } from 'vue-router'
 import {
   TrendCharts, Star,
   DocumentChecked, Menu,
-  MagicStick, Tools, DataLine, DataAnalysis, Histogram, Warning, Odometer, Refresh, Coin,
+  MagicStick, Tools, DataLine, DataAnalysis, Histogram, Warning, Odometer, Refresh,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser } from '@/stores/user'
 import { fetchBillingMe, type BillingMe } from '@/api/billing'

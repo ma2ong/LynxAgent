@@ -430,7 +430,7 @@
                   title="结构入选后，盘中量价也已二次确认">量价已确认</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="行业/板块" width="110">
+            <el-table-column label="行业/板块" width="150">
               <template #default="{ row }">{{ row.industry || row.board || '-' }}</template>
             </el-table-column>
             <el-table-column label="现价 / 今日" width="84" align="right">

@@ -4,7 +4,36 @@ akshare 各版本字段名不稳定，这里全部按关键词模糊匹配，缺
 """
 from __future__ import annotations
 
+import threading
+import time
+from functools import wraps
 from typing import Dict, Optional
+
+_TTL = 12 * 3600
+_CACHE: Dict[tuple, tuple] = {}
+_LOCK = threading.Lock()
+
+
+def _cached(fn):
+    """财务摘要是季度数据、概况一天不变：按代码缓存 12 小时，只缓存非空结果（失败下次重试）。
+
+    个股报告、五方评委、风险红旗三处各调一次，打开一只票最多下载三遍同样的数据；
+    单次约 2~3 秒（外部请求 + 解析大 JSON），个股分析接口 4 秒里占了 3 秒（2026-09-29）。
+    """
+    @wraps(fn)
+    def wrapper(symbol: str):
+        key = (fn.__name__, str(symbol).zfill(6))
+        now = time.time()
+        with _LOCK:
+            hit = _CACHE.get(key)
+        if hit and now - hit[0] < _TTL:
+            return dict(hit[1])
+        result = fn(symbol)
+        if result:
+            with _LOCK:
+                _CACHE[key] = (now, dict(result))
+        return result
+    return wrapper
 
 
 def _num(value) -> Optional[float]:
@@ -19,6 +48,7 @@ def _num(value) -> Optional[float]:
         return None
 
 
+@_cached
 def profile(symbol: str) -> Dict[str, object]:
     """个股概况：名称/行业/总市值/PE/PB（来自东财个股信息）。"""
     symbol = str(symbol).zfill(6)
@@ -49,6 +79,7 @@ def profile(symbol: str) -> Dict[str, object]:
     }
 
 
+@_cached
 def fundamentals(symbol: str) -> Dict[str, Optional[float]]:
     """核心财务摘要：营收/毛利率/净利率/经营现金流/ROE 等 + 同比。
 

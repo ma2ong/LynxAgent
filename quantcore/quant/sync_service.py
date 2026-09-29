@@ -167,6 +167,9 @@ class MarketSyncService:
         if not clean:
             return [], ""
         headers = {"User-Agent": "Mozilla/5.0"}
+        # 行情源给的「昨收」已按除权除息调整；和本地上一根收盘对不上即当日除权（见 _do_sync）
+        prev_closes: Dict[str, float] = {}
+        self._snapshot_prev_close = prev_closes
 
         def fetch_chunk(chunk: List[str]) -> List[tuple]:
             query = ",".join(_tencent_code(s) for s in chunk)
@@ -193,6 +196,9 @@ class MarketSyncService:
                     trade_date = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]}"
                 else:
                     trade_date = date.today().strftime("%Y-%m-%d")
+                prev_close = _f(fields[4])
+                if prev_close > 0:
+                    prev_closes[match.group(1)] = prev_close
                 open_price = _f(fields[5]) or close
                 high_price = _f(fields[33]) or close
                 low_price = _f(fields[34]) or close
@@ -292,6 +298,25 @@ class MarketSyncService:
             self._thread.start()
         return self.status()
 
+    def _ex_rights_symbols(self, snap_date: str) -> set:
+        """快照「昨收」与本地快照日之前最后一根收盘相差 >0.5% 的股票（当日除权除息）。"""
+        prev = getattr(self, "_snapshot_prev_close", None) or {}
+        if not prev or not snap_date:
+            return set()
+        conn = self.store._conn()
+        row = conn.execute("SELECT MAX(date) FROM daily_kline WHERE date < ? AND date >= date(?, '-10 day')",
+                           (snap_date, snap_date)).fetchone()
+        last_day = row[0] if row else None
+        if not last_day:
+            return set()
+        local = dict(conn.execute("SELECT symbol, close FROM daily_kline WHERE date = ?", (last_day,)).fetchall())
+        out = set()
+        for sym, pc in prev.items():
+            lc = local.get(sym)
+            if lc and lc > 0 and abs(pc / lc - 1) > 0.005:
+                out.add(sym)
+        return out
+
     def _do_sync(self, full: bool) -> None:
         try:
             self._progress["phase"] = "meta"
@@ -312,6 +337,7 @@ class MarketSyncService:
             # 即便随后的逐股回补被中断/限流，当日数据也已落库，情绪/涨停立即可用。
             self._progress["phase"] = "snapshot"
             symbols = [str(meta.get("symbol")) for meta in universe]
+            snap_date = ""
             try:
                 snap_bars, snap_date = self._fetch_snapshot_bars(symbols)
                 # 收盘前不把当天快照写成日线：那是盘中某一刻的半截 bar，带着真实成交额，
@@ -328,6 +354,12 @@ class MarketSyncService:
                 self._progress["snapshot_date"] = snap_date
             except Exception as exc:
                 self._progress["last_error"] = ("snapshot: " + str(exc))[:200]
+
+            # 除权识别：本地历史存的是回补当时的前复权价，之后分红送转不会自动重算，
+            # 除权日会凭空出现一次假跌（10 送 10 就是 −50%），风险预警误判破位、动量算错。
+            # 快照「昨收」≠ 本地上一根收盘 → 当日除权 → 整段重拉前复权历史覆盖。
+            ex_rights_syms = set() if full else self._ex_rights_symbols(snap_date)
+            self._progress["ex_rights_count"] = len(ex_rights_syms)
 
             # Phase kline：逐股回补历史/缺口。
             # 全量：所有股票拉满历史。增量：补「近 18 自然日 bar 数不足」的缺口股（含中间缺口）；
@@ -350,7 +382,8 @@ class MarketSyncService:
                 def has_gap(meta) -> bool:
                     sym = str(meta.get("symbol"))
                     cnt = recent_counts.get(sym) or recent_counts.get(sym.zfill(6)) or 0
-                    return cnt < MIN_RECENT_BARS or sym.zfill(6) in placeholder_syms or sym.zfill(6) in gap_syms
+                    return (cnt < MIN_RECENT_BARS or sym.zfill(6) in placeholder_syms
+                            or sym.zfill(6) in gap_syms or sym.zfill(6) in ex_rights_syms)
                 targets = [meta for meta in universe if has_gap(meta)]
             self._progress["total"] = len(targets)
             self._progress["done"] = 0
@@ -359,7 +392,7 @@ class MarketSyncService:
 
             def work(meta):
                 symbol = str(meta.get("symbol"))
-                start = full_start if full else incr_start
+                start = full_start if (full or symbol.zfill(6) in ex_rights_syms) else incr_start
                 df = self._fetch_kline(symbol, start)
                 # 同上：盘中逐股日线接口也会带当天未收盘的那根 bar，收盘前不落库
                 if df is not None and not df.empty and datetime.now().time() < dtime(15, 5):

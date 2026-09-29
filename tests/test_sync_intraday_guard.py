@@ -48,3 +48,25 @@ def test_after_close_sync_writes_todays_bar(tmp_path, monkeypatch):
     svc, store, t, y = _svc(tmp_path, monkeypatch, 15, 30)
     svc.run_sync(full=False, block=True)
     assert t in _dates(store)
+
+
+def test_ex_rights_symbol_gets_full_history_refetch(tmp_path, monkeypatch):
+    """快照昨收 ≠ 本地上一根收盘（除权）：该股整段重拉前复权历史，而不是只补近 45 天。"""
+    svc, store, t, y = _svc(tmp_path, monkeypatch, 15, 30)
+    y2 = (date.today() - timedelta(days=2)).isoformat()
+    # 本地已有完整近窗，否则会因「缺口」被纳入回补，测不出除权分支
+    rows = [("600001", (date.today() - timedelta(days=k)).isoformat(), 20, 20, 20, 20, 1e4, 2e7)
+            for k in range(1, 19)]
+    with store._conn() as conn:
+        conn.executemany("INSERT INTO daily_kline VALUES (?,?,?,?,?,?,?,?)", rows)
+    starts = []
+
+    def fake_snapshot(syms):
+        svc._snapshot_prev_close = {"600001": 10.0}      # 10 送 10 后昨收折半
+        return [("600001", t, 10, 11, 9, 10.5, 1e4, 1.05e7)], t
+
+    monkeypatch.setattr(svc, "_fetch_snapshot_bars", fake_snapshot)
+    monkeypatch.setattr(svc, "_fetch_kline", lambda sym, start: starts.append(start) or pd.DataFrame())
+    svc.run_sync(full=False, block=True)
+    assert starts, "除权股必须被纳入回补"
+    assert starts[0] < (date.today() - timedelta(days=400)).isoformat()   # 用的是全量起点

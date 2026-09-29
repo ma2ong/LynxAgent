@@ -298,7 +298,7 @@ const loadAll = async () => {
   try {
     const [a, s] = await Promise.all([
       quantApi.riskAlert().catch(() => null),
-      quantApi.riskScan(500).catch(() => null),
+      quantApi.riskScan(200).catch(() => null),
     ])
     alert.value = a
     scan.value = s

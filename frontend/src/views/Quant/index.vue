@@ -904,7 +904,7 @@ onMounted(async () => {
   refreshSmartPoolLive()
   smartLiveTimer = window.setInterval(refreshSmartPoolLive, 30_000)
   quantApi.riskAlert().then((alert) => { riskAlert.value = alert || null }).catch(() => {})
-  quantApi.picksStats(30).then((res) => {
+  quantApi.picksStats(30, '', false).then((res) => {
     const map: Record<string, { win_rate: number | null; samples: number }> = {}
     for (const p of res?.pools || []) {
       const t5 = p.horizons?.t5

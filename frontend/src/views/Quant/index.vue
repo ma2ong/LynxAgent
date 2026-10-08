@@ -39,7 +39,11 @@
           effect="plain"
           :type="healthChipType"
           :title="dataHealth.message"
-        >{{ healthTitle }} {{ dataHealth.today_count }}/{{ dataHealth.meta_count }}</el-tag>
+        >{{ healthTitle }}
+          <!-- 盘中当天日线收盘后才落库，today_count 必然是 0，显示「0/5525」像实时行情坏了 -->
+          <template v-if="isIntradayHealth">· 日线至 {{ (dataHealth.latest_complete_date || '').slice(5) }}</template>
+          <template v-else>{{ dataHealth.today_count }}/{{ dataHealth.meta_count }}</template>
+        </el-tag>
         <a v-if="dataHealth" class="desc-toggle" @click="showHealthDetail = !showHealthDetail">
           {{ showHealthDetail ? '收起' : '明细' }}
         </a>

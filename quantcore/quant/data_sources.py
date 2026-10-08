@@ -129,7 +129,7 @@ class EFinanceSource:
             import efinance as ef
 
             return ef.stock.get_quote_history(
-                stock_code=_a_share_symbol(symbol),
+                stock_codes=_a_share_symbol(symbol),
                 beg=_compact_date(start_date) or _compact_date(_iso_date(None)),
                 end=_compact_date(end_date) or _compact_date(date.today().strftime("%Y-%m-%d")),
                 klt=101,
@@ -178,6 +178,9 @@ class AKShareSource:
         return _call_with_timeout(fetch, 12, "akshare quote history")
 
 
+_BAOSTOCK_BUSY = threading.Lock()
+
+
 class BaoStockSource:
     key = "baostock"
     name = "BaoStock"
@@ -222,7 +225,19 @@ class BaoStockSource:
             bs.logout()
 
     def history(self, symbol: str, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
+        # baostock 全局只有一条 socket、不是线程安全的；超时的调用线程还会接着跑。
+        # 不加闸的话同步线程池每只票都再开一条，2026-10-08 一早堆了 112 条卡在 login
+        # 抢 GIL，事件循环一卡几秒。上一条没结束就直接让位给下一个源。
+        if not _BAOSTOCK_BUSY.acquire(blocking=False):
+            raise RuntimeError("baostock busy")
+
         def fetch() -> pd.DataFrame:
+            try:
+                return _fetch()
+            finally:
+                _BAOSTOCK_BUSY.release()
+
+        def _fetch() -> pd.DataFrame:
             bs = self._login()
             try:
                 fields = "date,code,open,high,low,close,volume,amount"

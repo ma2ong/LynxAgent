@@ -84,3 +84,25 @@ def test_breaker_stops_when_source_returns_nothing(tmp_path, monkeypatch):
     assert len(calls) < 40                      # 没有把 100 只全打一遍
     assert st.get("breaker_tripped") is True
     assert "限流" in st.get("last_error", "")
+
+
+def test_long_holiday_does_not_mark_every_stock_as_gap(tmp_path, monkeypatch):
+    """国庆长假后近 18 天窗口里全市场只有 7 根 bar：数据是完整的，不能把全市场当缺口逐只重拉
+    （2026-10-08：5525 只全部回补，回退源线程堆积把事件循环卡死，看门狗反复重启）。
+    缺口应以「全市场常态 bar 数」为基准判断，只有明显少于同伴的才回补。"""
+    svc, store, t, y = _svc(tmp_path, monkeypatch, 10, 30)
+    today = date.today()
+    # 7 个交易日都在 8~16 天前（中间是长假），全市场一致
+    days = [(today - timedelta(days=k)).isoformat() for k in range(8, 17) if k not in (12, 13)]
+    universe = [{"symbol": f"{600000 + i:06d}", "name": f"股{i}"} for i in range(30)]
+    rows = [(u["symbol"], d, 10, 10, 10, 10, 1e4, 1e7) for u in universe for d in days]
+    rows += [("600099", d, 10, 10, 10, 10, 1e4, 1e7) for d in days[:2]]   # 真缺口：只有 2 根
+    universe.append({"symbol": "600099", "name": "缺口股"})
+    with store._conn() as conn:
+        conn.executemany("INSERT INTO daily_kline VALUES (?,?,?,?,?,?,?,?)", rows)
+    monkeypatch.setattr(svc, "_fetch_universe", lambda: universe)
+    monkeypatch.setattr(svc, "_fetch_snapshot_bars", lambda syms: ([], t))
+    calls = []
+    monkeypatch.setattr(svc, "_fetch_kline", lambda sym, start: calls.append(sym) or pd.DataFrame())
+    svc.run_sync(full=False, block=True)
+    assert calls == ["600099"]

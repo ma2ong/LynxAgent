@@ -365,7 +365,11 @@ class MarketSyncService:
             # 全量：所有股票拉满历史。增量：补「近 18 自然日 bar 数不足」的缺口股（含中间缺口）；
             # 稳态下快照已保证连续 → 回补目标≈0 → 秒级完成。
             self._progress["phase"] = "kline"
-            MIN_RECENT_BARS = 8  # ~12 交易日窗口里连续股票应有的最少 bar 数
+            # ~12 交易日窗口里连续股票应有的最少 bar 数。按全市场常态下调：长假后窗口里
+            # 只有 7 个交易日，写死 8 会把全市场当缺口逐只重拉（2026-10-08 国庆后事故）。
+            counts = sorted(recent_counts.values())
+            norm = counts[len(counts) // 2] if counts else 0
+            MIN_RECENT_BARS = min(8, max(1, norm - 2))
             if full:
                 targets = list(universe)
             else:

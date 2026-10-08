@@ -2847,6 +2847,32 @@ async def lite_datalake_sources_health():
     return {"success": True, "data": health}
 
 
+def _append_live_candle(kline: dict[str, Any], quote: dict[str, Any]) -> dict[str, Any]:
+    """盘中给 K 线补一根当日实时 K 线（当日日线收盘后才落库，图会整天停在上一交易日）。
+    行情日不晚于最后一根就原样返回；均线按补上的收盘价重算最后一个点。"""
+    day = str(quote.get("updated_at") or "")[:10].replace("/", "-")
+    dates = kline.get("dates") or []
+    price, high, low, open_ = (quote.get(k) for k in ("price", "high", "low", "open"))
+    if not dates or len(day) != 10 or day <= dates[-1] or None in (price, high, low, open_):
+        return kline
+    out = {key: list(value) if isinstance(value, list) else value for key, value in kline.items()}
+    out["dates"].append(day)
+    out["open"].append(round(float(open_), 2))
+    out["high"].append(round(float(high), 2))
+    out["low"].append(round(float(low), 2))
+    out["close"].append(round(float(price), 2))
+    if "volume" in out:
+        out["volume"].append(int(float(quote.get("volume") or 0) / 100))  # 行情给股，K 线是手
+    if "amount" in out:
+        out["amount"].append(int(float(quote.get("amount") or 0)))
+    closes = out["close"]
+    for n in (5, 10, 20):
+        key = f"ma{n}"
+        if key in out:
+            out[key].append(round(sum(closes[-n:]) / n, 2) if len(closes) >= n else None)
+    return out
+
+
 @app.get("/api/quant/stock-analysis/{symbol}")
 async def stock_analysis(symbol: str, current_user=Depends(get_current_lite_user)):
     """合并个股研报 + 技术分析，供新版「个股分析」页使用。
@@ -2896,6 +2922,8 @@ async def stock_analysis(symbol: str, current_user=Depends(get_current_lite_user
                 "updated_at": quote.get("updated_at"),
                 "source": quote.get("quote_source"),
             }
+            if report.get("kline"):
+                report["kline"] = _append_live_candle(report["kline"], quote)
             rating = dict(report.get("rating") or {})
             if price:
                 price_f = float(price)

@@ -1043,25 +1043,10 @@ async def lite_breadth():
     return data
 
 
-@router.get("/api/lite/sector-rotation")
-async def lite_sector_rotation():
-    """板块相对轮动（RRG）：相对强度 × 强度变化，四象限 + 最近八周轨迹。
-
-    与热力图的分工：热力图答「今天谁涨」，本端点答「资金这几周在往哪挪」。后者才是
-    审计里唯一站得住的那个量（20 日板块动量），mom20_pct ≥ 0.8 即 sector_hot 命中档。
-
-    整套坐标只依赖日线，一个交易日只会变一次，所以缓存按最新 bar 日期作键、TTL 给足
-    半天，由 board_refresh 每日预热一次。计算本身约 14 秒（读 60 万行日线 + 逐日
-    横截面标准化），**不能**改成用户请求时同步现算 —— 这是既有的「端点别同步现算」
-    约束，涨停热点当年就是栽在这上面。
-    """
-    key, ttl, build, shape = _rotation_cache_args()
-    as_of = key.split(":", 1)[1]
-    data = await _heavy_cached(key, ttl, build, shape)
-    if data is None:
-        return {"as_of": as_of, "items": [], "ready": False, "computing": True,
-                "message": "正在计算板块轮动（约 15 秒）…"}
-    return data
+async def warm_sector_rotation() -> None:
+    """板块轮动数据的保温（页面 2026-10-08 按 Allen 要求删了，但个股深研「按赛道浏览龙头」
+    仍靠它）。整套只依赖日线、一天只变一次，由 board_refresh 每日预热，绝不在请求里现算。"""
+    await _heavy_cached(*_rotation_cache_args())
 
 
 @router.get("/api/lite/heatmap")

@@ -396,14 +396,14 @@
             @selection-change="handleSmartSelectionChange"
           >
             <el-table-column type="selection" width="40" fixed />
-            <el-table-column label="综合分" width="70" fixed>
+            <el-table-column label="综合分" :width="colW[0]" fixed>
               <template #header>
                 <el-tooltip content="日K结构分与共振加成的综合排序分，只用于当天排序，不同日期之间不可比" placement="top">
                   <span>综合分</span>
                 </el-tooltip>
               </template>
               <template #default="{ row }">
-                <b>{{ Number(row.quality_score ?? row.score).toFixed(1) }}</b>
+                {{ Number(row.quality_score ?? row.score).toFixed(1) }}
               </template>
             </el-table-column>
             <!-- 结构分 / 时机确认 / AI因子 三列已并入右侧（2026-08-25）：
@@ -418,33 +418,33 @@
             <!-- 代码并入名称列；「三重/双确认」徽标移进理由抽屉：14/20 只都带，红底紧贴股名
                  像是强烈推荐，而这个组合没有单独验证过收益（2026-09-28）。 -->
             <!-- 2026-10-08 Allen：整表铺满、每格一行；代码与今日涨跌各占一列，状态标签跟在股名后。
-                 各列给接近内容的最小宽度，宽屏多出来的宽度按比例摊到各列，操作固定在最右。 -->
-            <el-table-column label="名称" min-width="116">
+                 列宽由 layoutSmartColumns 实测得出：每列最宽内容 + 同一个列距，任何屏宽下列与列之间的空隙都相等。 -->
+            <el-table-column label="名称" :width="colW[1]">
               <template #default="{ row }">
                 <span class="pick-name">{{ row.name }}</span>
-                <el-tag v-if="row.timing_status === 'blocked'" class="status-tag" type="danger" effect="plain"
+                <el-tag disable-transitions v-if="row.timing_status === 'blocked'" class="status-tag" type="danger" effect="plain"
                   title="已涨停或距离涨停过近，等回落并重新出现量价确认">不可追入</el-tag>
-                <el-tag v-else-if="row.timing_actionable && !buyLocked(row)" class="status-tag" type="success" effect="dark"
+                <el-tag disable-transitions v-else-if="row.timing_actionable && !buyLocked(row)" class="status-tag" type="success" effect="dark"
                   title="结构入选后，盘中量价也已二次确认">量价已确认</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="代码" min-width="70">
+            <el-table-column label="代码" :width="colW[2]">
               <template #default="{ row }"><span class="muted-num">{{ row.symbol }}</span></template>
             </el-table-column>
-            <el-table-column label="行业/板块" min-width="90">
+            <el-table-column label="行业/板块" :width="colW[3]">
               <template #default="{ row }">{{ row.industry || row.board || '-' }}</template>
             </el-table-column>
-            <el-table-column label="现价" min-width="72">
+            <el-table-column label="现价" :width="colW[4]">
               <template #default="{ row }">{{ formatNumber(row.close) }}</template>
             </el-table-column>
-            <el-table-column label="今日涨跌" min-width="82">
+            <el-table-column label="今日涨跌" :width="colW[5]">
               <template #default="{ row }">
                 <span :class="changeClass(row.pct_chg)">{{ signedPercent(row.pct_chg) }}</span>
               </template>
             </el-table-column>
             <!-- 首推价／首推后：当日涨跌幅里混着「开盘到上榜之间」那一段，用户根本没机会参与。
                  只有从上榜那一刻起算的这个数，才是跟着名单做能拿到的结果。 -->
-            <el-table-column label="首推价" min-width="100">
+            <el-table-column label="首推价" :width="colW[6]">
               <template #default="{ row }">
                 <template v-if="row.first_price">
                   {{ formatNumber(row.first_price) }}
@@ -453,7 +453,7 @@
                 <span v-else class="panel-pending">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="首推后" min-width="76">
+            <el-table-column label="首推后" :width="colW[7]">
               <template #default="{ row }">
                 <span v-if="row.since_first_pct != null" :class="changeClass(row.since_first_pct)">
                   {{ signedPercent(row.since_first_pct) }}
@@ -466,30 +466,30 @@
             <!-- 「形态·强度」「入选理由」两列（合计 550px）合成一列，只放决策要看的：风险警示、
                  追高程度、最强的一个形态；其余折成 +N，点开就是理由抽屉（那里列全）。
                  以前 13 列约 1620px，1440 宽的笔记本只能横向滚，右侧固定列还盖住内容。 -->
-            <el-table-column label="关键依据" min-width="230" class-name="evidence-col">
+            <el-table-column label="关键依据" :width="colW[8]" class-name="evidence-col">
               <template #default="{ row }">
                 <el-tooltip v-for="f in row.risk_flags || []" :key="f.key" :content="f.reason" placement="top">
-                  <el-tag class="capability-tag" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="dark">⚠ {{ f.name }}</el-tag>
+                  <el-tag disable-transitions class="capability-tag" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="dark">⚠ {{ f.name }}</el-tag>
                 </el-tooltip>
-                <el-tag v-if="row.entry_position?.ret20 != null" class="capability-tag"
+                <el-tag disable-transitions v-if="row.entry_position?.ret20 != null" class="capability-tag"
                   :type="row.entry_position.ret20 >= 15 ? 'danger' : 'info'" effect="plain"
                   title="入选前近 20 个交易日的涨幅。已涨得多说明启动早、追高风险大">
                   近20日 {{ signedPercent(row.entry_position.ret20) }}
                 </el-tag>
                 <el-tooltip v-if="row.earnings" placement="top"
                   :content="`${row.earnings.ann_date} 公告。历史回测（2020 起）：公告后持有 60 个交易日，比同等涨幅、同等成交额的股票平均多 2~3 个百分点；5 天内没有优势。是中线倾斜，不是短线信号，不参与排序。`">
-                  <el-tag class="capability-tag" type="success" effect="plain">{{ row.earnings.label }}</el-tag>
+                  <el-tag disable-transitions class="capability-tag" type="success" effect="plain">{{ row.earnings.label }}</el-tag>
                 </el-tooltip>
-                <el-tag v-if="topPattern(row)" class="capability-tag" type="primary" effect="plain" :title="topPattern(row)?.reason">
+                <el-tag disable-transitions v-if="topPattern(row)" class="capability-tag" type="primary" effect="plain" :title="topPattern(row)?.reason">
                   {{ topPattern(row)?.name }}
                 </el-tag>
-                <el-tag v-if="moreEvidenceCount(row) > 0" class="capability-tag more-tag" effect="plain"
+                <el-tag disable-transitions v-if="moreEvidenceCount(row) > 0" class="capability-tag more-tag" effect="plain"
                   style="cursor: pointer" @click="openWhy(row, 'smart')">
                   +{{ moreEvidenceCount(row) }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="170" fixed="right" class-name="ops-col">
+            <el-table-column label="操作" :width="colW[9]" fixed="right" class-name="ops-col">
               <template #default="{ row }">
                 <el-button type="primary" link size="small" @click="addOneToFavorites(row)">加入自选</el-button>
                 <el-button link type="primary" size="small" @click="openChart(row)">看图</el-button>
@@ -529,7 +529,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 defineOptions({ name: 'QuantPage' })  // keep-alive 保活标识，勿改
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { DataLine, Search, TrendCharts } from '@element-plus/icons-vue'
@@ -619,6 +619,56 @@ const profileTone = computed(() => {
 const smartDisplayItems = computed(() => {
   const items = smartPoolResult.value?.items || []
   return smartDualOnly.value ? items.filter((it) => it.dual_confirm) : items
+})
+
+// 列宽 = 该列最宽的内容 + 统一列距（2026-10-08 Allen：列与列之间的空隙要处处相等）。
+// 按比例分剩余宽度做不到这一点：内容短的列空出一大截、长的贴着走，评分↔股名和股名↔代码一紧一松。
+// 顺序：综合分、名称、代码、行业、现价、今日涨跌、首推价、首推后、关键依据、操作（勾选列固定 40）。
+const COL_DEFAULT = [70, 116, 70, 90, 72, 82, 100, 76, 230, 170]
+const EVIDENCE_MAX = 280   // 关键依据太长就省略，完整内容在「理由」里
+const MIN_GAP = 26         // 不能小于单元格左右内边距之和（24），否则内容会被截断
+const colW = ref<number[]>([...COL_DEFAULT])
+// 内容实际占的宽度：文字片段 + 标签等子元素的外框（被省略号裁掉的部分也算进来）
+const textWidth = (el: Element) => {
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  const rects = [...range.getClientRects(), ...[...el.querySelectorAll('*')].map((c) => c.getBoundingClientRect())]
+  let lo = Infinity
+  let hi = -Infinity
+  for (const r of rects) {
+    if (r.width > 0) { lo = Math.min(lo, r.left); hi = Math.max(hi, r.right) }
+  }
+  return hi > lo ? hi - lo : 0
+}
+function layoutSmartColumns() {
+  const root: HTMLElement | undefined = smartTableRef.value?.$el
+  const header = root?.querySelector('.el-table__header-wrapper tr')
+  const rows = root?.querySelectorAll('.el-table__body-wrapper .el-table__row')
+  const body = root?.querySelector('.el-table__body-wrapper') as HTMLElement | null
+  if (!root || !header || !rows?.length || !body) return
+  const content = COL_DEFAULT.map(() => 0)
+  const scan = (tr: Element) => {
+    const cells = tr.querySelectorAll('.cell')
+    content.forEach((_, i) => { if (cells[i + 1]) content[i] = Math.max(content[i], textWidth(cells[i + 1])) })
+  }
+  scan(header)
+  rows.forEach(scan)
+  content[8] = Math.min(content[8], EVIDENCE_MAX)
+  const gap = Math.max(MIN_GAP, (body.clientWidth - 40 - content.reduce((a, b) => a + b, 0)) / content.length)
+  const next = content.map((c) => Math.floor(c + gap))
+  if (next.some((w, i) => w !== colW.value[i])) colW.value = next
+}
+let smartColumnObserver: ResizeObserver | undefined
+// 名单每 30 秒原地刷新，要深监听；字体加载完宽度会变，再量一次。
+// 表内标签关掉了出场动画：el-tag 默认从 scale(0) 放大进场，刚渲染时量出来宽度是 0。
+watch(smartDisplayItems, () => nextTick(layoutSmartColumns), { flush: 'post', deep: true })
+document.fonts?.ready.then(() => layoutSmartColumns())
+watch(smartTableRef, (table) => {
+  smartColumnObserver?.disconnect()
+  if (!table?.$el) return
+  smartColumnObserver = new ResizeObserver(() => layoutSmartColumns())
+  smartColumnObserver.observe(table.$el)
+  nextTick(layoutSmartColumns)
 })
 const smartElapsed = ref(0)
 let smartProgressTimer: number | undefined
@@ -920,6 +970,7 @@ onMounted(async () => {
   refreshDataHealth(true)
 })
 onUnmounted(() => {
+  smartColumnObserver?.disconnect()
   stickyHeadObserver?.disconnect()
   if (syncTimer) window.clearTimeout(syncTimer)
   if (smartLiveTimer) window.clearInterval(smartLiveTimer)
@@ -2009,16 +2060,12 @@ const openChart = async (row: any) => {
 /* 宽屏多出的宽度按 min-width 比例分给各列，而不是全堆进关键依据造成中间一大片空白；
    关键依据与左边数字列隔开，标签不换行保证每行等高 */
 .smart-pool-table :deep(.evidence-col .cell) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 2026-10-08 Allen：铺满整版、每格一行、统一左对齐与 12px 内边距；股名不加粗。 */
-.smart-pool-table :deep(.cell) { padding-left: 12px; padding-right: 12px; font-size: 14px; }
-.smart-pool-table :deep(th .cell) { font-size: 13px; }
-.smart-pool-table :deep(.score-pct) { font-size: 12px; }
-.smart-pool-table :deep(.capability-tag) { font-size: 12px; }
+/* 2026-10-08 Allen：铺满整版、每格一行、统一左对齐与 12px 内边距；字号字重与涨停明细表一致（12px、不加粗）。 */
+.smart-pool-table :deep(.cell) { padding-left: 12px; padding-right: 12px; }
 .smart-pool-table :deep(.ops-col .cell) { white-space: nowrap; }
 .smart-pool-table :deep(td .cell) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pick-name { font-weight: 400; color: var(--el-text-color-primary); margin-right: 6px; }
-.muted-num { color: var(--el-text-color-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
-.smart-pool-table :deep(.ops-col .el-button) { font-size: 13px; }
+.pick-name { margin-right: 6px; }
+.muted-num { color: var(--el-text-color-secondary); font-variant-numeric: tabular-nums; }
 .smart-pool-table :deep(.ops-col .el-button + .el-button) { margin-left: 10px; }
 .smart-pool-table :deep(.evidence-col .capability-tag) { margin-bottom: 0; }
 .status-tag { height: 16px; padding: 0 4px; font-size: 11px; line-height: 14px; }

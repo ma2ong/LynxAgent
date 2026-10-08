@@ -15,7 +15,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import type { ECharts } from 'echarts/core'
 
 echarts.use([
-  // 按需引入时 labelLayout（hideOverlap 等）不注册就被静默忽略：板块轮动图的名字曾互相压字
+  // 按需引入时 labelLayout（hideOverlap 等）不注册就被静默忽略
   LabelLayout,
   BarChart,
   CandlestickChart,

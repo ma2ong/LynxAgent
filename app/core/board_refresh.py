@@ -330,11 +330,11 @@ async def _refresh_cycle() -> None:
         return
     await _safe("heatmap", ins.lite_heatmap("industry"))
 
-    # 4.5) 板块轮动（RRG）：纯日线，一个交易日只变一次，所以命中当日缓存就直接返回，
-    #      真正的重算每天只发生一次。放在热力图之后，两者共用同一批日线页缓存。
+    # 4.5) 板块轮动数据（个股深研「按赛道浏览龙头」用）：纯日线，一个交易日只变一次，
+    #      命中当日缓存就直接返回，真正的重算每天只发生一次。
     if not _has_memory_budget("sector-rotation"):
         return
-    await _safe("sector-rotation", ins.lite_sector_rotation())
+    await _safe("sector-rotation", ins.warm_sector_rotation())
     if not _has_memory_budget("breadth"):
         return
     await _safe("breadth", ins.lite_breadth())

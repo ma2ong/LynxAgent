@@ -140,11 +140,16 @@ $env:USE_MONGODB_STORAGE = "false"
 $env:NO_PROXY = "localhost,127.0.0.1,.eastmoney.com,eastmoney.com,.sina.com.cn,sina.com.cn,sinajs.cn,.sse.com.cn,sse.com.cn,.szse.cn,szse.cn,csindex.com.cn,gtimg.cn,qt.gtimg.cn,.163.com,163.com,baostock.com,tushare.pro,cninfo.com.cn,akfamily.xyz"
 $env:no_proxy = $env:NO_PROXY
 
-Start-Process -FilePath $python `
+$backend = Start-Process -FilePath $python `
     -ArgumentList "-m", "uvicorn", "app.lite_main:app", "--host", "127.0.0.1", "--port", "8001" `
     -WorkingDirectory $root `
     -RedirectStandardOutput (Join-Path $root "backend.out.log") `
     -RedirectStandardError (Join-Path $root "backend.err.log") `
-    -WindowStyle Hidden
+    -WindowStyle Hidden -PassThru
+
+# Task Scheduler runs tasks at priority 7 (BelowNormal) and the backend inherits it,
+# so any ordinary job on this machine starves the site (2026-10-08: three unrelated
+# scripts pinned the CPU and /api/auth/me took 6.5s). Child workers inherit Normal.
+try { $backend.PriorityClass = 'Normal' } catch { }
 
 exit 0

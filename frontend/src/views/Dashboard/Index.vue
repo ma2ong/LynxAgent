@@ -70,9 +70,9 @@
             <path class="gauge-band gauge-danger" pathLength="100" d="M 18 108 A 92 92 0 0 1 202 108" />
             <path class="gauge-band gauge-extreme" pathLength="100" d="M 18 108 A 92 92 0 0 1 202 108" />
             <g class="risk-needle" :style="{ transform: `rotate(${riskNeedleAngle}deg)` }">
-              <path d="M 110 108 L 187 108" />
-              <circle cx="110" cy="108" r="7" />
-              <circle cx="110" cy="108" r="2.5" />
+              <!-- 指针只画在弧附近，中心留给分数：从圆心画出去的长针分数在 30~70 时正好穿过数字 -->
+              <path d="M 170 108 L 184 108" />
+              <circle cx="202" cy="108" r="7" />
             </g>
             <text class="gauge-score" x="110" y="78" text-anchor="middle">{{ riskScore }}</text>
             <text class="gauge-unit" x="110" y="96" text-anchor="middle">风险 / 100</text>
@@ -547,8 +547,7 @@ onUnmounted(stopHeroPolling)
   transform-origin: 110px 108px;
   transition: transform .65s cubic-bezier(.2, .8, .2, 1);
   path { fill: none; stroke: var(--risk-accent); stroke-width: 3; stroke-linecap: round; }
-  circle:first-of-type { fill: var(--risk-accent); }
-  circle:last-of-type { fill: #fff; }
+  circle { fill: #fff; stroke: var(--risk-accent); stroke-width: 3; }
 }
 .gauge-score {
   fill: var(--risk-accent);

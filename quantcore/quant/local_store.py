@@ -1174,7 +1174,8 @@ class LocalQuantStore:
                     rets[f"excess_t{h}"] = None
             detail.append({
                 "pick_date": pick_date, "pool": pool_name, "symbol": symbol, "name": name,
-                "score": _f(score), "rank": int(rank or 0), "base_close": round(base, 2),
+                # 盘中后进榜的票没有开盘那份留痕，也就没有评分：给空，别显示成 0 分
+                "score": _f(score) if score is not None else None, "rank": int(rank or 0), "base_close": round(base, 2),
                 "patterns": str(patterns_str or ""), **rets,
             })
             bucket = agg.setdefault(str(pool_name), {h: [] for h in horizons})

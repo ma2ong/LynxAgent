@@ -400,5 +400,6 @@ def test_smart_review_counts_every_name_users_saw(store):
     late = next(i for i in day1 if i["symbol"] == "600002")
     assert late["base_close"] == 21.0                         # 从首推价起算，不是收盘
     assert late["rank"] == 2                                  # 按上榜先后
+    assert late["score"] is None                              # 没有开盘留痕就没有评分，不显示 0
     assert late["t1"] == pytest.approx((20.0 / 21.0 - 1) * 100, abs=0.01)
     assert [i["symbol"] for i in stats["items"] if i["pick_date"] == dates[0]] == ["600001"]

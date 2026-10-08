@@ -108,7 +108,9 @@
         <el-table-column label="股票" min-width="130">
           <template #default="{ row }">{{ row.name }} <small class="muted">{{ row.symbol }}</small></template>
         </el-table-column>
-        <el-table-column prop="score" label="评分" width="70" />
+        <el-table-column prop="score" label="评分" width="70">
+          <template #default="{ row }">{{ row.score ?? '—' }}</template>
+        </el-table-column>
         <el-table-column prop="rank" label="名次" width="60" />
         <el-table-column prop="base_close" label="留痕价" width="80" />
         <el-table-column v-for="h in horizons" :key="h.key" :label="h.label" width="90">

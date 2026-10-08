@@ -6,7 +6,7 @@
       <el-table-column prop="used_today" label="今日用量" width="90" />
       <el-table-column prop="used_total" label="累计" width="80" />
       <el-table-column prop="last_login" label="最近登录" width="170">
-        <template #default="{ row }">{{ (row.last_login || '').slice(0, 16) || '—' }}</template>
+        <template #default="{ row }">{{ fmtLogin(row.last_login) }}</template>
       </el-table-column>
       <el-table-column label="操作" width="110" fixed="right">
         <template #default="{ row }">
@@ -36,6 +36,15 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+// 库里存的是 UTC ISO（带 T），直接截取会比北京时间慢 8 小时
+function fmtLogin(value: string | null) {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value.slice(0, 16)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
 async function toggleActive(row: AdminUser) {

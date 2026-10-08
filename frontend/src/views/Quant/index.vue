@@ -412,20 +412,23 @@
                  量它有没有预测力 —— 有就加权重，没有就删干净。 -->
             <!-- 代码并入名称列；「三重/双确认」徽标移进理由抽屉：14/20 只都带，红底紧贴股名
                  像是强烈推荐，而这个组合没有单独验证过收益（2026-09-28）。 -->
-            <el-table-column label="名称" width="104">
+            <!-- 状态标签和代码同一行：单独占一行会让带标签的行比其他行高一截，整表参差（2026-10-08）。 -->
+            <el-table-column label="名称" min-width="130">
               <template #default="{ row }">
                 <b>{{ row.name }}</b>
-                <div class="score-pct">{{ row.symbol }}</div>
-                <el-tag v-if="row.timing_status === 'blocked'" size="small" type="danger" effect="plain"
-                  title="已涨停或距离涨停过近，等回落并重新出现量价确认">不可追入</el-tag>
-                <el-tag v-else-if="row.timing_actionable && !buyLocked(row)" size="small" type="success" effect="dark"
-                  title="结构入选后，盘中量价也已二次确认">量价已确认</el-tag>
+                <div class="score-pct name-sub">
+                  {{ row.symbol }}
+                  <el-tag v-if="row.timing_status === 'blocked'" class="status-tag" type="danger" effect="plain"
+                    title="已涨停或距离涨停过近，等回落并重新出现量价确认">不可追入</el-tag>
+                  <el-tag v-else-if="row.timing_actionable && !buyLocked(row)" class="status-tag" type="success" effect="dark"
+                    title="结构入选后，盘中量价也已二次确认">量价已确认</el-tag>
+                </div>
               </template>
             </el-table-column>
-            <el-table-column label="行业/板块" width="150">
+            <el-table-column label="行业/板块" min-width="130">
               <template #default="{ row }">{{ row.industry || row.board || '-' }}</template>
             </el-table-column>
-            <el-table-column label="现价 / 今日" width="84" align="right">
+            <el-table-column label="现价 / 今日" min-width="90" align="center">
               <template #default="{ row }">
                 <b>{{ formatNumber(row.close) }}</b>
                 <div :class="changeClass(row.pct_chg)">{{ signedPercent(row.pct_chg) }}</div>
@@ -433,7 +436,7 @@
             </el-table-column>
             <!-- 首推价／首推后：当日涨跌幅里混着「开盘到上榜之间」那一段，用户根本没机会参与。
                  只有从上榜那一刻起算的这个数，才是跟着名单做能拿到的结果。 -->
-            <el-table-column label="首推价" width="94" align="right">
+            <el-table-column label="首推价" min-width="90" align="center">
               <template #default="{ row }">
                 <template v-if="row.first_price">
                   <b>{{ formatNumber(row.first_price) }}</b>
@@ -442,7 +445,7 @@
                 <span v-else class="panel-pending">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="首推后" width="80" align="right">
+            <el-table-column label="首推后" min-width="80" align="center">
               <template #default="{ row }">
                 <span v-if="row.since_first_pct != null" :class="changeClass(row.since_first_pct)">
                   {{ signedPercent(row.since_first_pct) }}
@@ -455,7 +458,7 @@
             <!-- 「形态·强度」「入选理由」两列（合计 550px）合成一列，只放决策要看的：风险警示、
                  追高程度、最强的一个形态；其余折成 +N，点开就是理由抽屉（那里列全）。
                  以前 13 列约 1620px，1440 宽的笔记本只能横向滚，右侧固定列还盖住内容。 -->
-            <el-table-column label="关键依据" min-width="210">
+            <el-table-column label="关键依据" min-width="300" class-name="evidence-col">
               <template #default="{ row }">
                 <el-tooltip v-for="f in row.risk_flags || []" :key="f.key" :content="f.reason" placement="top">
                   <el-tag class="capability-tag" :type="f.level === 'risk' ? 'danger' : 'warning'" effect="dark">⚠ {{ f.name }}</el-tag>
@@ -474,7 +477,7 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="170" fixed="right">
+            <el-table-column label="操作" width="170" fixed="right" align="center">
               <template #default="{ row }">
                 <el-button type="primary" link size="small" @click="addOneToFavorites(row)">加入自选</el-button>
                 <el-button link type="primary" size="small" @click="openChart(row)">看图</el-button>
@@ -1990,6 +1993,12 @@ const openChart = async (row: any) => {
 .more-tag { opacity: .7; cursor: help; }
 .smart-pool-table :deep(.el-table__cell) { padding: 8px 0; }
 .smart-pool-table :deep(.cell) { line-height: 1.45; }
+/* 宽屏多出的宽度按 min-width 比例分给各列，而不是全堆进关键依据造成中间一大片空白；
+   关键依据与左边数字列隔开，标签不换行保证每行等高 */
+.smart-pool-table :deep(.evidence-col .cell) { padding-left: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.smart-pool-table :deep(.evidence-col .capability-tag) { margin-bottom: 0; }
+.name-sub { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.status-tag { height: 16px; padding: 0 4px; font-size: 11px; line-height: 14px; }
 
 /* 表头吸顶。表格不再限高（20 只全排在页面里，只留一条页面滚动条），滚到第 15 只时列名
    必须还在。el-table 默认 overflow:hidden，会把 sticky 锁死在自己盒子里，必须放开，

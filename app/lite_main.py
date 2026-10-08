@@ -1920,6 +1920,10 @@ async def _compute_lite_smart_pool_unlocked(
             # 「结构底池 日期」会如实标出它基于哪天。以前这里直接给空名单，每天 15 点后
             # 选股页空白十几分钟到一两个小时（2026-09-28 实测）。
             previous = _persistent_cache_latest(cache_prefix, cache_suffix, 4 * 86400)
+            if not _smart_pool_response_has_items(previous):
+                # 评分公式刚换代（cache key 版本号变了）：新名单算好前约 2 分钟没有同版本的
+                # 旧名单可端，先给上一版公式的，总比空页强；后台算完下一次请求就换新。
+                previous = _persistent_cache_latest("smart-pool:factor-", cache_suffix, 4 * 86400)
             if _smart_pool_response_has_items(previous):
                 return await _enrich_smart_pool_realtime(previous)
             # 彻底冷缓存：不现算(否则阻塞~100s)，返回 warming 占位，交给后台保温器算好。

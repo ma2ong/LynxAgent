@@ -669,3 +669,31 @@ def test_enriched_response_drops_candidates_but_cache_keeps_them():
 
     assert "structure_candidates" not in result["data"]
     assert len(response["data"]["structure_candidates"]) == 3
+
+
+def test_cache_only_serves_previous_version_list_after_formula_bump(monkeypatch):
+    """换评分公式要换 cache key（防止旧公式名单冒充新的），但换代后到新名单算好之前
+    约 2 分钟，进页面是空白。这段时间先端出上一版公式的名单，总比空页强。"""
+    from app.core.market_data import _persistent_cache_set
+
+    class _Store:
+        def symbol_count(self):
+            return 5525
+
+        def latest_real_bar_date(self):
+            return "2026-10-08"
+
+    monkeypatch.setattr("quantcore.quant.local_store.get_local_store", lambda: _Store())
+    monkeypatch.setattr(lite_main, "_cache_get", lambda key, ttl: None)
+    # limit=19：独占一个缓存后缀，别读到同一临时库里其他用例写的 20 只名单
+    old_key = ("smart-pool:factor-v1-old-formula:0.0:2026-10-08:balanced:19:5525")
+    _persistent_cache_set(old_key, {"success": True, "data": {"items": [{"symbol": "600111"}],
+                                                             "daily_as_of": "2026-10-08"}})
+
+    async def passthrough(resp):
+        return resp
+
+    monkeypatch.setattr(lite_main, "_enrich_smart_pool_realtime", passthrough)
+    result = asyncio.run(lite_main._compute_lite_smart_pool_unlocked(
+        "balanced", 19, 10000, cache_only=True))
+    assert result["data"]["items"][0]["symbol"] == "600111"

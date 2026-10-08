@@ -583,6 +583,13 @@ def _fetch_cninfo_industry(symbol: str) -> str:
 
 
 async def _resolve_real_industry(symbol: str, name: str, event_labels: set[str]) -> str:
+    # 先查本地行业映射：毫秒级，且与热力图/板块轮动/板块动量因子是同一套分类。
+    # 原来逐只打 cninfo（0.5~2.4 秒/只，重启即失效），自选体检 44 只要 5 秒，
+    # 名单上的行业名还和热力图对不上（欣旺达这边叫「电子设备与仪器」，热力图里在「电池」）。
+    from quantcore.quant.industry import industry_map
+    mapped = industry_map().get(str(symbol).zfill(6))
+    if mapped:
+        return mapped
     if symbol in SMART_SYMBOL_THEMES:
         return SMART_SYMBOL_THEMES[symbol]
     cached = lite_industry_cache.get(symbol)

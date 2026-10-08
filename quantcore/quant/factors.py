@@ -360,13 +360,15 @@ def smart_factor_chunk(payload: Dict[str, object]) -> list:
 
 
 def risk_metrics(df: pd.DataFrame) -> Dict[str, float]:
-    data = enrich_indicators(df)
-    returns = data["ret"].dropna()
+    # 只要收益率和 60 日回撤两列，口径与 enrich_indicators 相同；不再整套重算指标
+    # （它是 compute_factor_scores 之外的第二遍，自选组合体检 44 只要多花 3 秒 CPU）。
+    close = df["close"]
+    returns = close.pct_change().dropna()
     if returns.empty:
         return {"volatility": 0.0, "max_drawdown": 0.0, "sharpe": 0.0}
 
     volatility = float(returns.std() * (252 ** 0.5))
-    max_drawdown = float(data["drawdown"].min())
+    max_drawdown = float((close / close.rolling(60, min_periods=1).max() - 1).min())
     sharpe = float((returns.mean() / returns.std()) * (252 ** 0.5)) if returns.std() else 0.0
     return {
         "volatility": round(volatility, 4),

@@ -479,6 +479,41 @@ def _attach_borrowed(df: pd.DataFrame) -> None:
     df["kh_2560"] = ma25_up & (df["close"] > ma25) & cross
 
 
+def _attach_lottery(df: pd.DataFrame) -> None:
+    """A 股文献里最稳的三类横截面异象（2026-10-08）：低波动、彩票效应（MAX）、非流动性。
+    全是只用过去 20 日的量，分位按交易日横截面算。"""
+    g = df.groupby("symbol", sort=False)
+    df["vol20"] = g["ret1"].transform(lambda s: s.rolling(20, min_periods=20).std())
+    df["max20"] = g["ret1"].transform(lambda s: s.rolling(20, min_periods=20).max())
+    illiq = df["ret1"].abs() / (df["amount"] / 1e8)
+    df["amihud20"] = illiq.groupby(df["symbol"], sort=False).transform(
+        lambda s: s.rolling(20, min_periods=20).mean())
+    for col in ("vol20", "max20", "amihud20"):
+        df[col + "_q"] = df.groupby("date")[col].rank(pct=True)
+
+
+def _attach_forecast(df: pd.DataFrame) -> None:
+    """业绩预告事件（2026-10-08）：公告日 D 映射到 ≤D 的最后一个交易日那一行，
+    配合 --entry open 即「公告后第一个开盘买」——盘后公告当晚就知道，周末公告周一买。
+    数据先跑 experiments/fetch_forecasts.py；没有缓存文件时这些列全空，规则命中 0 笔。"""
+    path = os.path.join(HERE, ".cache", "forecasts.csv")
+    df["fc_type"] = ""
+    df["fc_chg"] = np.nan
+    if not os.path.exists(path):
+        return
+    fc = pd.read_csv(path, dtype={"股票代码": str})
+    fc = fc[fc["预测指标"] == "归属于上市公司股东的净利润"]
+    fc = fc.assign(symbol=fc["股票代码"].str.zfill(6), ann=pd.to_datetime(fc["公告日期"], errors="coerce"))
+    fc = fc.dropna(subset=["ann"]).drop_duplicates(["symbol", "ann"], keep="last")
+    days = pd.DatetimeIndex(sorted(pd.to_datetime(df["date"].unique())))
+    pos = days.searchsorted(fc["ann"].values, side="right") - 1
+    fc = fc[pos >= 0].assign(date=days[pos[pos >= 0]].strftime("%Y-%m-%d"))
+    fc = fc.drop_duplicates(["symbol", "date"], keep="last").set_index(["symbol", "date"])
+    key = pd.MultiIndex.from_arrays([df["symbol"], df["date"]])
+    df["fc_type"] = fc["预告类型"].reindex(key).fillna("").to_numpy()
+    df["fc_chg"] = pd.to_numeric(fc["业绩变动幅度"], errors="coerce").reindex(key).to_numpy()
+
+
 def _attach_regime(df: pd.DataFrame) -> None:
     """挂上每个交易日的大盘环境标签（偏暖 / 中性 / 偏冷）。
 
@@ -586,6 +621,8 @@ def build_panel(db: str, since: str, horizon: int, entry: str = "close") -> pd.D
     _attach_path(df)
     _attach_borrowed(df)
     _attach_regime(df)
+    _attach_lottery(df)
+    _attach_forecast(df)
 
     df = df[df["fwd_excess"].notna()]
     df = df[(df["amount"] >= MIN_AMOUNT) & (df["close"] >= MIN_PRICE)]
@@ -997,6 +1034,22 @@ RULES = {
                         lambda d: d["high_tight_flag"]),
     "kh_2560": ("KHunter 2560：25日线向上价在线上 + 5日均量上穿60日均量",
                 lambda d: d["kh_2560"]),
+    # ---- A 股横截面异象族（2026-10-08）：低波 / 彩票效应 / 非流动性，各带反向对照，一起过 Holm。
+    "lowvol": ("近20日日收益波动率最低 20%", lambda d: d["vol20_q"] <= 0.2),
+    "highvol": ("近20日波动率最高 20%——反向对照", lambda d: d["vol20_q"] >= 0.8),
+    "low_max": ("近20日最大单日涨幅最低 20%（非彩票股）", lambda d: d["max20_q"] <= 0.2),
+    "high_max": ("近20日最大单日涨幅最高 20%（彩票股）——反向对照", lambda d: d["max20_q"] >= 0.8),
+    "illiquid": ("Amihud 非流动性最高 20%", lambda d: d["amihud20_q"] >= 0.8),
+    "lowvol_sector": ("低波 + 板块20日动量前20%", lambda d: (d["vol20_q"] <= 0.2) & (d["sec_mom20_q"] >= 0.8)),
+    "lowvol_trend": ("低波 + 价在50日线上且线向上",
+                     lambda d: (d["vol20_q"] <= 0.2) & (d["dist_ma50"] > 0) & (d["ma50_slope"] > 0)),
+    # ---- 业绩预告漂移（2026-10-08）：股价之外的新信息源，四条一起过 Holm。
+    "fc_beat": ("业绩预告预增/扭亏且净利变动≥50%", lambda d: d["fc_type"].isin(["预增", "扭亏"]) & (d["fc_chg"] >= 50)),
+    "fc_mild": ("业绩预告略增/续盈", lambda d: d["fc_type"].isin(["略增", "续盈"])),
+    "fc_beat_quiet": ("预增≥50% 且公告前近20日涨幅<10%（还没被炒）",
+                      lambda d: d["fc_type"].isin(["预增", "扭亏"]) & (d["fc_chg"] >= 50) & (d["prior_ret20"] < 10)),
+    "fc_bad": ("业绩预告预减/首亏/续亏/增亏——反向对照",
+               lambda d: d["fc_type"].isin(["预减", "首亏", "续亏", "增亏"])),
     "maxvol_down": ("近 60 日天量那天收阴（疑似派发）", lambda d: d["maxvol60_down"]),
     "maxvol_up": ("近 60 日天量那天收阳（派发判据的另一侧）",
                   lambda d: d["maxvol60_valid"] & ~d["maxvol60_down"]),

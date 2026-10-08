@@ -377,6 +377,7 @@
                 <el-tag v-if="row.entry_position?.ret20 != null" class="capability-tag" :type="row.entry_position.ret20 >= 15 ? 'danger' : 'info'" effect="plain">
                   近20日 {{ signedPercent(row.entry_position.ret20) }}
                 </el-tag>
+                <el-tag v-if="row.earnings" class="capability-tag" type="success" effect="plain">{{ row.earnings.label }}</el-tag>
                 <el-tag v-if="topPattern(row)" class="capability-tag" type="primary" effect="plain">{{ topPattern(row)?.name }}</el-tag>
               </div>
               <div class="pc-actions">
@@ -472,6 +473,10 @@
                   title="入选前近 20 个交易日的涨幅。已涨得多说明启动早、追高风险大">
                   近20日 {{ signedPercent(row.entry_position.ret20) }}
                 </el-tag>
+                <el-tooltip v-if="row.earnings" placement="top"
+                  :content="`${row.earnings.ann_date} 公告。历史回测（2020 起）：公告后持有 60 个交易日，比同等涨幅、同等成交额的股票平均多 2~3 个百分点；5 天内没有优势。是中线倾斜，不是短线信号，不参与排序。`">
+                  <el-tag class="capability-tag" type="success" effect="plain">{{ row.earnings.label }}</el-tag>
+                </el-tooltip>
                 <el-tag v-if="topPattern(row)" class="capability-tag" type="primary" effect="plain" :title="topPattern(row)?.reason">
                   {{ topPattern(row)?.name }}
                 </el-tag>

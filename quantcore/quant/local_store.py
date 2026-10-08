@@ -52,6 +52,15 @@ CREATE TABLE IF NOT EXISTS fundamental_flags (
     period TEXT,
     updated_at TEXT
 );
+-- 正面业绩预告事件（2026-10-08）：只用来给智选打「业绩预增」标签，不进排序。
+CREATE TABLE IF NOT EXISTS forecast_events (
+    symbol TEXT,
+    ann_date TEXT,
+    period TEXT,
+    forecast_type TEXT,
+    change REAL,
+    PRIMARY KEY (symbol, ann_date, period)
+);
 CREATE TABLE IF NOT EXISTS picks_history (
     pick_date TEXT,
     pool TEXT,
@@ -1331,6 +1340,24 @@ class LocalQuantStore:
         )
         conn.commit()
 
+    def upsert_forecast_events(self, rows: List[Dict[str, object]]) -> None:
+        """rows: [{symbol, ann_date(YYYY-MM-DD), period, forecast_type, change(%)}]"""
+        conn = self._conn()
+        conn.executemany(
+            "INSERT OR REPLACE INTO forecast_events(symbol,ann_date,period,forecast_type,change) "
+            "VALUES(?,?,?,?,?)",
+            [(str(r["symbol"]).zfill(6), str(r["ann_date"])[:10], str(r.get("period") or ""),
+              str(r.get("forecast_type") or ""), r.get("change")) for r in rows],
+        )
+        conn.commit()
+
+    def load_recent_forecasts(self, since: str) -> Dict[str, Dict[str, object]]:
+        """since 之后公告的正面预告，每只取最近一次。"""
+        rows = self._conn().execute(
+            "SELECT symbol, ann_date, forecast_type, change FROM forecast_events "
+            "WHERE ann_date >= ? ORDER BY ann_date", (since,)).fetchall()
+        return {str(r[0]): {"ann_date": r[1], "forecast_type": r[2], "change": r[3]} for r in rows}
+
     def load_bad_forecast_symbols(self) -> set:
         cur = self._conn().execute("SELECT symbol FROM fundamental_flags WHERE bad_forecast=1")
         return {row[0] for row in cur.fetchall()}
@@ -1532,3 +1559,30 @@ def get_local_store() -> LocalQuantStore:
             if _store_singleton is None:
                 _store_singleton = LocalQuantStore()
     return _store_singleton
+
+
+# 业绩预告标签的过闸口径（experiments/rule_audit.py fc_beat / fc_mild，T+60 过七闸）。
+FORECAST_TAG_WINDOW_DAYS = 56      # ≈40 个交易日：晚买 5~39 个交易日仍 +2pp，再往后没验证过
+
+
+def forecast_tag(event: Optional[Dict[str, object]]) -> Optional[Dict[str, object]]:
+    """正面业绩预告 → 标签；不在过闸口径里（预增不到 50%、负面类型）返回 None。"""
+    if not event:
+        return None
+    kind = str(event.get("forecast_type") or "")
+    change = event.get("change")
+    try:
+        change = float(change) if change is not None else None
+    except (TypeError, ValueError):
+        change = None
+    if kind == "预增" and change is not None and change >= 50:
+        label = f"业绩预增 +{change:.0f}%"
+    elif kind == "扭亏" and change is not None and change >= 50:
+        label = "业绩扭亏"          # 由亏转盈，百分比读起来没意义，但口径与审计一致仍要求 ≥50
+    elif kind == "略增":
+        label = f"业绩略增 +{change:.0f}%" if change is not None else "业绩略增"
+    elif kind == "续盈":
+        label = "业绩续盈"
+    else:
+        return None
+    return {"label": label, "forecast_type": kind, "change": change, "ann_date": event.get("ann_date")}

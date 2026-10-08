@@ -261,6 +261,35 @@ class MarketSyncService:
                 return rows
         return []
 
+    def _fetch_forecast_events(self) -> List[Dict[str, object]]:
+        """最近两个报告期的正面业绩预告（只取归母净利润口径），给智选打「业绩预增」标签用。"""
+        import akshare as ak
+
+        today = date.today()
+        ends = [f"{y}{md}" for y in (today.year, today.year - 1) for md in ("1231", "0930", "0630", "0331")]
+        periods = sorted((p for p in ends if p <= today.strftime("%Y%m%d")), reverse=True)[:2]
+        rows: List[Dict[str, object]] = []
+        for period in periods:
+            try:
+                df = ak.stock_yjyg_em(date=period)
+            except Exception as exc:  # noqa: BLE001 — 外部源失败只影响标签，记下原因
+                self._progress["last_error"] = ("forecast events: " + str(exc))[:200]
+                continue
+            if df is None or df.empty or "预告类型" not in df.columns:
+                continue
+            df = df[(df["预测指标"] == "归属于上市公司股东的净利润")
+                    & df["预告类型"].isin(["预增", "扭亏", "略增", "续盈"])]
+            for _, row in df.iterrows():
+                code = str(row.get("股票代码") or "").zfill(6)
+                ann = str(row.get("公告日期") or "")[:10]
+                if not code.isdigit() or len(ann) != 10:
+                    continue
+                chg = pd.to_numeric(row.get("业绩变动幅度"), errors="coerce")
+                rows.append({"symbol": code, "ann_date": ann, "period": period,
+                             "forecast_type": str(row["预告类型"]),
+                             "change": None if pd.isna(chg) else float(chg)})
+        return rows
+
     def status(self) -> Dict[str, object]:
         status = dict(self._progress)
         try:
@@ -444,6 +473,12 @@ class MarketSyncService:
                     self.store.upsert_fundamental_flags(flags)
             except Exception as exc:
                 self._progress["last_error"] = ("fundamental: " + str(exc))[:200]
+            try:
+                events = self._fetch_forecast_events()
+                if events:
+                    self.store.upsert_forecast_events(events)
+            except Exception as exc:  # noqa: BLE001
+                self._progress["last_error"] = ("forecast events: " + str(exc))[:200]
 
             key = "last_full_sync" if full else "last_incremental_sync"
             self.store.set_state(key, datetime.now().isoformat(timespec="seconds"))

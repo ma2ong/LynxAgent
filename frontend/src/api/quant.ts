@@ -121,6 +121,8 @@ export interface QuantSmartPoolItem {
   dual_confirm?: boolean
   triple_confirm?: boolean
   confluence_tags?: string[]
+  /** 近 ~40 个交易日内的正面业绩预告（只展示、不进排序） */
+  earnings?: { label: string; forecast_type: string; change: number | null; ann_date: string } | null
 }
 
 export interface RiskFlag {

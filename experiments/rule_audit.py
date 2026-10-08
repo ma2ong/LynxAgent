@@ -512,6 +512,12 @@ def _attach_forecast(df: pd.DataFrame) -> None:
     key = pd.MultiIndex.from_arrays([df["symbol"], df["date"]])
     df["fc_type"] = fc["预告类型"].reindex(key).fillna("").to_numpy()
     df["fc_chg"] = pd.to_numeric(fc["业绩变动幅度"], errors="coerce").reindex(key).to_numpy()
+    # 距最近一次「强预增」公告过了几个交易日（含当天 = 0）。用来问「晚几天买还剩多少」：
+    # 产品如果做成滚动名单，用户多半是在公告后若干天才看到。
+    beat = (df["fc_type"].isin(["预增", "扭亏"]) & (df["fc_chg"] >= 50)).astype(float)
+    pos = df.groupby("symbol", sort=False).cumcount()
+    last = pos.where(beat > 0).groupby(df["symbol"], sort=False).ffill()
+    df["fc_beat_age"] = pos - last
 
 
 def _attach_regime(df: pd.DataFrame) -> None:
@@ -1048,6 +1054,9 @@ RULES = {
     "fc_mild": ("业绩预告略增/续盈", lambda d: d["fc_type"].isin(["略增", "续盈"])),
     "fc_beat_quiet": ("预增≥50% 且公告前近20日涨幅<10%（还没被炒）",
                       lambda d: d["fc_type"].isin(["预增", "扭亏"]) & (d["fc_chg"] >= 50) & (d["prior_ret20"] < 10)),
+    # 晚买多少天还有效（2026-10-08，T+60 过闸后追问）：公告后第 5~19 / 20~39 个交易日才买。
+    "fc_beat_lag5": ("强预增公告后第 5~19 个交易日买入", lambda d: d["fc_beat_age"].between(5, 19)),
+    "fc_beat_lag20": ("强预增公告后第 20~39 个交易日买入", lambda d: d["fc_beat_age"].between(20, 39)),
     "fc_bad": ("业绩预告预减/首亏/续亏/增亏——反向对照",
                lambda d: d["fc_type"].isin(["预减", "首亏", "续亏", "增亏"])),
     "maxvol_down": ("近 60 日天量那天收阴（疑似派发）", lambda d: d["maxvol60_down"]),

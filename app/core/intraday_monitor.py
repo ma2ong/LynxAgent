@@ -417,7 +417,7 @@ async def scan_once(force: bool = False) -> dict[str, Any]:
         try:
             return await _closed_payload(now, force)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("intraday closing review failed: %s", exc)
+            logger.warning("intraday closing review failed: %r", exc)
             _latest = {
                 **_latest,
                 "status": "degraded",
@@ -443,7 +443,7 @@ async def scan_once(force: bool = False) -> dict[str, Any]:
             _latest["scan_interval_sec"] = int(scan_interval_seconds())
             return _latest
         except Exception as exc:  # noqa: BLE001
-            logger.warning("intraday signal scan failed: %s", exc)
+            logger.warning("intraday signal scan failed: %r", exc)  # %r：超时异常的 str 是空的
             _latest = {
                 **_latest,
                 "status": "degraded",

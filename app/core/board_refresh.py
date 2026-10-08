@@ -94,7 +94,7 @@ async def _maybe_auto_sync() -> bool:
         # status() 要查日线库（冷缓存时 1~3 秒），放线程里，别在事件循环上同步查库
         status = await asyncio.to_thread(svc.status)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("board refresh [auto-sync] status failed: %s", exc)
+        logger.warning("board refresh [auto-sync] status failed: %r", exc)
         return False
     if status.get("running"):
         return True
@@ -111,7 +111,7 @@ async def _maybe_auto_sync() -> bool:
         logger.info("board refresh [auto-sync] incremental sync started (stale local kline)")
         return True
     except Exception as exc:  # noqa: BLE001
-        logger.warning("board refresh [auto-sync] start failed: %s", exc)
+        logger.warning("board refresh [auto-sync] start failed: %r", exc)
         return False
 
 
@@ -180,7 +180,7 @@ async def _safe(name: str, coro) -> None:
     try:
         await task
     except Exception as exc:  # noqa: BLE001
-        logger.warning("board refresh [%s] failed: %s", name, exc)
+        logger.warning("board refresh [%s] failed: %r", name, exc)
     finally:
         watcher.cancel()
     total = time.monotonic() - started
@@ -299,7 +299,7 @@ async def _refresh_cycle() -> None:
     try:
         snapshot = await md._run_data_task(md._load_realtime_quotes_snapshot, 0, timeout=15.0) or {}
     except Exception as exc:  # noqa: BLE001
-        logger.warning("board refresh [snapshot] failed: %s", exc)
+        logger.warning("board refresh [snapshot] failed: %r", exc)
 
     # 2) 风险扫描（breakdown 破位广度 + 全市场卖出信号）→ 暖 _RISK_SCAN_CACHE
     #    紧跟快照：风险仪表的破位广度/龙头崩塌两项只读这份缓存，冷着时仪表少算约 20 分，
@@ -367,4 +367,4 @@ async def _refresh_cycle() -> None:
             if m._smart_pool_response_has_items(result):
                 _smart_pool_warm_date = bar_date
         except Exception as exc:  # noqa: BLE001
-            logger.warning("board refresh [smart-pool] failed: %s", exc)
+            logger.warning("board refresh [smart-pool] failed: %r", exc)

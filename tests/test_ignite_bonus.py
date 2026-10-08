@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""「地量点火」形态与排序加分的守卫测试。
+"""「地量点火」形态识别的守卫测试。
+
+2026-10-08 起排序加分已撤（5 周从未触发：这个形态和智选的追涨候选几乎不会同时出现），
+下面只钉形态口径本身——它仍作为形态标签显示。以下为原始背景：
 
 这条规则是 2026-09-03 Allen 拍板进排序的，而它的审计证据是**边缘**的：
 ig2_best 在 T+3 / T+1 开盘买入口径下，样本 6231 笔 / 1213 个交易日，匹配对照增量
@@ -16,7 +19,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import app.lite_main as lite_main
 from quantcore.quant.integrations import recognize_patterns
 
 
@@ -97,61 +99,6 @@ def test_window_closes_after_three_days():
     assert _ignite(_kline(extend=4)) is None
 
 
-# ---------- 排序加分的两道闸 ----------
-
-def _enrich(monkeypatch, *, sector_mom, extend=0):
-    df = _kline(extend=extend)
-    monkeypatch.setattr("quantcore.quant.data.load_local_kline",
-                        lambda symbol, days=540: df)
-    monkeypatch.setattr("quantcore.quant.relative_strength.compute_strength_metrics",
-                        lambda data: None)
-    monkeypatch.setattr("quantcore.quant.risk_check.check_risks",
-                        lambda *a, **k: {"risk_count": 0, "advice": "", "flags": []})
-    monkeypatch.setattr("quantcore.quant.industry.industry_map",
-                        lambda: {"000001": "测试板块"})
-    item = {"symbol": "000001", "name": "测试", "smart_score": 80.0}
-    lite_main._confluence_enrich_items([item], sector_mom)
-    return item
-
-
-def test_bonus_requires_hot_sector(monkeypatch):
-    """板块是必要条件不是装饰：去掉它，匹配增量从 +0.16 掉到 +0.03。"""
-    hot = _enrich(monkeypatch, sector_mom={"测试板块": 0.85})
-    assert hot["ignite"]["gated"] is True
-    assert hot["ignite"]["bonus"] == pytest.approx(lite_main.SMART_POOL_IGNITE_BONUS)
-    assert hot["confluence_bonus"] >= lite_main.SMART_POOL_IGNITE_BONUS
-
-    cold = _enrich(monkeypatch, sector_mom={"测试板块": 0.40})
-    assert cold["ignite"] is not None          # 形态照常显示
-    assert cold["ignite"]["gated"] is False    # 但不加分
-    assert cold["ignite"]["bonus"] == 0.0
-
-
-def test_missing_sector_data_gives_no_bonus(monkeypatch):
-    """板块缓存没就绪时按未过闸处理 —— 宁可少给分，不在数据缺失时白送。"""
-    item = _enrich(monkeypatch, sector_mom={})
-    assert item["ignite"]["gated"] is False
-    assert item["ignite"]["bonus"] == 0.0
-
-
-def test_bonus_only_on_ignition_day(monkeypatch):
-    """加分只给点火当日：审计口径是「点火日入选、T+1 开盘买」，
-    D+1 之后的收益不在那 6231 笔样本里，给分等于凭空外推。"""
-    item = _enrich(monkeypatch, sector_mom={"测试板块": 0.90}, extend=1)
-    assert item["ignite"]["days_since"] == 1
-    assert item["ignite"]["fresh"] is False
-    assert item["ignite"]["gated"] is False
-    assert item["ignite"]["bonus"] == 0.0
-
-
-def test_gated_pick_is_marked_for_later_review(monkeypatch):
-    """留痕只存形态名字。过闸的改名带「·过闸」，否则三四周后复判分不开
-    「真加了分的」和「只标注的」—— 而上线的全部理由就是等那次复判。"""
-    item = _enrich(monkeypatch, sector_mom={"测试板块": 0.85})
-    names = [p.get("name") for p in item["patterns"]]
-    assert "地量点火·过闸" in names
-
-
 def test_does_not_double_count_with_dryup_bonus():
     """与既有的 factors.dryup_bonus（地量埋伏）互斥，不会同日各加一次。
 
@@ -163,37 +110,3 @@ def test_does_not_double_count_with_dryup_bonus():
     assert _ignite(df) is not None
     # 同一根 K 线喂给地量埋伏：人气/板块给到最宽松，仍然不该给分
     assert dryup_bonus(df, industry_heat=100.0, amt_rank=1.0) == 0.0
-
-
-# ---------- 板块取数必须只读缓存 ----------
-
-def test_sector_lookup_never_triggers_a_rebuild(monkeypatch):
-    """回归：这里最初调 `_heavy_cached`，未命中时它会 create_task 去后台算 build_rotation。
-
-    于是前端高频轮询的一键智选成了那个 20 秒全市场扫描的触发源，而 board_refresh 调
-    同一个东西之前有内存闸（低于 3072MB 就跳过），这条路没有 —— 等于绕过了那道闸。
-    预热是 board_refresh 的事；这里只准读。
-    """
-    import asyncio
-
-    import app.routers.insights as insights
-
-    def _boom(*a, **k):
-        raise AssertionError("推荐链路触发了板块重算：只准读缓存")
-
-    monkeypatch.setattr(insights, "_heavy_cached", _boom)
-    monkeypatch.setattr(insights, "_heavy_fill", _boom)
-    monkeypatch.setattr(insights, "_rotation_cache_args",
-                        lambda: ("sector-rotation:test", 43200, _boom, _boom))
-
-    # 缓存空 → 返回空 dict，且不炸
-    from app.core.market_data import lite_insights_cache
-    lite_insights_cache.pop("sector-rotation:test", None)
-    assert asyncio.run(lite_main._sector_mom_pct_map()) == {}
-
-    # 缓存有 → 读出来
-    from app.core.market_data import _cache_set
-    _cache_set("sector-rotation:test",
-               {"items": [{"industry": "测试板块", "mom20_pct": 0.9}]})
-    assert asyncio.run(lite_main._sector_mom_pct_map()) == {"测试板块": 0.9}
-    lite_insights_cache.pop("sector-rotation:test", None)

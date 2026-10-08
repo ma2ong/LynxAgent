@@ -559,7 +559,7 @@ const isMobile = ref(mobileQuery.matches)
 mobileQuery.addEventListener('change', (e) => { isMobile.value = e.matches })
 // 关键依据列只放一个形态：优先「三不卖」（持有类确认），其次强度最高的
 const topPattern = (row: any) => {
-  const list = (row.patterns || []).filter((p: any) => p.key !== 'dryup_ignite')
+  const list = row.patterns || []
   if (!list.length) return null
   return list.find((p: any) => p.category === '三不卖')
     || [...list].sort((a: any, b: any) => Number(b.strength || 0) - Number(a.strength || 0))[0]

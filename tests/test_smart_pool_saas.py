@@ -630,7 +630,7 @@ def test_cache_only_serves_previous_list_after_bar_date_rolls(monkeypatch):
 
     monkeypatch.setattr("quantcore.quant.local_store.get_local_store", lambda: _Store())
     monkeypatch.setattr(lite_main, "_cache_get", lambda key, ttl: None)
-    prev_key = (f"smart-pool:factor-v20-no-ai-factor:{lite_main.SMART_POOL_INTRADAY_WEIGHT}:"
+    prev_key = (f"smart-pool:factor-v21-no-ignite-bonus:{lite_main.SMART_POOL_INTRADAY_WEIGHT}:"
                 f"2026-09-24:balanced:20:5525")
     _persistent_cache_set(prev_key, {"success": True, "data": {"items": [{"symbol": "600000"}],
                                                               "daily_as_of": "2026-09-24"}})

@@ -12,7 +12,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.lite_auth import get_current_lite_user
-from app.lite_billing import effective_plan
 from app.lite_notifications import notification_store
 
 router = APIRouter(tags=["notifications"])
@@ -74,11 +73,6 @@ async def unbind_wechat_push(user: dict[str, Any] = Depends(get_current_lite_use
 
 @router.post("/api/notifications/wechat/test")
 async def test_wechat_push(user: dict[str, Any] = Depends(get_current_lite_user)):
-    if effective_plan(user) != "member":
-        raise HTTPException(status_code=402, detail={
-            "code": "member_required",
-            "message": "微信推送为会员专属功能，升级会员后可用",
-        })
     result = notification_store.notify_user(
         user["username"],
         "AStockPick 微信推送测试",

@@ -1,5 +1,3 @@
-from datetime import datetime, timedelta, timezone
-
 import pytest
 
 
@@ -20,36 +18,6 @@ def test_record_and_count(billing):
     assert billing.used_today("u2") == 0  # 不串号
 
 
-def test_effective_plan_free_default():
-    from app.lite_billing import effective_plan
-    assert effective_plan({"plan": None}) == "free"
-    assert effective_plan({}) == "free"
-    assert effective_plan({"plan": "unknown_plan"}) == "free"
-
-
-def test_effective_plan_member_not_expired():
-    from app.lite_billing import effective_plan, beijing_today
-    tomorrow = (datetime.now(timezone(timedelta(hours=8))) + timedelta(days=1)).strftime("%Y-%m-%d")
-    assert effective_plan({"plan": "member", "plan_expires_at": tomorrow}) == "member"
-    # 当天到期 = 仍有效（含当日）
-    assert effective_plan({"plan": "member", "plan_expires_at": beijing_today()}) == "member"
-
-
-def test_effective_plan_member_expired_downgrades():
-    from app.lite_billing import effective_plan
-    assert effective_plan({"plan": "member", "plan_expires_at": "2020-01-01"}) == "free"
-    # 无到期日的 member 视为长期有效（admin 手工开的永久号）
-    assert effective_plan({"plan": "member", "plan_expires_at": None}) == "member"
-
-
-def test_users_table_has_plan_columns(tmp_path):
-    from app.lite_auth import LiteAuthStore
-    auth = LiteAuthStore(db_path=tmp_path / "auth.sqlite")
-    user = auth.create_user("alice", "alice@x.com", "secret123")
-    assert user["plan"] == "free"
-    assert user["plan_expires_at"] is None
-
-
 def test_migration_idempotent_on_existing_db(tmp_path):
     from app.lite_auth import LiteAuthStore
     db = tmp_path / "auth.sqlite"
@@ -57,12 +25,8 @@ def test_migration_idempotent_on_existing_db(tmp_path):
     LiteAuthStore(db_path=db)  # 第二次初始化不应报错
 
 
-def test_require_quota_does_not_block_when_unlimited(tmp_path, monkeypatch):
-    """2026-08-19 起取消每日次数限制：不拦，但仍然记账。
-
-    记账要留着——用量数据是后来判断「该不该重新设限」的唯一依据，
-    而拦截逻辑本身没了（daily_llm = NO_DAILY_LIMIT）。
-    """
+def test_require_quota_never_blocks_only_records(tmp_path, monkeypatch):
+    """2026-10-08 套餐整体移除：任何账号都不拦，只记账（管理员看「今日用量」）。"""
     import asyncio
     import app.lite_billing as lb
 
@@ -74,45 +38,6 @@ def test_require_quota_does_not_block_when_unlimited(tmp_path, monkeypatch):
     for _ in range(10):
         asyncio.run(dep.dependency(user=user))  # 不应抛异常
     assert billing.used_today("u1") == 10
-
-
-def test_require_quota_still_blocks_when_a_limit_is_set(tmp_path, monkeypatch):
-    """限制机制本身没删：把某档的 daily_llm 调回正数，拦截逻辑要照常生效。"""
-    import asyncio
-    from fastapi import HTTPException
-    import app.lite_billing as lb
-
-    billing = lb.BillingStore(db_path=tmp_path / "q3.sqlite")
-    monkeypatch.setattr(lb, "billing", billing)
-    monkeypatch.setitem(lb.PLANS, "free", {**lb.PLANS["free"], "daily_llm": 3})
-    user = {"id": "u1", "plan": "free", "plan_expires_at": None}
-
-    dep = lb.require_quota("deep_analysis")
-    for _ in range(3):
-        asyncio.run(dep.dependency(user=user))
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(dep.dependency(user=user))
-    assert exc.value.status_code == 402
-    assert exc.value.detail["code"] == "quota_exceeded"
-
-
-def test_require_quota_member_feature_gate(tmp_path, monkeypatch):
-    import asyncio
-    from fastapi import HTTPException
-    import app.lite_billing as lb
-
-    billing = lb.BillingStore(db_path=tmp_path / "q2.sqlite")
-    monkeypatch.setattr(lb, "billing", billing)
-
-    dep = lb.require_quota("serenity_deep", feature="serenity_deep")
-    free_user = {"id": "u1", "plan": "free", "plan_expires_at": None}
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(dep.dependency(user=free_user))
-    assert exc.value.detail["code"] == "member_required"
-
-    member = {"id": "u2", "plan": "member", "plan_expires_at": None}
-    result = asyncio.run(dep.dependency(user=member))
-    assert result["id"] == "u2"
 
 
 def test_total_used_across_days(billing):

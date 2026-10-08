@@ -1,4 +1,4 @@
-"""In-app notifications and member WeChat push bindings."""
+"""In-app notifications and per-user WeChat push bindings."""
 from __future__ import annotations
 
 import hashlib
@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.lite_auth import store as auth_store
-from app.lite_billing import effective_plan
 from quantcore.shared.notify.wechat_push import WechatPushNotifier
 
 
@@ -172,7 +171,7 @@ class NotificationStore:
         member_push_allowed = False
         if send_wechat:
             user = self._user_by_username(username)
-            member_push_allowed = bool(user and effective_plan(dict(user)) == "member")
+            member_push_allowed = bool(user)   # 套餐已移除：所有账号都能用自己绑定的推送
             if member_push_allowed:
                 binding = self.get_wechat_binding(username)
                 if binding and binding.get("enabled"):
@@ -234,7 +233,7 @@ class NotificationStore:
             "serverchan_key_masked": mask_token(binding.get("serverchan_key") if binding else None),
             "pushplus_token_masked": mask_token(binding.get("pushplus_token") if binding else None),
             "updated_at": binding.get("updated_at") if binding else None,
-            "member_push_allowed": effective_plan(user) == "member",
+            "member_push_allowed": True,
         }
 
     def unbind_wechat(self, username: str) -> None:
@@ -248,12 +247,12 @@ class NotificationStore:
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT f.username, f.stock_code, f.stock_name, u.plan, u.plan_expires_at
+                SELECT f.username, f.stock_code, f.stock_name
                 FROM lite_favorites f
                 JOIN users u ON u.username = f.username
                 """
             ).fetchall()
-        favorites = [dict(row) for row in rows if effective_plan(dict(row)) == "member"]
+        favorites = [dict(row) for row in rows]
         if not favorites:
             return 0
 

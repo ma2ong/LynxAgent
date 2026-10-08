@@ -36,7 +36,6 @@ import socket as _socket
 _socket.setdefaulttimeout(30)
 
 from app.lite_auth import get_current_lite_user, router as lite_auth_router, store
-from app.lite_billing import router as billing_router
 from app.lite_admin import require_admin, router as admin_router
 from app.lite_notifications import notification_store
 from app.core.scan_gate import run_scan
@@ -128,7 +127,6 @@ async def _require_login_for_api(request, call_next):
 
 app.include_router(lite_auth_router)
 app.include_router(quant_router, dependencies=[Depends(get_current_lite_user)])
-app.include_router(billing_router)
 app.include_router(admin_router)
 from app.routers.notifications import router as notifications_router  # noqa: E402
 from app.routers.config import router as config_router  # noqa: E402

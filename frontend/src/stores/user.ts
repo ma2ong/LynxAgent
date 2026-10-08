@@ -6,8 +6,6 @@ export interface CurrentUser {
   username: string
   email: string
   is_admin: boolean
-  plan: string
-  plan_expires_at: string | null
 }
 
 export const currentUser = ref<CurrentUser | null>(null)

@@ -45,14 +45,7 @@
           {{ wechatStatus?.bound ? '已绑定' : '未绑定' }}
         </el-tag>
       </div>
-      <p class="muted">会员绑定后，自选股触发价格预警或命中催化剂事件时，会同步发送微信提醒。</p>
-
-      <el-alert
-        v-if="wechatStatus && !wechatStatus.member_push_allowed"
-        type="warning"
-        :closable="false"
-        title="微信推送渠道正在调整，暂未开放。"
-      />
+      <p class="muted">绑定后，自选股触发价格预警或命中催化剂事件时，会同步发送微信提醒。</p>
 
       <div v-if="wechatStatus?.bound" class="bound-box">
         <div><span>Server酱</span><b>{{ wechatStatus.serverchan_key_masked || '-' }}</b></div>
@@ -85,7 +78,7 @@
     <el-card v-if="currentUser?.is_admin" class="card">
       <div class="card-title">
         <h3>用户管理</h3>
-        <span class="card-hint">全站账号的套餐与启用状态，仅管理员可见</span>
+        <span class="card-hint">全站账号的用量与启用状态，仅管理员可见</span>
       </div>
       <AdminUsers />
     </el-card>

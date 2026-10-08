@@ -14,7 +14,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.core.analysis_report import (
@@ -26,7 +26,7 @@ from app.core.engine import get_stock_pool_items, lite_quant_engine, resolve_sto
 from app.core.market_data import _apply_realtime_quote, _realtime_quotes
 from app.core.schema import ensure_lite_analysis_history_table
 from app.lite_auth import get_current_lite_user, store
-from app.lite_billing import PLANS, billing, effective_plan
+from app.lite_billing import billing
 
 router = APIRouter(tags=["analysis"])
 
@@ -107,16 +107,6 @@ async def batch_analysis(req: LiteBatchAnalysisRequest, user: dict[str, Any] = D
     if len(symbols) > 20:
         return {"success": False, "data": None, "message": "SaaS Lite 单次批量分析最多支持 20 只", "code": 400}
 
-    plan = PLANS[effective_plan(user)]
-    used = billing.used_today(user["id"])
-    if used + len(symbols) > plan["daily_llm"]:
-        # 与 require_quota 一致抛标准 402，前端拦截器统一处理
-        raise HTTPException(status_code=402, detail={
-            "code": "quota_exceeded",
-            "message": f"批量需 {len(symbols)} 次额度，今日剩余 {max(0, plan['daily_llm'] - used)} 次",
-            "used": used,
-            "limit": plan["daily_llm"],
-        })
     billing.record(user["id"], "deep_analysis", n=len(symbols))
 
     batch_id = "batch_" + secrets.token_hex(8)

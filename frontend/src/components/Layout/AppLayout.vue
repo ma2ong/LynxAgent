@@ -7,9 +7,6 @@
       <div class="mobile-brand">
         <BrandLogo :size="22" /><span class="wordmark"><i>A</i>StockPick</span>
       </div>
-      <div v-if="billingInfo && !billingInfo.unlimited" class="mobile-quota">
-        剩余 {{ billingInfo.remaining_today }}/{{ billingInfo.daily_limit }}
-      </div>
     </div>
     <div v-if="mobileMenuOpen" class="mobile-mask" @click="mobileMenuOpen = false" />
     <el-aside width="216px" class="sidebar" :class="{ 'sidebar-open': mobileMenuOpen }">
@@ -36,12 +33,6 @@
       </el-menu>
       <!-- 退出登录已移进「用户设置」页：它是低频且不可撤销的操作，
            常驻在侧栏底部只会被误点，而每天要点的那些入口反而被它挤着。 -->
-      <div v-if="billingInfo && !billingInfo.unlimited" class="sidebar-foot">
-        <!-- 不限档没有额度可报，不显示任何标识；只有限额档才提示今日剩余。 -->
-        <div class="quota-chip" @click="$router.push('/account/membership')">
-          {{ billingInfo.plan_label }} · 今日剩余 {{ billingInfo.remaining_today }}/{{ billingInfo.daily_limit }}
-        </div>
-      </div>
     </el-aside>
     <el-main class="content">
       <MacroBar />
@@ -64,7 +55,6 @@ import {
   MagicStick, Tools, DataLine, DataAnalysis, Histogram, Warning, Odometer, Refresh,
 } from '@element-plus/icons-vue'
 import { currentUser, loadCurrentUser } from '@/stores/user'
-import { fetchBillingMe, type BillingMe } from '@/api/billing'
 import BrandLogo from './BrandLogo.vue'
 import MacroBar from '@/components/MacroBar.vue'
 
@@ -74,15 +64,10 @@ const route = useRoute()
 // 深研每次点开都要跟着新代码重新分析，不能复用上一只票的旧结果。
 const CACHED_VIEWS = ['DashboardPage', 'QuantPage', 'LimitUpPage', 'HeatmapPage', 'RiskAlertPage']
 
-const billingInfo = ref<BillingMe | null>(null)
 const mobileMenuOpen = ref(false)
 
 onMounted(async () => {
   await loadCurrentUser()
-  try {
-    const res = await fetchBillingMe()
-    billingInfo.value = (res?.data as BillingMe) ?? null
-  } catch { /* 配额信息拉不到不阻塞页面 */ }
 })
 
 </script>
@@ -133,11 +118,6 @@ onMounted(async () => {
   border-right: none;
 }
 
-.sidebar-foot {
-  padding: 12px 18px;
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-
 .content {
   /* 列式弹性：MacroBar 固定高度，页面拿走剩下的。整屏型页面（行业热力图）
      才能用 flex:1 精确吃满剩余空间——它们若写 height:100%，会把 MacroBar
@@ -151,17 +131,6 @@ onMounted(async () => {
   :deep(.macro-bar) { flex: none; }
 }
 
-.quota-chip {
-  font-size: 12px;
-  color: #909399;
-  padding: 4px 8px;
-  border: 1px solid #e4e7ed;
-  border-radius: 10px;
-  cursor: pointer;
-  margin-bottom: 6px;
-  text-align: center;
-  &:hover { color: #409eff; border-color: #409eff; }
-}
 
 @media (max-width: 760px) {
   .app-layout {
@@ -194,16 +163,6 @@ onMounted(async () => {
     font-weight: 700;
 
     svg { display: block; flex: none; }
-  }
-
-  .mobile-quota {
-    min-width: 66px;
-    padding: 3px 7px;
-    border: 1px solid var(--el-border-color-light);
-    border-radius: 999px;
-    color: var(--el-text-color-secondary);
-    font-size: 11px;
-    text-align: center;
   }
 
   .mobile-mask {

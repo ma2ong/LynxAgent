@@ -24,8 +24,6 @@ http.interceptors.request.use((config) => {
 })
 
 // Incoming: hand back the JSON body; bounce to login on an expired session.
-let quotaDialogOpen = false
-
 http.interceptors.response.use(
   (response) => response.data,
   async (error) => {
@@ -49,25 +47,6 @@ http.interceptors.response.use(
     }
     if (transient) {
       return Promise.reject(new Error('服务暂时不可用（可能正在重启或数据源抖动），请稍后重试'))
-    }
-    if (error?.response?.status === 402) {
-      const detail = error.response.data?.detail
-      const msg = detail?.message || '已达到套餐限制'
-      if (!quotaDialogOpen) {
-        quotaDialogOpen = true
-        import('element-plus').then(({ ElMessageBox }) => {
-          ElMessageBox.confirm(msg, detail?.code === 'member_required' ? '会员专属功能' : '今日额度已用完', {
-            confirmButtonText: '了解会员',
-            cancelButtonText: '我知道了',
-            type: 'warning',
-          }).then(() => {
-            location.href = '/account/membership'
-          }).catch(() => {}).finally(() => {
-            quotaDialogOpen = false
-          })
-        })
-      }
-      return Promise.reject(new Error(msg))
     }
     // detail 可能是字符串（FastAPI 默认）或 {code,message} 对象，两种都要能取到中文原因。
     const detail = error?.response?.data?.detail

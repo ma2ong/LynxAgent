@@ -210,7 +210,7 @@ async def screen_stocks(req: QuantScreenRequest):
 
 @router.post("/backtest")
 async def backtest_strategy(req: QuantBacktestRequest,
-                            user: dict = require_quota("backtest", feature="lab", cost=0)):
+                            user: dict = require_quota("backtest", cost=0)):
     try:
         result = await asyncio.to_thread(
             engine.backtest,
@@ -247,7 +247,7 @@ async def sync_datalake(req: QuantPoolRequest):
 
 @router.post("/research")
 async def research_factors(req: QuantResearchRequest,
-                           user: dict = require_quota("research", feature="lab", cost=0)):
+                           user: dict = require_quota("research", cost=0)):
     try:
         return await asyncio.to_thread(engine.research_factors, req.symbols, req.start_date, req.end_date, req.initial_cash)
     except Exception as exc:
@@ -271,7 +271,7 @@ class PipelineRunRequest(BaseModel):
 
 @router.post("/pipeline/run")
 async def quant_pipeline_run(req: PipelineRunRequest,
-                             user: dict = require_quota("pipeline", feature="lab")):
+                             user: dict = require_quota("pipeline")):
     try:
         return await asyncio.to_thread(run_pipeline, req.universe, req.max_candidates, True)
     except Exception as exc:
@@ -293,7 +293,7 @@ async def quant_pipeline_run_detail(run_id: str):
 
 @router.post("/pipeline/t5-review")
 async def quant_pipeline_t5(run_id: Optional[str] = None,
-                            user: dict = require_quota("pipeline", feature="lab")):
+                            user: dict = require_quota("pipeline")):
     from quantcore.quant.pipeline.orchestrator import RUNS_DIR
     import os
     run_dir = os.path.join(RUNS_DIR, run_id) if run_id else None
@@ -307,7 +307,7 @@ class QuickCriticRequest(BaseModel):
 
 @router.post("/pipeline/quick-critic")
 async def pipeline_quick_critic(req: QuickCriticRequest,
-                                user: dict = require_quota("pipeline", feature="lab")):
+                                user: dict = require_quota("pipeline")):
     """对给定股票列表做快速规则 critic 打分，供一键推荐/形态智选结果富集 AI 评审分。"""
     try:
         return await asyncio.to_thread(quick_critic_batch, req.symbols, req.names)

@@ -1019,6 +1019,33 @@ class LocalQuantStore:
             "batch_at": str(row[8] or ""),
         } for row in rows]
 
+    @staticmethod
+    def _smart_picks_as_seen(conn, since: str, picks: List[tuple]) -> List[tuple]:
+        """智选按「用户看到过的」复盘：当天进过榜的每一只、从它首次上榜的价格起算。
+
+        名单盘中随实时行情重排，每天 45~64 只轮过 20 个席位；picks_history 只存开盘后第一份，
+        拿它复盘等于在评一份大多数用户没见过的名单（2026-10-08 Allen 定改口径）。
+        首推表从 2026-08-25 才有，没有记录的日子仍用 picks_history。
+        """
+        seen = conn.execute(
+            "SELECT f.pick_date, f.symbol, f.first_price, COALESCE(h.name, m.name, f.symbol), "
+            "h.score, COALESCE(h.patterns, '') FROM pick_first_seen f "
+            "LEFT JOIN picks_history h ON h.pick_date=f.pick_date AND h.pool='smart' AND h.symbol=f.symbol "
+            "LEFT JOIN stock_meta m ON m.symbol=f.symbol "
+            "WHERE f.pool='smart' AND f.pick_date >= ? ORDER BY f.pick_date DESC, f.first_at, f.symbol",
+            (since,)).fetchall()
+        if not seen:
+            return picks
+        rows: List[tuple] = []
+        rank: Dict[str, int] = {}
+        for d, sym, price, name, score, patterns in seen:
+            rank[d] = rank.get(d, 0) + 1
+            rows.append((d, "smart", sym, name, score, price, rank[d], patterns))
+        days_seen = set(rank)
+        kept = [r for r in picks if not (r[1] == "smart" and str(r[0]) in days_seen)]
+        merged = sorted(kept + rows, key=lambda r: (str(r[1]), int(r[6] or 0)))   # 同 SQL：日期降序、池、名次
+        return sorted(merged, key=lambda r: str(r[0]), reverse=True)
+
     def evaluate_picks(self, days: int = 30, pool: Optional[str] = None,
                        refresh: bool = False) -> Dict[str, object]:
         """复盘最近 days 天的选股留痕：按池统计 T+1/T+3/T+5 胜率与平均收益。
@@ -1038,6 +1065,8 @@ class LocalQuantStore:
 
         picks_n = conn.execute(
             "SELECT COUNT(*) FROM picks_history WHERE pick_date >= ?", (since,)).fetchone()[0]
+        picks_n += conn.execute(
+            "SELECT COUNT(*) FROM pick_first_seen WHERE pick_date >= ?", (since,)).fetchone()[0]
         cache_key = f"picks:{days}:{pool or '*'}"
         stamp = f"{self.latest_real_bar_date()}|{picks_n}"
         if not refresh:
@@ -1059,6 +1088,8 @@ class LocalQuantStore:
             params.append(pool)
         sql += " ORDER BY pick_date DESC, pool, rank"
         picks = conn.execute(sql, params).fetchall()
+        if pool in (None, "smart"):
+            picks = self._smart_picks_as_seen(conn, since, picks)
 
         import statistics
 

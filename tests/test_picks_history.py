@@ -371,3 +371,34 @@ def test_cache_hit_path_logs_final_smart_list(store, pick_clock, monkeypatch):
         "SELECT pool, COUNT(*) FROM picks_history GROUP BY pool").fetchall())
     assert rows.get("smart") == 3
     assert rows.get("smart_structure") == 3
+
+
+def test_smart_review_counts_every_name_users_saw(store):
+    """智选名单盘中一直在重排（每天 45~64 只轮过 20 个席位），复盘只算 09:30 那一份
+    就不是用户看到的名单（2026-10-08 Allen 定）。smart 改为：当天出现过的每一只、
+    从它首次上榜的价格起算；该日没有首推记录时才退回 picks_history。"""
+    up = [10.0 * 1.02 ** i for i in range(8)]
+    flat = [20.0] * 8
+    dates = _seed_kline(store, "600001", up)
+    _seed_kline(store, "600002", flat)
+    conn = store._conn()
+    # 09:30 留痕只有 600001；10:15 600002 进榜
+    conn.execute("INSERT OR IGNORE INTO picks_history VALUES (?,?,?,?,?,?,?,?)",
+                 (dates[1], "smart", "600001", "甲", 90.0, up[1], 1, ""))
+    conn.executemany("INSERT INTO pick_first_seen VALUES (?,?,?,?,?)", [
+        (dates[1], "smart", "600001", up[1], f"{dates[1]}T09:30:35+08:00"),
+        (dates[1], "smart", "600002", 21.0, f"{dates[1]}T10:15:00+08:00"),
+    ])
+    # 另一天只有旧口径留痕（首推表上线前）
+    conn.execute("INSERT OR IGNORE INTO picks_history VALUES (?,?,?,?,?,?,?,?)",
+                 (dates[0], "smart", "600001", "甲", 90.0, up[0], 1, ""))
+    conn.commit()
+
+    stats = store.evaluate_picks(days=60, pool="smart")
+    day1 = [i for i in stats["items"] if i["pick_date"] == dates[1]]
+    assert sorted(i["symbol"] for i in day1) == ["600001", "600002"]
+    late = next(i for i in day1 if i["symbol"] == "600002")
+    assert late["base_close"] == 21.0                         # 从首推价起算，不是收盘
+    assert late["rank"] == 2                                  # 按上榜先后
+    assert late["t1"] == pytest.approx((20.0 / 21.0 - 1) * 100, abs=0.01)
+    assert [i["symbol"] for i in stats["items"] if i["pick_date"] == dates[0]] == ["600001"]

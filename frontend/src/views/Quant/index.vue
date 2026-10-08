@@ -1629,6 +1629,7 @@ const openChart = async (row: any) => {
 
 .summary-primary b {
   font-size: 18px;
+  white-space: nowrap;
 }
 
 .summary-meta {
@@ -2039,6 +2040,8 @@ const openChart = async (row: any) => {
 /* 手机端：顶部提示区是网格，不换行的文字会把列撑到 578px（屏宽 390），右半截被裁掉读不到。
    列宽封顶到容器、文字一律换行（2026-09-29）。 */
 @media (max-width: 760px) {
+  /* 两列网格里按钮组是 auto 列，手机上它吃掉整行，标题被挤成一字一行（2026-10-08） */
+  .smart-summary { grid-template-columns: 1fr; }
   .decision-context > * { min-width: 0; }
   .decision-context span, .basis-tip, .env-gate-note, .profile-note span {
     white-space: normal; overflow: visible; text-overflow: clip;

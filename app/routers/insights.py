@@ -833,6 +833,14 @@ async def lite_limit_up_distribution(date: str | None = None):
         snap_date = _snapshot_stamp(realtime_quotes)[0]
         if not date and snap_date and snap_date < today:
             target, realtime_quotes = snap_date, {}
+    # 快照拿不到（超时/限流）时今天的日线还没落库，按今天算只会得到「0 涨停」，
+    # 还会被缓存 10 分钟（2026-10-08 10:30）。退回最近完整交易日，且这份不缓存。
+    realtime_missing = target >= today and not realtime_quotes
+    if realtime_missing and not date:
+        from quantcore.quant.local_store import get_local_store
+        fallback = await asyncio.to_thread(get_local_store().latest_real_bar_date)
+        if fallback and fallback < target:
+            target = fallback
     cache_key = f"limit_up:{limit_up_taxonomy_version()}:{target}"
     cached = lite_insights_cache.get(cache_key)
     if cached:
@@ -841,7 +849,8 @@ async def lite_limit_up_distribution(date: str | None = None):
             return {"success": True, "data": payload}
     try:
         data = await _run_data_task(compute_limit_up_distribution, target, realtime_quotes, timeout=25.0)
-        lite_insights_cache[cache_key] = (datetime.now(timezone.utc), data)
+        if not realtime_missing:
+            lite_insights_cache[cache_key] = (datetime.now(timezone.utc), data)
         return {"success": True, "data": data}
     except asyncio.TimeoutError:
         if cached:

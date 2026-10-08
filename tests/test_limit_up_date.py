@@ -32,3 +32,28 @@ def test_same_day_snapshot_stays_realtime(monkeypatch):
     today = datetime.now().strftime("%Y-%m-%d")
     seen = _run(monkeypatch, today)
     assert seen["target"] == today and seen["quotes"]
+
+
+def test_snapshot_failure_falls_back_and_is_not_cached(monkeypatch):
+    """实时快照超时/失败：退回最近完整交易日，且不把这份结果缓存 10 分钟
+    （2026-10-08 10:30 机器满载，快照超时后页面显示「今日 0 涨停」并一直挂着）。"""
+    seen = {}
+
+    def fake_compute(target, quotes):
+        seen.setdefault("targets", []).append(target)
+        return {"date": target}
+
+    def boom(*_a, **_k):
+        raise TimeoutError("snapshot")
+
+    class Store:
+        def latest_real_bar_date(self):
+            return "2026-09-30"
+
+    monkeypatch.setattr(insights, "_load_realtime_quotes_snapshot", boom)
+    monkeypatch.setattr("quantcore.quant.limit_up.compute_limit_up_distribution", fake_compute)
+    monkeypatch.setattr("quantcore.quant.local_store.get_local_store", lambda: Store())
+    insights.lite_insights_cache.clear()
+    asyncio.run(insights.lite_limit_up_distribution())
+    assert seen["targets"] == ["2026-09-30"]
+    assert not insights.lite_insights_cache

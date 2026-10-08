@@ -301,6 +301,13 @@ async def _refresh_cycle() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("board refresh [snapshot] failed: %s", exc)
 
+    # 2) 风险扫描（breakdown 破位广度 + 全市场卖出信号）→ 暖 _RISK_SCAN_CACHE
+    #    紧跟快照：风险仪表的破位广度/龙头崩塌两项只读这份缓存，冷着时仪表少算约 20 分，
+    #    重启后几分钟里会把「危险」显示成「安全」、智选页也不转观察名单（2026-10-08）。
+    if not _has_memory_budget("risk-scan"):
+        return
+    await _safe("risk-scan", asyncio.to_thread(q._risk_scan_cached, snapshot))
+
     # 1.5) 盘中快照落库：每交易日一次，为「盘中生成名单」攒 point-in-time 样本。
     await _safe("intraday-snapshot", asyncio.to_thread(_capture_intraday_snapshot, snapshot))
 
@@ -308,11 +315,6 @@ async def _refresh_cycle() -> None:
     # AKShare 的财务表会让 Pandas 堆内存；使用一次性子进程后，单只完成即彻底回收。
     if _has_memory_budget("panel-batch"):
         await _safe("panel-batch", asyncio.to_thread(_run_daily_panel_batch))
-
-    # 2) 风险扫描（breakdown 破位广度 + 全市场卖出信号）→ 暖 _RISK_SCAN_CACHE
-    if not _has_memory_budget("risk-scan"):
-        return
-    await _safe("risk-scan", asyncio.to_thread(q._risk_scan_cached, snapshot))
 
     # 3) 涨停热点（当日）→ 暖 lite_insights_cache（端点自身负责落缓存）
     if not _has_memory_budget("limit-up"):

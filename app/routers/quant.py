@@ -478,7 +478,9 @@ async def quant_risk_alert():
         if cached and _time.time() - cached[0] < 30:
             return cached[1]
         result = await _compute_risk_alert()
-        _RISK_ALERT_CACHE["v"] = (_time.time(), result)
+        # 扫描缓存冷时缺项的仪表偏乐观，只缓存几秒，保温器一暖就换上完整结果
+        ttl_offset = 25 if result.get("partial") else 0
+        _RISK_ALERT_CACHE["v"] = (_time.time() - ttl_offset, result)
         return result
 
 
@@ -547,6 +549,8 @@ async def _compute_risk_alert():
         gauge = market_risk_gauge(daily, temp, limitdown_share=limitdown_share,
                                   breakdown_share=breakdown_share, cold_excess=cold_excess,
                                   index_pcts=index_pcts, leader_breakdown=leader_breakdown)
+        gauge["partial"] = [name for name, value in (("破位广度", breakdown_share), ("龙头崩塌", leader_breakdown))
+                            if value is None]
         # 环境标签与横幅同源，一并回传方便前端对齐
         gauge["market_state"] = ctx.get("state")
         gauge["as_of"] = ctx.get("as_of")

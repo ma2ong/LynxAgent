@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.core.engine import resolve_stock
+from quantcore.quant.data import load_local_kline
 from app.core.market_data import _apply_realtime_quote, _realtime_quotes, _safe_number
 from app.core.schema import ensure_lite_favorites_table
 from app.lite_auth import get_current_lite_user, store
@@ -131,11 +132,38 @@ async def _favorite_portfolio_items(username: str) -> list[dict[str, Any]]:
     ]
 
 
+# 这里只需要评分、trend/momentum/risk_control 三个因子和波动/回撤，全部出自
+# compute_factor_scores + risk_metrics。原来调整个 engine.analyze()，单只约 3 秒且集体超时。
+# 因子只随日线变化：按 (代码, 最后一根日线日期) 缓存，同一交易日内各用户、各次请求共用
+# （44 只约 3.3 秒 CPU，跑在线程里照样抢 GIL 拖慢全站，2026-10-08）。
+_QUANT_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def _quant_from_kline(symbol: str) -> tuple[str, dict[str, Any], Any]:
+    from quantcore.quant import factors
+
+    try:
+        df = load_local_kline(symbol, 420)
+        if df is None or df.empty:
+            return symbol, {"score": 0, "factors": {}, "risk": {}}, None
+        key = (symbol, str(df["date"].iloc[-1])[:10] if "date" in df.columns else str(len(df)))
+        quant = _QUANT_CACHE.get(key)
+        if quant is None:
+            scores = factors.compute_factor_scores(df)
+            quant = {"score": factors.composite_score(scores), "factors": scores,
+                     "risk": factors.risk_metrics(df)}
+            if len(_QUANT_CACHE) > 20000:
+                _QUANT_CACHE.clear()
+            _QUANT_CACHE[key] = quant
+        return symbol, quant, df
+    except Exception:
+        return symbol, {"score": 0, "factors": {}, "risk": {}}, None
+
+
 @router.get("/api/favorites/portfolio/diagnostics")
 async def favorites_portfolio_diagnostics(user: dict[str, Any] = Depends(get_current_lite_user)):
     from app.lite_main import _check_and_record_price_alert, _resolve_real_industry  # noqa: F401 — 尚未拆出
     import pandas as pd
-    from quantcore.quant.data import load_local_kline
 
     items = await _favorite_portfolio_items(user["username"])
     if not items:
@@ -160,24 +188,6 @@ async def favorites_portfolio_diagnostics(user: dict[str, Any] = Depends(get_cur
         *[_resolve_real_industry(item["symbol"], item["name"], set()) for item in items],
         return_exceptions=True,
     )
-    # 这里只需要评分、trend/momentum/risk_control 三个因子和波动/回撤，全部出自
-    # compute_factor_scores + risk_metrics，是毫秒级的。原来却调整个 engine.analyze()，
-    # 顺带算了形态识别、Kronos 预测、Wyckoff、ML 特征、跨资产 HMM —— 结果一个都没用上，
-    # 单只约 3 秒；N 只协程同时起跑又被 GIL 串行化，于是集体撞上超时、量化分全落 0 分。
-    # 改成直接用同一份本地日线算需要的部分，顺带省掉原先重复的一次 kline 加载。
-    def _quant_from_kline(symbol: str) -> tuple[str, dict[str, Any], Any]:
-        from quantcore.quant.factors import composite_score, compute_factor_scores, risk_metrics
-
-        try:
-            df = load_local_kline(symbol, 420)
-            if df is None or df.empty:
-                return symbol, {"score": 0, "factors": {}, "risk": {}}, None
-            factors = compute_factor_scores(df)
-            return symbol, {"score": composite_score(factors), "factors": factors,
-                            "risk": risk_metrics(df)}, df
-        except Exception:
-            return symbol, {"score": 0, "factors": {}, "risk": {}}, None
-
     computed = await asyncio.gather(
         *(asyncio.to_thread(_quant_from_kline, item["symbol"]) for item in items)
     )

@@ -1539,7 +1539,8 @@ def _confluence_enrich_items(items: list[dict[str, Any]]) -> None:
     """
     from quantcore.quant.data import load_local_kline
     from quantcore.quant.integrations import recognize_patterns
-    from quantcore.quant.local_store import FORECAST_TAG_WINDOW_DAYS, forecast_tag, get_local_store
+    from quantcore.quant.local_store import (
+        EVENT_TAG_WINDOW_DAYS, FORECAST_TAG_WINDOW_DAYS, event_tags, forecast_tag, get_local_store)
     from quantcore.quant.relative_strength import compute_strength_metrics
     # 业绩预告标签（2026-10-08 Allen 定）：只展示、不进排序。强预增 T+60 过七闸，T+5 无效。
     try:
@@ -1548,9 +1549,17 @@ def _confluence_enrich_items(items: list[dict[str, Any]]) -> None:
     except Exception as exc:  # noqa: BLE001 — 标签缺失不影响推荐
         print(f"forecast tags unavailable: {exc}")
         recent_forecasts = {}
+    # 回购预案 / 机构调研标签（2026-10-09）：T+5 过七闸，同样只展示、不进排序。
+    try:
+        since = (datetime.now() - timedelta(days=EVENT_TAG_WINDOW_DAYS)).strftime("%Y-%m-%d")
+        recent_events = get_local_store().load_recent_company_events(since)
+    except Exception as exc:  # noqa: BLE001 — 标签缺失不影响推荐
+        print(f"company event tags unavailable: {exc}")
+        recent_events = {}
     for item in items:
         symbol = str(item.get("symbol") or item.get("code") or "").zfill(6)
         item["earnings"] = forecast_tag(recent_forecasts.get(symbol))
+        item["events"] = event_tags(recent_events.get(symbol))
         try:
             data = load_local_kline(symbol, days=540)
         except Exception:
@@ -1883,7 +1892,7 @@ async def _compute_lite_smart_pool_unlocked(
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     # v20（2026-09-29）：停用 AI 因子，且不再因 AI 模型就绪切到备用算法
-    cache_prefix = f"smart-pool:factor-v22-earnings-tag:{SMART_POOL_INTRADAY_WEIGHT}:"
+    cache_prefix = f"smart-pool:factor-v23-event-tags:{SMART_POOL_INTRADAY_WEIGHT}:"
     cache_suffix = f":{strategy}:{safe_limit}:{safe_universe}"
     cache_key = (
         # v18（2026-08-28）：修好共振加成里的「强度」分支——它的缩进原先落在 except 块内，

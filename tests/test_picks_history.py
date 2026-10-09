@@ -27,6 +27,8 @@ def pick_clock(monkeypatch):
 
     def advance(**kw):
         state["now"] += timedelta(**kw)
+        while state["now"].weekday() >= 5:   # 周五跑时 +1 天会落到周六，周末不留痕
+            state["now"] += timedelta(days=1)
 
     state["advance"] = advance
     return state

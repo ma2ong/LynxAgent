@@ -61,6 +61,14 @@ CREATE TABLE IF NOT EXISTS forecast_events (
     change REAL,
     PRIMARY KEY (symbol, ann_date, period)
 );
+-- 公司事件（2026-10-09）：回购预案 / 机构调研，只给智选打标签，不进排序。
+CREATE TABLE IF NOT EXISTS company_events (
+    symbol TEXT,
+    ann_date TEXT,
+    kind TEXT,
+    detail REAL,
+    PRIMARY KEY (symbol, ann_date, kind)
+);
 CREATE TABLE IF NOT EXISTS picks_history (
     pick_date TEXT,
     pool TEXT,
@@ -1358,6 +1366,26 @@ class LocalQuantStore:
             "WHERE ann_date >= ? ORDER BY ann_date", (since,)).fetchall()
         return {str(r[0]): {"ann_date": r[1], "forecast_type": r[2], "change": r[3]} for r in rows}
 
+    def upsert_company_events(self, rows: List[Dict[str, object]]) -> None:
+        """rows: [{symbol, ann_date(YYYY-MM-DD), kind(buyback|survey), detail}]；
+        detail：回购=计划金额上限（元），调研=参与机构数。"""
+        conn = self._conn()
+        conn.executemany(
+            "INSERT OR REPLACE INTO company_events(symbol,ann_date,kind,detail) VALUES(?,?,?,?)",
+            [(str(r["symbol"]).zfill(6), str(r["ann_date"])[:10], str(r["kind"]), r.get("detail")) for r in rows],
+        )
+        conn.commit()
+
+    def load_recent_company_events(self, since: str) -> Dict[str, Dict[str, Dict[str, object]]]:
+        """since 之后的事件：{symbol: {kind: 最近一次}}。"""
+        rows = self._conn().execute(
+            "SELECT symbol, ann_date, kind, detail FROM company_events WHERE ann_date >= ? ORDER BY ann_date",
+            (since,)).fetchall()
+        out: Dict[str, Dict[str, Dict[str, object]]] = {}
+        for symbol, ann, kind, detail in rows:
+            out.setdefault(str(symbol), {})[str(kind)] = {"ann_date": ann, "detail": detail}
+        return out
+
     def load_bad_forecast_symbols(self) -> set:
         cur = self._conn().execute("SELECT symbol FROM fundamental_flags WHERE bad_forecast=1")
         return {row[0] for row in cur.fetchall()}
@@ -1559,6 +1587,24 @@ def get_local_store() -> LocalQuantStore:
             if _store_singleton is None:
                 _store_singleton = LocalQuantStore()
     return _store_singleton
+
+
+# 回购预案 / 机构调研标签的过闸口径（experiments/rule_audit.py ev_buyback / ev_survey，2026-10-09）：
+# 公告后第一个开盘买入，T+5 过七闸（调研 T+20、T+60 也过）。晚买没验证过，所以只标近 7 个自然日。
+EVENT_TAG_WINDOW_DAYS = 7
+
+
+def event_tags(events: Optional[Dict[str, Dict[str, object]]]) -> List[Dict[str, object]]:
+    if not events:
+        return []
+    tags: List[Dict[str, object]] = []
+    if "buyback" in events:
+        tags.append({"kind": "buyback", "label": "回购预案", "ann_date": events["buyback"].get("ann_date")})
+    if "survey" in events:
+        n = events["survey"].get("detail")
+        label = f"机构调研 {int(n)}家" if isinstance(n, (int, float)) and n > 0 else "机构调研"
+        tags.append({"kind": "survey", "label": label, "ann_date": events["survey"].get("ann_date")})
+    return tags
 
 
 # 业绩预告标签的过闸口径（experiments/rule_audit.py fc_beat / fc_mild，T+60 过七闸）。

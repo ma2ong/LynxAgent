@@ -123,6 +123,8 @@ export interface QuantSmartPoolItem {
   confluence_tags?: string[]
   /** 近 ~40 个交易日内的正面业绩预告（只展示、不进排序） */
   earnings?: { label: string; forecast_type: string; change: number | null; ann_date: string } | null
+  /** 近 7 天的回购预案 / 机构调研（只展示、不进排序） */
+  events?: { kind: 'buyback' | 'survey'; label: string; ann_date: string }[]
 }
 
 export interface RiskFlag {

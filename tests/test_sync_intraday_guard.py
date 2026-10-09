@@ -31,6 +31,7 @@ def _svc(tmp_path, monkeypatch, hour, minute):
     ]))
     monkeypatch.setattr(svc, "_fetch_fundamental_flags", lambda: [])
     monkeypatch.setattr(svc, "_fetch_forecast_events", lambda: [])
+    monkeypatch.setattr(svc, "_fetch_company_events", lambda: [])
     return svc, store, t, y
 
 

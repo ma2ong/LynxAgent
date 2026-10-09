@@ -520,6 +520,51 @@ def _attach_forecast(df: pd.DataFrame) -> None:
     df["fc_beat_age"] = pos - last
 
 
+def _attach_events(df: pd.DataFrame) -> None:
+    """回购 / 股东增减持 / 机构调研（2026-10-09）。口径同 _attach_forecast：公告日映射到
+    ≤公告日的最后一个交易日，配 --entry open 即公告后第一个开盘买。数据先跑
+    experiments/fetch_events.py；缺文件时对应列全 False。回购没有首次公告日，用「回购起始时间」
+    （董事会预案日，晚于或等于首次公告）——偏保守。"""
+    days = pd.DatetimeIndex(sorted(pd.to_datetime(df["date"].unique())))
+    key = pd.MultiIndex.from_arrays([df["symbol"], df["date"]])
+
+    def mark(ev: pd.DataFrame, col: str) -> None:
+        df[col] = False
+        ev = ev.dropna(subset=["ann"])
+        p = days.searchsorted(ev["ann"].values, side="right") - 1
+        ev = ev[p >= 0].assign(date=days[p[p >= 0]].strftime("%Y-%m-%d"))
+        idx = pd.MultiIndex.from_frame(ev[["symbol", "date"]].drop_duplicates())
+        df[col] = key.isin(idx)
+
+    cache = os.path.join(HERE, ".cache")
+    path = os.path.join(cache, "repurchase.csv")
+    for col in ("ev_buyback", "ev_buyback_big", "ev_holder_up", "ev_holder_up_big", "ev_holder_down",
+                "ev_survey", "ev_survey_hot"):
+        df[col] = False
+    if os.path.exists(path):
+        x = pd.read_csv(path, dtype=str)
+        ev = pd.DataFrame({"symbol": x.iloc[:, 1].str.zfill(6), "ann": pd.to_datetime(x.iloc[:, 11], errors="coerce"),
+                           "amt": pd.to_numeric(x.iloc[:, 10], errors="coerce")})
+        mark(ev, "ev_buyback")
+        mark(ev[ev["amt"] >= 1e8], "ev_buyback_big")
+    for fname, col, big in (("holder_up.csv", "ev_holder_up", "ev_holder_up_big"), ("holder_down.csv", "ev_holder_down", None)):
+        path = os.path.join(cache, fname)
+        if os.path.exists(path):
+            x = pd.read_csv(path, dtype=str)
+            ev = pd.DataFrame({"symbol": x.iloc[:, 0].str.zfill(6), "ann": pd.to_datetime(x.iloc[:, 15], errors="coerce"),
+                               "pct": pd.to_numeric(x.iloc[:, 7], errors="coerce")})
+            mark(ev, col)
+            if big:
+                mark(ev[ev["pct"] >= 0.5], big)
+    path = os.path.join(cache, "survey.csv")
+    if os.path.exists(path):
+        x = pd.read_csv(path, dtype={"SECURITY_CODE": str})
+        ev = pd.DataFrame({"symbol": x["SECURITY_CODE"].str.zfill(6), "ann": pd.to_datetime(x["NOTICE_DATE"], errors="coerce"),
+                           "n": pd.to_numeric(x["SUM"], errors="coerce")})
+        mark(ev, "ev_survey")
+        mark(ev[ev["n"] >= 20], "ev_survey_hot")
+
+
 def _attach_regime(df: pd.DataFrame) -> None:
     """挂上每个交易日的大盘环境标签（偏暖 / 中性 / 偏冷）。
 
@@ -629,6 +674,7 @@ def build_panel(db: str, since: str, horizon: int, entry: str = "close") -> pd.D
     _attach_regime(df)
     _attach_lottery(df)
     _attach_forecast(df)
+    _attach_events(df)
 
     df = df[df["fwd_excess"].notna()]
     df = df[(df["amount"] >= MIN_AMOUNT) & (df["close"] >= MIN_PRICE)]
@@ -1059,6 +1105,14 @@ RULES = {
     "fc_beat_lag20": ("强预增公告后第 20~39 个交易日买入", lambda d: d["fc_beat_age"].between(20, 39)),
     "fc_bad": ("业绩预告预减/首亏/续亏/增亏——反向对照",
                lambda d: d["fc_type"].isin(["预减", "首亏", "续亏", "增亏"])),
+    # ---- 价外事件（2026-10-09）：回购 / 股东增减持 / 机构调研，七条一起过 Holm。
+    "ev_buyback": ("公司公布回购预案", lambda d: d["ev_buyback"]),
+    "ev_buyback_big": ("回购预案金额上限 ≥1 亿", lambda d: d["ev_buyback_big"]),
+    "ev_holder_up": ("股东增持公告", lambda d: d["ev_holder_up"]),
+    "ev_holder_up_big": ("股东增持占总股本 ≥0.5%", lambda d: d["ev_holder_up_big"]),
+    "ev_holder_down": ("股东减持公告——反向对照", lambda d: d["ev_holder_down"]),
+    "ev_survey": ("机构调研纪要公告", lambda d: d["ev_survey"]),
+    "ev_survey_hot": ("机构调研 ≥20 家机构", lambda d: d["ev_survey_hot"]),
     "maxvol_down": ("近 60 日天量那天收阴（疑似派发）", lambda d: d["maxvol60_down"]),
     "maxvol_up": ("近 60 日天量那天收阳（派发判据的另一侧）",
                   lambda d: d["maxvol60_valid"] & ~d["maxvol60_down"]),

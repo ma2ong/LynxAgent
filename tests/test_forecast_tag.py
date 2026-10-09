@@ -75,3 +75,53 @@ def test_smart_items_get_tag_without_score_change(tmp_path, monkeypatch):
     assert items[0]["earnings"]["label"] == "业绩预增 +200%"
     assert items[1]["earnings"] is None
     assert "confluence_bonus" not in items[0]               # 只打标签，不加分
+
+
+def test_company_event_tags(tmp_path, monkeypatch):
+    """回购预案 / 机构调研（2026-10-09，T+5 过七闸）：近 7 天的才标，只标不加分。"""
+    import app.lite_main as lite_main
+    from quantcore.quant.local_store import event_tags
+
+    store = LocalQuantStore(str(tmp_path / "t.sqlite"))
+    store.upsert_company_events([
+        {"symbol": "600001", "ann_date": _d(2), "kind": "buyback", "detail": 2e8},
+        {"symbol": "600001", "ann_date": _d(3), "kind": "survey", "detail": 35},
+        {"symbol": "600002", "ann_date": _d(20), "kind": "survey", "detail": 10},   # 超出窗口
+    ])
+    assert event_tags(None) == []
+    monkeypatch.setattr("quantcore.quant.local_store.get_local_store", lambda: store)
+    monkeypatch.setattr("quantcore.quant.data.load_local_kline", lambda *a, **k: None)
+    items = [{"symbol": "600001", "smart_score": 80.0}, {"symbol": "600002", "smart_score": 79.0}]
+    lite_main._confluence_enrich_items(items)
+    assert [t["label"] for t in items[0]["events"]] == ["回购预案", "机构调研 35家"]
+    assert items[1]["events"] == []
+    assert items[0]["smart_score"] == 80.0
+
+
+def test_sync_company_events(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    import pandas as pd
+
+    import quantcore.quant.sync_service as ss
+
+    recent, old = _d(3), _d(60)
+    fake_ak = types.SimpleNamespace(stock_repurchase_em=lambda: pd.DataFrame({
+        "股票代码": ["600001", "600002"], "回购起始时间": [recent, old], "计划回购金额区间-上限": [1e8, 5e7]}))
+    monkeypatch.setitem(sys.modules, "akshare", fake_ak)
+
+    class Resp:
+        def __init__(self, page):
+            self.page = page
+
+        def json(self):
+            if self.page > 1:
+                return {"result": None, "message": "ok"}
+            return {"result": {"pages": 1, "data": [{"SECURITY_CODE": "000001", "NOTICE_DATE": recent + " 00:00:00", "SUM": 12}]}}
+
+    monkeypatch.setattr(ss.requests, "get", lambda url, params, timeout: Resp(int(params["pageNumber"])))
+    monkeypatch.setattr(ss.time, "sleep", lambda s: None)
+    svc = ss.MarketSyncService(store=LocalQuantStore(str(tmp_path / "t.sqlite")), max_workers=1)
+    rows = svc._fetch_company_events()
+    assert {(r["symbol"], r["kind"]) for r in rows} == {("600001", "buyback"), ("000001", "survey")}

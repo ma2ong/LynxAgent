@@ -378,6 +378,7 @@
                   近20日 {{ signedPercent(row.entry_position.ret20) }}
                 </el-tag>
                 <el-tag v-if="row.earnings" class="capability-tag" type="success" effect="plain">{{ row.earnings.label }}</el-tag>
+                <el-tag v-for="e in row.events || []" :key="e.kind" class="capability-tag" type="success" effect="plain">{{ e.label }}</el-tag>
                 <el-tag v-if="topPattern(row)" class="capability-tag" type="primary" effect="plain">{{ topPattern(row)?.name }}</el-tag>
               </div>
               <div class="pc-actions">
@@ -480,6 +481,9 @@
                   :content="`${row.earnings.ann_date} 公告。历史回测（2020 起）：公告后持有 60 个交易日，比同等涨幅、同等成交额的股票平均多 2~3 个百分点；5 天内没有优势。是中线倾斜，不是短线信号，不参与排序。`">
                   <el-tag disable-transitions class="capability-tag" type="success" effect="plain">{{ row.earnings.label }}</el-tag>
                 </el-tooltip>
+                <el-tooltip v-for="e in row.events || []" :key="e.kind" placement="top" :content="eventTip(e)">
+                  <el-tag disable-transitions class="capability-tag" type="success" effect="plain">{{ e.label }}</el-tag>
+                </el-tooltip>
                 <el-tag disable-transitions v-if="topPattern(row)" class="capability-tag" type="primary" effect="plain" :title="topPattern(row)?.reason">
                   {{ topPattern(row)?.name }}
                 </el-tag>
@@ -566,6 +570,11 @@ const mobileQuery = window.matchMedia('(max-width: 760px)')
 const isMobile = ref(mobileQuery.matches)
 mobileQuery.addEventListener('change', (e) => { isMobile.value = e.matches })
 // 关键依据列只放一个形态：优先「三不卖」（持有类确认），其次强度最高的
+// 数字来自 experiments/README.md 2026-10-09 段（rule_audit 匹配对照增量，次日开盘买）
+const eventTip = (e: { kind: string; ann_date: string }) => e.kind === 'buyback'
+  ? `${e.ann_date} 公布回购预案。历史回测（2020 起，约 3600 次）：公告后第一个交易日开盘买、持有 5 天，比同等涨幅、同等成交额的股票平均多约 0.4 个百分点。是小幅倾斜，不参与排序。`
+  : `${e.ann_date} 披露机构调研。历史回测（2020 起，约 10 万次）：公告后第一个交易日开盘买，5 天平均多约 0.2、60 天多约 0.6 个百分点（对比同等涨幅、同等成交额的股票）。是小幅倾斜，不参与排序。`
+
 const topPattern = (row: any) => {
   const list = row.patterns || []
   if (!list.length) return null

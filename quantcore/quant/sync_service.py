@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time as dtime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -290,6 +291,44 @@ class MarketSyncService:
                              "change": None if pd.isna(chg) else float(chg)})
         return rows
 
+    def _fetch_company_events(self) -> List[Dict[str, object]]:
+        """近 30 天的回购预案与机构调研（东财数据中心），给智选打标签用。任一源失败只少那一类。"""
+        import akshare as ak
+
+        since = (date.today() - timedelta(days=30)).isoformat()
+        rows: List[Dict[str, object]] = []
+        try:
+            df = ak.stock_repurchase_em()
+            for _, r in df.iterrows():
+                ann = str(r.get("回购起始时间") or "")[:10]
+                if ann >= since and len(ann) == 10:
+                    amt = pd.to_numeric(r.get("计划回购金额区间-上限"), errors="coerce")
+                    rows.append({"symbol": str(r.get("股票代码") or "").zfill(6), "ann_date": ann, "kind": "buyback",
+                                 "detail": None if pd.isna(amt) else float(amt)})
+        except Exception as exc:  # noqa: BLE001 — 外部源失败只影响标签
+            self._progress["last_error"] = ("buyback events: " + str(exc))[:200]
+        try:
+            page, pages = 1, 1
+            while page <= pages and page <= 200:
+                # 这张表 pageSize 超过 50 会回「系统繁忙」
+                j = requests.get("https://datacenter-web.eastmoney.com/api/data/v1/get", timeout=20, params={
+                    "reportName": "RPT_ORG_SURVEY", "columns": "SECURITY_CODE,NOTICE_DATE,SUM",
+                    "pageSize": "50", "pageNumber": str(page), "source": "WEB", "client": "WEB",
+                    "filter": f"(NUMBERNEW=\"1\")(NOTICE_DATE>='{since}')"}).json()
+                res = j.get("result") or {}
+                if not res.get("data"):
+                    break
+                pages = int(res.get("pages") or 1)
+                for r in res["data"]:
+                    rows.append({"symbol": str(r.get("SECURITY_CODE") or "").zfill(6),
+                                 "ann_date": str(r.get("NOTICE_DATE") or "")[:10], "kind": "survey",
+                                 "detail": r.get("SUM")})
+                page += 1
+                time.sleep(0.3)
+        except Exception as exc:  # noqa: BLE001
+            self._progress["last_error"] = ("survey events: " + str(exc))[:200]
+        return [r for r in rows if r["symbol"].isdigit() and len(r["ann_date"]) == 10]
+
     def status(self) -> Dict[str, object]:
         status = dict(self._progress)
         try:
@@ -479,6 +518,12 @@ class MarketSyncService:
                     self.store.upsert_forecast_events(events)
             except Exception as exc:  # noqa: BLE001
                 self._progress["last_error"] = ("forecast events: " + str(exc))[:200]
+            try:
+                events = self._fetch_company_events()
+                if events:
+                    self.store.upsert_company_events(events)
+            except Exception as exc:  # noqa: BLE001
+                self._progress["last_error"] = ("company events: " + str(exc))[:200]
 
             key = "last_full_sync" if full else "last_incremental_sync"
             self.store.set_state(key, datetime.now().isoformat(timespec="seconds"))

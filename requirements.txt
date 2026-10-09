@@ -61,3 +61,4 @@ concurrent-log-handler>=0.9.24  # Windows 友好的日志轮转处理器
 # Phase 1 - Data Infrastructure
 polars>=0.20.0,<2.0.0
 pyarrow>=14.0.0,<25.0.0
+lightgbm>=4.6  # 多因子模型影子留痕（quantcore/quant/ml_shadow.py，独立计划任务）

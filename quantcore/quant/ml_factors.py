@@ -82,7 +82,10 @@ def build_features(k: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     f["upper_sh"] = (k["high"] - np.maximum(k["open"], k["close"])) / k["prev_close"]
     f["intraday"] = k["close"] / k["open"] - 1
     f["gap"] = k["open"] / k["prev_close"] - 1
-    lim = np.where(k["symbol"].str.startswith(("300", "301", "688", "689")), 0.195, 0.095)
+    # 创业板 2020-08-24 起才是 20%（老数据回测要用）；ST 早年 5% 没区分
+    board20 = k["symbol"].str.startswith(("688", "689")) | (
+        k["symbol"].str.startswith(("300", "301")) & (k["date"] >= "2020-08-24"))
+    lim = np.where(board20, 0.195, 0.095)
     f["lu20"] = (k["dr"] >= lim).astype("float32").groupby(k["symbol"], sort=False).transform(
         lambda s: s.rolling(20, min_periods=1).sum())
     f["lprice"] = np.log(k["close"])

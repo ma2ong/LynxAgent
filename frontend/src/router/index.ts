@@ -17,6 +17,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'limit-up', name: 'limit-up', component: () => import('@/views/LimitUp/Index.vue') },
       { path: 'heatmap', name: 'heatmap', component: () => import('@/views/Heatmap/Index.vue') },
       { path: 'quant', name: 'quant', component: () => import('@/views/Quant/index.vue') },
+      { path: 'model-picks', name: 'model-picks', component: () => import('@/views/ModelPicks/Index.vue'), meta: { requiresAdmin: true } },
       { path: 'review', name: 'picks-review', component: () => import('@/views/Review/Index.vue') },
       { path: 'risk-alert', name: 'risk-alert', component: () => import('@/views/RiskAlert/Index.vue') },
       { path: 'stock-analysis', name: 'stock-analysis', component: () => import('@/views/StockAnalysis/index.vue') },

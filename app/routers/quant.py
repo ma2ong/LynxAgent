@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -7,9 +8,10 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.lite_admin import require_admin
 from app.lite_auth import get_current_lite_user
 from app.lite_billing import require_quota
-from app.core.market_data import _load_realtime_quotes_snapshot
+from app.core.market_data import _load_realtime_quotes_snapshot, _realtime_quotes, _run_data_task
 from app.core.scan_gate import run_scan
 from quantcore.quant import QuantEngine
 from quantcore.quant.chart_service import build_chart_payload
@@ -20,6 +22,7 @@ from quantcore.quant.investor_panel import investor_panel, run_panel_batch
 from quantcore.quant.red_flags import red_flag_scan
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quant", tags=["quant"])
 engine = QuantEngine()
 
@@ -587,6 +590,42 @@ async def quant_picks_stats(days: int = 30, pool: str = "", include_items: bool 
         return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/model-picks")
+async def quant_model_picks(user: dict = Depends(require_admin)):
+    """「模型选股」页（试运行，仅管理员）：多因子模型最新一周名单 + 实时价 + 至今成绩。
+    成绩由每天 17:30 的计划任务算好写进 runtime/ml_shadow_eval.json（现算要十几秒）。"""
+    import json
+    from pathlib import Path
+    from quantcore.quant import ml_shadow
+    from quantcore.quant.local_store import DEFAULT_DB_PATH
+
+    data = await _run_light(ml_shadow.latest_list, DEFAULT_DB_PATH)
+    quotes = await _realtime_quotes([i["symbol"] for i in data["items"]], allow_snapshot_fallback=False)
+    for item in data["items"]:
+        q = quotes.get(item["symbol"]) or {}
+        price = q.get("price") if q.get("price") is not None else q.get("close")
+        item["price"] = price
+        item["pct_today"] = q.get("change_percent") if q.get("change_percent") is not None else q.get("pct_chg")
+        cost = item["buy_open"] or item["signal_close"]
+        item["ret"] = round((price / cost - 1) * 100, 2) if price and cost else None
+    rets = [i["ret"] for i in data["items"] if i["ret"] is not None]
+    today = [i["pct_today"] for i in data["items"] if i["pct_today"] is not None]
+    data["avg_ret"] = round(sum(rets) / len(rets), 2) if rets else None
+    data["avg_today"] = round(sum(today) / len(today), 2) if today else None
+    data["quoted"] = len(today)
+    try:
+        snap = await _run_data_task(_load_realtime_quotes_snapshot, 30, timeout=8.0)
+        mk = [q.get("change_percent") for s, q in snap.items()
+              if not s.startswith(("8", "4", "92")) and q.get("change_percent") is not None]
+        data["market_today"] = round(sum(mk) / len(mk), 2) if mk else None
+    except Exception as exc:  # noqa: BLE001 — 全市场快照是外部源，拿不到就不给对比，不影响名单
+        logger.warning("model-picks market snapshot failed: %r", exc)
+        data["market_today"] = None
+    eval_path = Path(DEFAULT_DB_PATH).with_name("ml_shadow_eval.json")
+    data["record"] = json.loads(eval_path.read_text(encoding="utf-8")) if eval_path.exists() else None
+    return {"success": True, "data": data}
 
 
 @router.get("/risk-check")

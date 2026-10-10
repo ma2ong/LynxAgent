@@ -82,3 +82,19 @@ def test_evaluate_uses_next_open_and_pool_baseline(tmp_path):
     assert row["ret"] == pytest.approx(0.10 - ml_shadow.COST, abs=1e-6)   # 首周全是新买，换手 100%
     assert row["excess"] == pytest.approx(row["ret"] - row["base"])
     assert r["verdict"].startswith("样本不足")
+
+
+def test_latest_list_marks_new_kept_sold_and_buy_open(tmp_path):
+    db, days = _db(tmp_path, n_sym=4, n_days=20)
+    d0, d1 = days[-7], days[-2]
+    conn = sqlite3.connect(db)
+    conn.executescript(ml_shadow.SCHEMA)
+    for s, d, kept in (("600000", d0, 0), ("600002", d0, 0), ("600000", d1, 1), ("600003", d1, 0)):
+        conn.execute("INSERT INTO ml_shadow_picks VALUES (?,?,?,?,?,?,?)", (d, s, 1, 0.9, kept, 10, "x"))
+    conn.commit()
+    conn.close()
+    r = ml_shadow.latest_list(db)
+    assert r["signal_date"] == d1 and r["prev_date"] == d0 and r["buy_date"] == days[-1]
+    assert {i["symbol"]: i["kept"] for i in r["items"]} == {"600000": True, "600003": False}
+    assert [s["symbol"] for s in r["sold"]] == ["600002"]
+    assert all(i["buy_open"] for i in r["items"])

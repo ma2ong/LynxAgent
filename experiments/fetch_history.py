@@ -1,0 +1,77 @@
+"""拉 2013–2019 全市场日线（含期间退市股），给 ml_history.py 做模型没见过的老数据回测（2026-10-10）。
+
+本地库从 2020 年开始，2013–2019 这 7 年模型从未见过。新浪日K（akshare stock_zh_a_daily）：
+前复权价格 + 真实成交额；早年退市股没有复权因子时退回不复权（只差除权缺口）。
+腾讯 fqkline 连拉几百只就被 WAF 拦（2026-10-10 实测），所以换新浪、慢速、逐只缓存可续传。
+股票名单 = 本地库现存全部 + 交易所退市列表里 2013 年后退市的。查不到的退市股会说出来。
+
+输出 experiments/.cache/kline_2013_2019.parquet（逐只缓存在 .cache/hist_parts/）。约 1 小时。
+"""
+from __future__ import annotations
+
+import sqlite3
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+CACHE = ROOT / "experiments" / ".cache"
+PARTS = CACHE / "hist_parts"
+START, END = "20130101", "20191231"
+
+
+def fetch(code: str) -> bool:
+    """拉一只写到 hist_parts；返回是否有数据。已缓存的直接跳过。"""
+    import akshare as ak
+    out, empty = PARTS / f"{code}.parquet", PARTS / f"{code}.empty"
+    if out.exists() or empty.exists():
+        return out.exists()
+    mk = ("sh" if code.startswith("6") else "sz") + code
+    df = None
+    for adjust in ("qfq", ""):
+        for wait in (0, 3):   # 新浪对个别股票稳定报错（成交额接口空），不是限流，不必久等
+            time.sleep(wait + 0.4)
+            try:
+                df = ak.stock_zh_a_daily(symbol=mk, start_date=START, end_date=END, adjust=adjust)
+                break
+            except Exception as e:  # 无复权因子 / 无数据 / 网络：先重试，再退回不复权
+                err = e
+        if df is not None:
+            break
+    if df is None or df.empty:
+        print(f"{code} 无数据：{err!r}"[:160] if df is None else f"{code} 无数据", flush=True)
+        empty.touch()
+        return False
+    df = df.assign(symbol=code, date=pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d"))
+    df[["symbol", "date", "open", "high", "low", "close", "amount"]].to_parquet(out, index=False)
+    return True
+
+
+def main():
+    conn = sqlite3.connect(f"file:{ROOT / 'runtime' / 'quant_data.sqlite'}?mode=ro", uri=True)
+    alive = [r[0] for r in conn.execute("SELECT DISTINCT symbol FROM stock_meta")]
+    conn.close()
+    dl = pd.concat([pd.read_csv(CACHE / f, dtype=str).iloc[:, :4].set_axis(["code", "name", "list", "out"], axis=1)
+                    for f in ("delist_sh.csv", "delist_sz.csv")])
+    dead = dl[dl["out"].astype(str) >= START]["code"].str.zfill(6).tolist()
+    codes = sorted({c for c in alive + dead if not c.startswith(("8", "4", "92"))})
+    print(f"现存 {len(alive)} 只 + 2013 后退市 {len(dead)} 只 → 去掉北交所共 {len(codes)} 只", flush=True)
+    PARTS.mkdir(exist_ok=True)
+    missing_dead = []
+    with ThreadPoolExecutor(2) as ex:
+        for i, (code, ok) in enumerate(zip(codes, ex.map(fetch, codes))):
+            if not ok and code in dead:
+                missing_dead.append(code)
+            if i % 250 == 0:
+                print(f"{i}/{len(codes)}", flush=True)
+    out = pd.concat([pd.read_parquet(f) for f in PARTS.glob("*.parquet")], ignore_index=True)
+    out = out.dropna(subset=["open", "close"])
+    out.to_parquet(CACHE / "kline_2013_2019.parquet", index=False)
+    print(f"{out['symbol'].nunique()} 只有日线，共 {len(out)} 行；退市股查不到 {len(missing_dead)}/{len(dead)} 只")
+
+if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8")
+    main()

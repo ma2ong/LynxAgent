@@ -161,3 +161,34 @@ def evaluate(db: str | Path) -> dict:
     out["verdict"] = ("样本不足：至少记满 %d 周再下结论" % MIN_WEEKS if len(t) < MIN_WEEKS else
                       "有效" if out["t"] is not None and out["t"] >= 2 and out["mean_excess"] > 0 else "未证明有效")
     return out
+
+
+def latest_list(db: str | Path) -> dict:
+    """「模型选股」页用：最新一期名单 + 相对上一期的进出 + 买入日开盘价（还没到买入日则为空）。"""
+    import json
+    from .ml_factors import INDUSTRY_MAP
+
+    with _conn(db) as conn:
+        dates = [r[0] for r in conn.execute(
+            "SELECT DISTINCT signal_date FROM ml_shadow_picks ORDER BY signal_date DESC LIMIT 2")]
+        if not dates:
+            return {"signal_date": None, "items": [], "sold": []}
+        cur = dates[0]
+        rows = conn.execute("SELECT symbol, rank, score, kept, close FROM ml_shadow_picks "
+                            "WHERE signal_date = ? ORDER BY rank", (cur,)).fetchall()
+        prev = {r[0] for r in conn.execute(
+            "SELECT symbol FROM ml_shadow_picks WHERE signal_date = ?", (dates[1],))} if len(dates) > 1 else set()
+        names = dict(conn.execute("SELECT symbol, name FROM stock_meta"))
+        buy_date = conn.execute("SELECT min(date) FROM daily_kline WHERE date > ?", (cur,)).fetchone()[0]
+        buy_open = dict(conn.execute("SELECT symbol, open FROM daily_kline WHERE date = ?", (buy_date,))) if buy_date else {}
+    try:
+        ind = json.load(open(INDUSTRY_MAP, encoding="utf-8"))
+    except OSError:
+        ind = {}
+    now = {r[0] for r in rows}
+    items = [{"symbol": s, "name": names.get(s, ""), "industry": ind.get(s, ""), "rank": rk,
+              "score": round(sc, 4), "kept": bool(kp), "signal_close": c, "buy_open": buy_open.get(s)}
+             for s, rk, sc, kp, c in rows]
+    sold = [{"symbol": s, "name": names.get(s, "")} for s in sorted(prev - now)]
+    return {"signal_date": cur, "prev_date": dates[1] if len(dates) > 1 else None, "buy_date": buy_date,
+            "items": items, "sold": sold}

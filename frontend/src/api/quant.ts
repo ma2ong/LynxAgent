@@ -538,7 +538,48 @@ const normalizePatternPoolResult = (raw: any): QuantPatternPoolResult => {
   }
 }
 
+export interface ModelPickItem {
+  symbol: string
+  name: string
+  industry: string
+  rank: number
+  score: number
+  kept: boolean
+  signal_close: number
+  buy_open: number | null
+  price: number | null
+  pct_today: number | null
+  ret: number | null
+}
+
+export interface ModelPicksRecord {
+  weeks: number
+  cum_ret?: number
+  cum_base?: number
+  mean_excess?: number
+  win_rate?: number
+  t?: number | null
+  verdict?: string
+  rows: { signal_date: string; ret: number; base: number; excess: number }[]
+}
+
+export interface ModelPicksResult {
+  signal_date: string | null
+  prev_date: string | null
+  buy_date: string | null
+  items: ModelPickItem[]
+  sold: { symbol: string; name: string }[]
+  avg_ret: number | null
+  avg_today: number | null
+  market_today: number | null
+  quoted: number
+  record: ModelPicksRecord | null
+}
+
 export const quantApi = {
+  modelPicks: async () =>
+    unwrap<ModelPicksResult>(await ApiClient.get('/api/quant/model-picks', { _ts: nonce() }, { timeout: 30000 })),
+
   capabilities: async () =>
     unwrap<QuantCapabilitiesResult>(await ApiClient.get('/api/quant/capabilities', undefined, { timeout: 60000 })),
 

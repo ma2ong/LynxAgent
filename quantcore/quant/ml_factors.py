@@ -88,7 +88,8 @@ def build_features(k: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     lim = np.where(board20, 0.195, 0.095)
     f["lu20"] = (k["dr"] >= lim).astype("float32").groupby(k["symbol"], sort=False).transform(
         lambda s: s.rolling(20, min_periods=1).sum())
-    f["lprice"] = np.log(k["close"])
+    # 不用价位（log close）：前复权价位偷看未来送转（日后送转多的票早年复权价被压低）；
+    # 2026-10-10 去掉后新老两段回测都不变差（2022-26 t 1.21→1.54）
     feat = pd.DataFrame(f).astype("float32")
     k = pd.concat([k, feat], axis=1)
     names = list(feat.columns)

@@ -9,7 +9,8 @@
 - 老数据单独：净周超额 > 0，且多数年份为正；
 - 新老合并（约 450 周）：t ≥ 2 —— 这才算「统计上可靠」。
 
-用法：python experiments/ml_history.py
+用法：python experiments/ml_history.py [--drop lprice]
+  --drop：去掉某些特征重跑。lprice（前复权价位）会偷看未来：日后送转多的股票早年复权价被压得很低。
 """
 from __future__ import annotations
 
@@ -83,7 +84,11 @@ def report(t: pd.DataFrame, label: str) -> None:
 
 
 def main():
+    import argparse
     sys.stdout.reconfigure(encoding="utf-8")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--drop", nargs="*", default=[])
+    a = ap.parse_args()
     # ① 先用同一函数重算新数据段，确认构造能复现 ml_lab 记下的 +0.14pp / t 1.17
     new = low_turnover(pd.read_pickle(CACHE / "ml_preds_noev.pkl"))
     report(new, "新数据 2022-2026（复核）")
@@ -94,15 +99,17 @@ def main():
     k = k.sort_values(["symbol", "date"]).reset_index(drop=True)
     print(f"老数据日线 {len(k)} 行，{k['symbol'].nunique()} 只", flush=True)
     k, names = build_features(k)
+    names = [n for n in names if n not in a.drop]
     u = rank_universe(k, names, "2014-01-01")
     del k
     p = walk_forward(u, names, "2015-07-01")
-    p.to_pickle(CACHE / "ml_preds_2015_2019.pkl")
+    tag = "_drop-" + "-".join(a.drop) if a.drop else ""
+    p.to_pickle(CACHE / f"ml_preds_2015_2019{tag}.pkl")
     old = low_turnover(p)
     report(old, "老数据 2015-2019（从没见过）")
     both = pd.concat([old, new], ignore_index=True)
     report(both, "新老合并")
-    both.to_csv(ROOT / "experiments" / "results" / "ml_history_weekly.csv", index=False)
+    both.to_csv(ROOT / "experiments" / "results" / f"ml_history_weekly{tag}.csv", index=False)
 
 
 if __name__ == "__main__":

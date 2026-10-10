@@ -78,6 +78,46 @@ def fetch_tencent(code: str) -> bool:
     return True
 
 
+def fetch_sina_raw(code: str) -> bool:
+    """新浪原始日K（akshare 同一解码），跳过 akshare 里对退市股必挂的流通股本接口；
+    前复权 = 不复权价 ÷ 新浪 qfq 因子（与 akshare 的算法相同），拿不到因子就用不复权。"""
+    import requests
+    import py_mini_racer
+    from akshare.stock.cons import hk_js_decode, zh_sina_a_stock_hist_url, zh_sina_a_stock_qfq_url
+    mk = ("sh" if code.startswith("6") else "sz") + code
+    try:
+        r = requests.get(zh_sina_a_stock_hist_url.format(mk), timeout=20)
+        js = py_mini_racer.MiniRacer()
+        js.eval(hk_js_decode)
+        d = pd.DataFrame(js.call("d", r.text.split("=")[1].split(";")[0].replace('"', "")))
+    except Exception as e:  # 无数据 / 被拦：说出来，按缺失处理
+        print(f"{code} 新浪原始K 失败：{e!r}"[:120], flush=True)
+        return False
+    if "date" not in d:
+        return False
+    d["date"] = pd.to_datetime(d["date"]).dt.strftime("%Y-%m-%d")
+    d = d[(d["date"] >= "2013-01-01") & (d["date"] <= "2019-12-31")].copy()
+    if d.empty:
+        return False
+    for c in ("open", "high", "low", "close", "amount"):
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+    try:
+        t = requests.get(zh_sina_a_stock_qfq_url.format(mk), timeout=20).text
+        f = pd.DataFrame(eval(t.split("=")[1].split("\n")[0])["data"]).rename(columns={"d": "date", "f": "f"})
+        f["f"] = f["f"].astype(float)
+        d["dt"], f["dt"] = pd.to_datetime(d["date"]), pd.to_datetime(f["date"])
+        d = pd.merge_asof(d.sort_values("dt"), f.drop(columns="date").sort_values("dt"), on="dt")
+        d["f"] = d["f"].fillna(f.sort_values("date")["f"].iloc[0])
+        for c in ("open", "high", "low", "close"):
+            d[c] = d[c] / d["f"]
+    except Exception as e:  # 没有复权因子的退市股退回不复权
+        print(f"{code} 无复权因子，用不复权：{e!r}"[:100], flush=True)
+    d = d.assign(symbol=code)
+    d[["symbol", "date", "open", "high", "low", "close", "amount"]].to_parquet(PARTS / f"{code}.parquet", index=False)
+    (PARTS / f"{code}.empty").unlink(missing_ok=True)
+    return True
+
+
 def main():
     conn = sqlite3.connect(f"file:{ROOT / 'runtime' / 'quant_data.sqlite'}?mode=ro", uri=True)
     alive = [r[0] for r in conn.execute("SELECT DISTINCT symbol FROM stock_meta")]
@@ -96,7 +136,7 @@ def main():
             if i % 250 == 0:
                 print(f"{i}/{len(codes)}", flush=True)
     for code in list(missing_dead):
-        if fetch_tencent(code):
+        if fetch_sina_raw(code) or fetch_tencent(code):
             missing_dead.remove(code)
     out = pd.concat([pd.read_parquet(f) for f in PARTS.glob("*.parquet")], ignore_index=True)
     out = out.dropna(subset=["open", "close"])

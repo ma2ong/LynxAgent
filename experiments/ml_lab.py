@@ -15,7 +15,7 @@ Allen 同意为研究恢复机器学习（生产里的 ML 仍停用）。思路�
   ② 逐日 rank IC；③ 分年
 - 超参数固定，不调：调参在 4 年样本上等于又一次挑最好看的
 
-用法：python experiments/ml_lab.py [--no-events]
+用法：python experiments/ml_lab.py [--no-events] [--drop lprice]
 """
 from __future__ import annotations
 
@@ -83,12 +83,14 @@ def attach_events(k: pd.DataFrame, names: list[str]) -> None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-events", action="store_true")
+    ap.add_argument("--drop", nargs="*", default=[], help="去掉的特征（lprice 前复权价位会偷看未来送转）")
     a = ap.parse_args()
     import lightgbm as lgb
 
     k = load()
     print(f"日线 {len(k)} 行，{k['symbol'].nunique()} 只（含退市）", flush=True)
     k, names = build_features(k)
+    names = [n for n in names if n not in a.drop]
     if not a.no_events:
         attach_events(k, names)
     u = rank_universe(k, names, "2021-01-01")
@@ -108,7 +110,7 @@ def main():
         imps.append(pd.Series(m.feature_importance("gain"), index=names))
         print(f"  {q0} 训练 {len(tr)} 行 → 预测 {len(te)} 行", flush=True)
     p = pd.concat(preds)
-    tag = "noev" if a.no_events else "ev"
+    tag = ("noev" if a.no_events else "ev") + ("_drop-" + "-".join(a.drop) if a.drop else "")
     p.to_pickle(ROOT / "experiments" / ".cache" / f"ml_preds_{tag}.pkl")
 
     # ① 逐日 rank IC

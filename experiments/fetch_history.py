@@ -1,7 +1,8 @@
 """拉 2013–2019 全市场日线（含期间退市股），给 ml_history.py 做模型没见过的老数据回测（2026-10-10）。
 
 本地库从 2020 年开始，2013–2019 这 7 年模型从未见过。新浪日K（akshare stock_zh_a_daily）：
-前复权价格 + 真实成交额；早年退市股没有复权因子时退回不复权（只差除权缺口）。
+前复权价格 + 真实成交额。新浪查不到的退市股（几乎全部）改用腾讯日K：先试前复权，没有就用不复权
+（只差除权缺口），成交额按 成交量(手)×100×不复权收盘 估算。
 腾讯 fqkline 连拉几百只就被 WAF 拦（2026-10-10 实测），所以换新浪、慢速、逐只缓存可续传。
 股票名单 = 本地库现存全部 + 交易所退市列表里 2013 年后退市的。查不到的退市股会说出来。
 
@@ -50,6 +51,33 @@ def fetch(code: str) -> bool:
     return True
 
 
+def fetch_tencent(code: str) -> bool:
+    """新浪没有的退市股走腾讯；成功就删掉 .empty 标记。"""
+    import requests
+    mk = ("sh" if code.startswith("6") else "sz") + code
+    got = {}
+    for fq in ("qfq", ""):
+        time.sleep(0.3)
+        try:
+            j = requests.get("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+                             params={"param": f"{mk},day,2013-01-01,2019-12-31,2000,{fq}"}, timeout=20).json()
+            d = (j.get("data") or {}).get(mk) or {}
+            got[fq] = d.get("qfqday") or d.get("day") or []
+        except Exception as e:  # 腾讯会间歇性 WAF 拦截，失败就说出来，不影响其余
+            print(f"{code} 腾讯 {fq or 'raw'} 失败：{e!r}"[:120], flush=True)
+            got[fq] = []
+    bars = got["qfq"] or got[""]
+    if not bars:
+        return False
+    raw = {b[0]: float(b[2]) for b in got[""]}
+    df = pd.DataFrame([(code, b[0], *map(float, b[1:6])) for b in bars],
+                      columns=["symbol", "date", "open", "close", "high", "low", "vol"])
+    df["amount"] = df["vol"] * 100 * df["date"].map(raw).fillna(df["close"])
+    df[["symbol", "date", "open", "high", "low", "close", "amount"]].to_parquet(PARTS / f"{code}.parquet", index=False)
+    (PARTS / f"{code}.empty").unlink(missing_ok=True)
+    return True
+
+
 def main():
     conn = sqlite3.connect(f"file:{ROOT / 'runtime' / 'quant_data.sqlite'}?mode=ro", uri=True)
     alive = [r[0] for r in conn.execute("SELECT DISTINCT symbol FROM stock_meta")]
@@ -67,6 +95,9 @@ def main():
                 missing_dead.append(code)
             if i % 250 == 0:
                 print(f"{i}/{len(codes)}", flush=True)
+    for code in list(missing_dead):
+        if fetch_tencent(code):
+            missing_dead.remove(code)
     out = pd.concat([pd.read_parquet(f) for f in PARTS.glob("*.parquet")], ignore_index=True)
     out = out.dropna(subset=["open", "close"])
     out.to_parquet(CACHE / "kline_2013_2019.parquet", index=False)

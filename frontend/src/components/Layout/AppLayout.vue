@@ -21,7 +21,7 @@
       >
         <el-menu-item index="/dashboard"><el-icon><Odometer /></el-icon><span>盘面总览</span></el-menu-item>
         <el-menu-item index="/quant"><el-icon><MagicStick /></el-icon><span>智能选股</span></el-menu-item>
-        <el-menu-item v-if="currentUser?.is_admin" index="/model-picks"><el-icon><Cpu /></el-icon><span>模型选股</span></el-menu-item>
+        <el-menu-item index="/model-picks"><el-icon><Cpu /></el-icon><span>模型选股</span></el-menu-item>
         <el-menu-item index="/heatmap"><el-icon><Histogram /></el-icon><span>行业热力</span></el-menu-item>
         <el-menu-item index="/limit-up"><el-icon><TrendCharts /></el-icon><span>涨停热点</span></el-menu-item>
         <el-menu-item index="/risk-alert"><el-icon><Warning /></el-icon><span>风险预警</span></el-menu-item>

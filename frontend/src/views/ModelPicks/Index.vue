@@ -2,7 +2,7 @@
   <div class="model-picks">
     <div class="page-head">
       <div>
-        <h1>模型选股 <el-tag size="small" type="warning" effect="plain">试运行 · 仅管理员可见</el-tag></h1>
+        <h1>模型选股 <el-tag size="small" type="warning" effect="plain">试运行</el-tag></h1>
         <p>统计模型每周打分、平均分仓、持有一周；周五收盘后出新名单，下周一开盘调仓。</p>
       </div>
       <el-button :loading="loading" @click="load"><el-icon><Refresh /></el-icon>刷新</el-button>
@@ -132,6 +132,7 @@
       <div class="subtitle">怎么判断它行不行</div>
       <p>看上面的「实盘记录」：每周按真实操作结算（周一开盘买、下周一开盘卖、扣手续费），和同期全市场比。
         短期几周的输赢说明不了什么，至少看半年以上。</p>
+      <p class="disclaimer">以上为历史回测与模型统计结果，过去表现不代表未来，不构成投资建议。</p>
     </section>
 
     <el-drawer v-model="chartDrawer" :title="chartTitle" :size="isMobile ? '100%' : '62%'" direction="rtl">
@@ -269,6 +270,7 @@ onUnmounted(() => {
 .rules { font-size: 14px; line-height: 1.75; color: var(--el-text-color-regular); }
 .rules ol, .rules ul { margin: 0; padding-left: 20px; }
 .rules p { margin: 0; }
+.rules .disclaimer { margin-top: 10px; font-size: 12px; color: var(--el-text-color-secondary); }
 .rules .subtitle { font-weight: 700; color: var(--el-text-color-primary); margin: 12px 0 4px; }
 @media (max-width: 1000px) {
   .kpi-grid { grid-template-columns: 1fr 1fr; }

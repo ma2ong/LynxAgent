@@ -8,7 +8,6 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.lite_admin import require_admin
 from app.lite_auth import get_current_lite_user
 from app.lite_billing import require_quota
 from app.core.market_data import _load_realtime_quotes_snapshot, _realtime_quotes, _run_data_task
@@ -593,8 +592,8 @@ async def quant_picks_stats(days: int = 30, pool: str = "", include_items: bool 
 
 
 @router.get("/model-picks")
-async def quant_model_picks(book: str = "std", user: dict = Depends(require_admin)):
-    """「模型选股」页（试运行，仅管理员）：多因子模型最新一周名单 + 实时价 + 至今成绩。
+async def quant_model_picks(book: str = "std", user: dict = Depends(get_current_lite_user)):
+    """「模型选股」页（试运行，2026-10-10 起对所有登录用户开放）：多因子模型最新一周名单 + 实时价 + 至今成绩。
     成绩由每天 17:30 的计划任务算好写进 runtime/ml_shadow_eval.json（现算要十几秒）。
     book=small 是小资金版 10 只，另附标准版里排在后面的 10 只当替补（资金买不起一手时顶上）。"""
     import json

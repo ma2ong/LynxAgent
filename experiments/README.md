@@ -835,7 +835,7 @@ tooltip 写明回测量级。窗口只给 7 天：验证过的是公告后第一
 量级要说清：每次只多 0.2~0.4pp/5 日，是倾斜不是信号。
 
 **2026-10-09 Allen 同意做影子留痕**：`quantcore/quant/ml_factors.py`（特征与参数，与 ml_lab 共用一份）+
-`quantcore/quant/ml_shadow.py`；计划任务 `LynxAgent-MLShadow`（`scripts/install_ml_shadow.ps1`）每周六 03:00
+`quantcore/quant/ml_shadow.py`；计划任务 `LynxAgent-MLShadow`（`scripts/install_ml_shadow.ps1`）周一到周五 17:30（10-10 改，周末关机；周五漏跑则下周一补记上周五、只用上周五及以前的数据；同日起名单剔除 ST，10-09 首期已按此重记）
 用全部历史重训一次、按回测里那套低换手规则记 50 只到 `ml_shadow_picks`，不给用户看。
 `python scripts/ml_shadow.py --eval` 看成绩：下一交易日开盘买、下一期开盘卖，扣换手成本，对同池等权；
 不满 26 周只报进度。判定线事先定为 **26 周以上、周超额均值 > 0 且 t ≥ 2**。首期信号日 2026-10-09。

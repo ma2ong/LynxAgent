@@ -22,6 +22,8 @@ def _db(tmp_path, n_sym=30, n_days=320, end=date(2026, 10, 9)):
     conn = sqlite3.connect(db)
     conn.execute("CREATE TABLE daily_kline (symbol TEXT, date TEXT, open REAL, high REAL, low REAL, close REAL, "
                  "volume REAL, amount REAL)")
+    conn.execute("CREATE TABLE stock_meta (symbol TEXT, name TEXT)")
+    conn.execute("INSERT INTO stock_meta VALUES ('600001', '*ST测试')")
     rng = np.random.default_rng(1)
     days = _weekdays(n_days, end)
     for i in range(n_sym):
@@ -35,28 +37,28 @@ def _db(tmp_path, n_sym=30, n_days=320, end=date(2026, 10, 9)):
     return db, days
 
 
-def test_run_weekly_records_once_and_only_on_weekends(tmp_path, monkeypatch):
+def test_run_weekly_records_last_finished_week_without_st(tmp_path, monkeypatch):
     pytest.importorskip("lightgbm")
+    from datetime import datetime
     monkeypatch.setitem(ml_shadow.PARAMS, "min_data_in_leaf", 20)
     monkeypatch.setattr(ml_shadow, "ROUNDS", 5)
-    db, days = _db(tmp_path)
+    db, days = _db(tmp_path)                       # 日线到 2026-10-09（周五）
 
-    class Weekday:
-        @staticmethod
-        def now():
-            from datetime import datetime
-            return datetime(2026, 10, 8, 20)   # 周四
+    # 周五收盘前：本周没收完，记上周五
+    assert ml_shadow.signal_date(db, datetime(2026, 10, 9, 10)) == "2026-10-02"
+    # 周五 17 点后但今天日线没同步：不记，留给下周一
+    assert ml_shadow.signal_date(db, datetime(2026, 10, 16, 18)) is None
+    # 下周一补记：只用到上周五
+    assert ml_shadow.signal_date(db, datetime(2026, 10, 12, 17, 30)) == "2026-10-09"
 
-    monkeypatch.setattr(ml_shadow, "datetime", Weekday)
-    assert ml_shadow.run_weekly(db)["status"] == "skip"          # 周中不记
-
-    r = ml_shadow.run_weekly(db, force=True)
+    r = ml_shadow.run_weekly(db, now=datetime(2026, 10, 9, 17, 30))
     assert r["status"] == "ok" and r["signal_date"] == days[-1]
-    assert r["picks"] == 30                                        # 池子只有 30 只，全选
-    assert ml_shadow.run_weekly(db, force=True)["status"] == "skip"   # 同一周不重复记
+    assert r["picks"] == 29                                        # 30 只剔掉 1 只 ST，全选
+    assert ml_shadow.run_weekly(db, now=datetime(2026, 10, 12, 17, 30))["status"] == "skip"   # 同一周不重复记
     with sqlite3.connect(db) as conn:
         ranks = [r[0] for r in conn.execute("SELECT rank FROM ml_shadow_picks ORDER BY rank")]
-    assert ranks == list(range(1, 31))
+        assert not conn.execute("SELECT 1 FROM ml_shadow_picks WHERE symbol = '600001'").fetchone()
+    assert ranks == list(range(1, 30))
 
 
 def test_evaluate_uses_next_open_and_pool_baseline(tmp_path):

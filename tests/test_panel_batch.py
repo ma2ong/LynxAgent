@@ -1,5 +1,5 @@
 """五方判读批量化（panel_scores 表 + panel_batch 逻辑）回归测试。"""
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -15,8 +15,11 @@ def store(tmp_path):
 @pytest.fixture()
 def pick_clock(monkeypatch):
     """把留痕时点钉在开盘后：record_picks 在 09:25 前不写历史，
-    不钉住的话这个用例只在下午跑才通过。"""
-    fixed = datetime.combine(date.today(), datetime.min.time()).replace(hour=10)
+    不钉住的话这个用例只在下午跑才通过。周末不留痕，周末跑时拨回最近的周五。"""
+    day = date.today()
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    fixed = datetime.combine(day, datetime.min.time()).replace(hour=10)
     monkeypatch.setattr(local_store, "_now_cn", lambda: fixed)
 
 
@@ -57,7 +60,7 @@ def test_load_picks_symbols(store, pick_clock):
         {"symbol": "600001", "name": "甲", "score": 90, "close": 10.0},
         {"symbol": "600002", "name": "乙", "score": 80, "close": 20.0},
     ])
-    today = date.today().strftime("%Y-%m-%d")
+    today = local_store._now_cn().strftime("%Y-%m-%d")
     assert store.load_picks_symbols(today, "smart", limit=10) == ["600001", "600002"]
     assert store.load_picks_symbols(today, "pattern") == []
     assert store.load_picks_symbols(today, "smart", limit=1) == ["600001"]

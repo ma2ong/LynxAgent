@@ -18,7 +18,7 @@
         <em>50 只等权，含已持有的</em>
       </div>
       <div class="kpi">
-        <span>今日平均涨跌</span>
+        <span>当日平均涨跌（最近交易日）</span>
         <strong :class="tone(data.avg_today)">{{ pct(data.avg_today) }}</strong>
         <em>全市场平均 <b :class="tone(data.market_today)">{{ pct(data.market_today) }}</b></em>
       </div>
@@ -27,7 +27,7 @@
         <strong>{{ record?.weeks ? `${record.weeks} 周` : '刚开始' }}</strong>
         <em v-if="record?.weeks">累计 <b :class="tone(record.cum_ret! * 100)">{{ pct(record.cum_ret! * 100) }}</b>
           · 全市场 <b :class="tone(record.cum_base! * 100)">{{ pct(record.cum_base! * 100) }}</b></em>
-        <em v-else>每周结算一次，第一周下周五出结果</em>
+        <em v-else>每周结算一次，买入满一周后出第一条</em>
       </div>
       <div class="kpi">
         <span>本周调仓</span>
@@ -39,34 +39,34 @@
     <section v-if="data?.items.length" class="panel">
       <div class="panel-title">本周名单 <small>{{ data.signal_date }} 收盘后生成</small></div>
       <el-table :data="data.items" size="small" stripe>
-        <el-table-column prop="rank" label="#" width="44" />
-        <el-table-column label="股票" min-width="120">
+        <el-table-column prop="rank" label="#" min-width="44" />
+        <el-table-column label="股票" min-width="140">
           <template #default="{ row }">
             <span class="name">{{ row.name }}</span> <span class="code">{{ row.symbol }}</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isMobile" prop="industry" label="行业" min-width="90" />
-        <el-table-column label="模型排名" width="96">
+        <el-table-column v-if="!isMobile" prop="industry" label="行业" min-width="100" />
+        <el-table-column label="模型排名" min-width="90">
           <template #default="{ row }">前 {{ topPct(row.score) }}</template>
         </el-table-column>
-        <el-table-column label="状态" width="64">
+        <el-table-column label="状态" min-width="70">
           <template #default="{ row }">
             <el-tag size="small" :type="row.kept ? 'info' : 'danger'" effect="plain">{{ row.kept ? '续持' : '新进' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="!isMobile" :label="data.buy_date ? '买入价' : '信号价'" width="80" align="right">
+        <el-table-column v-if="!isMobile" :label="data.buy_date ? '买入价' : '信号价'" min-width="80" align="right">
           <template #default="{ row }">{{ num(row.buy_open ?? row.signal_close) }}</template>
         </el-table-column>
-        <el-table-column label="现价" width="72" align="right">
+        <el-table-column label="现价" min-width="72" align="right">
           <template #default="{ row }">{{ num(row.price) }}</template>
         </el-table-column>
-        <el-table-column label="今日" width="76" align="right">
+        <el-table-column label="当日" min-width="76" align="right">
           <template #default="{ row }"><span :class="tone(row.pct_today)">{{ pct(row.pct_today) }}</span></template>
         </el-table-column>
-        <el-table-column :label="data.buy_date ? '自买入' : '自信号日'" width="80" align="right">
+        <el-table-column :label="data.buy_date ? '自买入' : '自信号日'" min-width="84" align="right">
           <template #default="{ row }"><span :class="tone(row.ret)">{{ pct(row.ret) }}</span></template>
         </el-table-column>
-        <el-table-column label="" width="56" align="right">
+        <el-table-column label="" min-width="56" align="right">
           <template #default="{ row }"><el-button link type="primary" size="small" @click="openChart(row)">看图</el-button></template>
         </el-table-column>
       </el-table>

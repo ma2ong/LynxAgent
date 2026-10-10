@@ -360,6 +360,7 @@
               <el-tag size="small" type="warning" effect="plain">试运行</el-tag>
               <span class="pb-sub">从今天够分的前 20 只里，挑离 20 日高点最远的</span>
             </div>
+            <div class="pb-body">
             <div class="pb-items">
               <div v-for="p in smartPoolResult.pullback_picks" :key="p.symbol" class="pb-item">
                 <span class="pb-name"><b>{{ p.name }}</b> <i>{{ p.symbol }}</i></span>
@@ -379,6 +380,7 @@
               </template>
               <template v-else><br>上线以来的成绩：买入满 5 个交易日后开始显示。</template>
             </p>
+            </div>
           </section>
 
           <!-- 手机端用卡片：表格在 390px 宽里只剩分数和操作按钮，股名被截成三个字，
@@ -1766,11 +1768,17 @@ const openChart = async (row: any) => {
 }
 .pb-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; }
 .pb-sub { font-size: 12px; color: var(--el-text-color-secondary); }
-.pb-items { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 4px; }
+.pb-body { display: flex; align-items: center; gap: 24px; margin-top: 8px; }
+.pb-items { display: flex; flex-direction: column; gap: 4px; flex: 0 0 auto; }
 .pb-item { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; }
 .pb-name { min-width: 150px; }
 .pb-name i { font-style: normal; color: var(--el-text-color-secondary); font-size: 12px; }
-.pb-note { margin: 4px 0 0; font-size: 12px; line-height: 1.7; color: var(--el-text-color-regular); }
+.pb-note { margin: 0; flex: 1; min-width: 0; font-size: 12px; line-height: 1.7; color: var(--el-text-color-secondary);
+  padding-left: 16px; border-left: 1px solid var(--el-color-warning-light-5); }
+@media (max-width: 760px) {
+  .pb-body { flex-direction: column; align-items: stretch; gap: 8px; }
+  .pb-note { padding-left: 0; border-left: none; }
+}
 /* 单栏自上而下：原左右两栏网格里，右栏一行字被拉成和左栏红条一样高，留一大块空白，
    第三条还被挤到下面只露半截（Allen 2026-09-29 截图）。每条提示按内容高度，间距统一。 */
 .decision-context {

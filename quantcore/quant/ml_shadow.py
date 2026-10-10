@@ -7,8 +7,9 @@
 周五没跑成，下周一补记上周五的名单，只用上周五及以前的数据）：
 1. 用全部历史重训一次（参数固定，与回测相同）；
 2. 对最近 5 个交易日打分取平均（平滑），按当周最后一天横截面分位排序；
-3. 剔除 ST/退市股（按记录时的名称）；上周持仓分位仍 ≥0.8 的留下，其余从高分往下补满 50 只；
-4. 写进 ml_shadow_picks。下周一开盘买、再下周一开盘卖，由 evaluate() 事后计算。
+3. 剔除 ST/退市股（按记录时的名称）；上周持仓分位仍 ≥0.8 的留下，其余从高分往下补满；
+   同一份分数记两本账：标准版 50 只（ml_shadow_picks）、小资金版 10 只（ml_shadow_small，2026-10-10 起）；
+4. 写进对应表。下周一开盘买、再下周一开盘卖，由 evaluate() 事后计算。
 
 单独进程跑，不进后端：训练要几 GB 内存、几分钟 CPU。
 """
@@ -25,13 +26,13 @@ from .universe import is_blocked_name
 from .ml_factors import MIN_AMT, MIN_BARS, PARAMS, ROUNDS, build_features, load_kline, rank_universe
 
 HOLD = 50
+BOOKS = {"ml_shadow_picks": 50, "ml_shadow_small": 10}   # 表名 → 持仓只数
 KEEP_PCT = 0.8
 SMOOTH_DAYS = 5
 COST = 0.003          # 双边，按换手扣
 MIN_WEEKS = 26        # 半年；不到就只报进度不下结论
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS ml_shadow_picks (
+_COLS = """
     signal_date TEXT,      -- 当周最后一个交易日（信号收盘后产生，下一交易日开盘买）
     symbol TEXT,
     rank INTEGER,
@@ -40,8 +41,8 @@ CREATE TABLE IF NOT EXISTS ml_shadow_picks (
     close REAL,
     created_at TEXT,
     PRIMARY KEY (signal_date, symbol)
-);
 """
+SCHEMA = "".join(f"CREATE TABLE IF NOT EXISTS {t} ({_COLS});\n" for t in BOOKS)
 
 
 def _conn(db: str | Path) -> sqlite3.Connection:
@@ -72,10 +73,12 @@ def run_weekly(db: str | Path, now: datetime | None = None) -> dict:
         return {"status": "skip", "reason": "今天日线还没同步，下个交易日再补记"}
     with _conn(db) as conn:
         done = conn.execute("SELECT 1 FROM ml_shadow_picks WHERE signal_date = ? LIMIT 1", (last,)).fetchone()
-        prev_date = conn.execute(
-            "SELECT max(signal_date) FROM ml_shadow_picks WHERE signal_date < ?", (last,)).fetchone()[0]
-        prev = {r[0] for r in conn.execute(
-            "SELECT symbol FROM ml_shadow_picks WHERE signal_date = ?", (prev_date,))} if prev_date else set()
+        prev = {}
+        for table in BOOKS:
+            prev_date = conn.execute(
+                f"SELECT max(signal_date) FROM {table} WHERE signal_date < ?", (last,)).fetchone()[0]
+            prev[table] = {r[0] for r in conn.execute(
+                f"SELECT symbol FROM {table} WHERE signal_date = ?", (prev_date,))} if prev_date else set()
         names_now = dict(conn.execute("SELECT symbol, name FROM stock_meta"))
     if done:
         return {"status": "skip", "reason": f"{last} 已记过"}
@@ -96,24 +99,25 @@ def run_weekly(db: str | Path, now: datetime | None = None) -> dict:
     score = smooth.rank(pct=True)
     score = score[[not is_blocked_name(names_now.get(s)) for s in score.index]]
 
-    kept = [s for s in prev if s in score.index and score[s] >= KEEP_PCT]
-    fill = [s for s in score.sort_values(ascending=False).index if s not in kept][: max(0, HOLD - len(kept))]
-    picks = kept + fill
-    order = score[picks].sort_values(ascending=False)
     now = datetime.now().isoformat(timespec="seconds")
-    rows = [(last, s, i + 1, float(order[s]), int(s in kept), float(today.at[s, "close"]), now)
-            for i, s in enumerate(order.index)]
-    with _conn(db) as conn:
-        conn.executemany("INSERT OR REPLACE INTO ml_shadow_picks VALUES (?,?,?,?,?,?,?)", rows)
-    return {"status": "ok", "signal_date": last, "picks": len(rows), "kept": len(kept),
-            "train_rows": int(len(train))}
+    out = {"status": "ok", "signal_date": last, "train_rows": int(len(train))}
+    for table, hold in BOOKS.items():
+        kept = [s for s in prev[table] if s in score.index and score[s] >= KEEP_PCT]
+        fill = [s for s in score.sort_values(ascending=False).index if s not in kept][: max(0, hold - len(kept))]
+        order = score[kept + fill].sort_values(ascending=False)
+        rows = [(last, s, i + 1, float(order[s]), int(s in kept), float(today.at[s, "close"]), now)
+                for i, s in enumerate(order.index)]
+        with _conn(db) as conn:
+            conn.executemany(f"INSERT OR REPLACE INTO {table} VALUES (?,?,?,?,?,?,?)", rows)
+        out[table] = {"picks": len(rows), "kept": len(kept)}
+    return out
 
 
-def evaluate(db: str | Path) -> dict:
+def evaluate(db: str | Path, table: str = "ml_shadow_picks") -> dict:
     """每周：信号日次日开盘买、下一个信号日次日开盘卖；基准 = 同日可投资池等权（同口径）。
     开盘即涨停的买不进，按没买算（从组合里剔掉）。"""
     with _conn(db) as conn:
-        picks = pd.read_sql_query("SELECT signal_date, symbol, kept FROM ml_shadow_picks", conn)
+        picks = pd.read_sql_query(f"SELECT signal_date, symbol, kept FROM {table}", conn)
     if picks.empty:
         return {"weeks": 0, "rows": []}
     dates = sorted(picks["signal_date"].unique())
@@ -163,21 +167,21 @@ def evaluate(db: str | Path) -> dict:
     return out
 
 
-def latest_list(db: str | Path) -> dict:
+def latest_list(db: str | Path, table: str = "ml_shadow_picks") -> dict:
     """「模型选股」页用：最新一期名单 + 相对上一期的进出 + 买入日开盘价（还没到买入日则为空）。"""
     import json
     from .ml_factors import INDUSTRY_MAP
 
     with _conn(db) as conn:
         dates = [r[0] for r in conn.execute(
-            "SELECT DISTINCT signal_date FROM ml_shadow_picks ORDER BY signal_date DESC LIMIT 2")]
+            f"SELECT DISTINCT signal_date FROM {table} ORDER BY signal_date DESC LIMIT 2")]
         if not dates:
             return {"signal_date": None, "items": [], "sold": []}
         cur = dates[0]
-        rows = conn.execute("SELECT symbol, rank, score, kept, close FROM ml_shadow_picks "
+        rows = conn.execute(f"SELECT symbol, rank, score, kept, close FROM {table} "
                             "WHERE signal_date = ? ORDER BY rank", (cur,)).fetchall()
         prev = {r[0] for r in conn.execute(
-            "SELECT symbol FROM ml_shadow_picks WHERE signal_date = ?", (dates[1],))} if len(dates) > 1 else set()
+            f"SELECT symbol FROM {table} WHERE signal_date = ?", (dates[1],))} if len(dates) > 1 else set()
         names = dict(conn.execute("SELECT symbol, name FROM stock_meta"))
         buy_date = conn.execute("SELECT min(date) FROM daily_kline WHERE date > ?", (cur,)).fetchone()[0]
         buy_open = dict(conn.execute("SELECT symbol, open FROM daily_kline WHERE date = ?", (buy_date,))) if buy_date else {}

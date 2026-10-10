@@ -593,17 +593,26 @@ async def quant_picks_stats(days: int = 30, pool: str = "", include_items: bool 
 
 
 @router.get("/model-picks")
-async def quant_model_picks(user: dict = Depends(require_admin)):
+async def quant_model_picks(book: str = "std", user: dict = Depends(require_admin)):
     """「模型选股」页（试运行，仅管理员）：多因子模型最新一周名单 + 实时价 + 至今成绩。
-    成绩由每天 17:30 的计划任务算好写进 runtime/ml_shadow_eval.json（现算要十几秒）。"""
+    成绩由每天 17:30 的计划任务算好写进 runtime/ml_shadow_eval.json（现算要十几秒）。
+    book=small 是小资金版 10 只，另附标准版里排在后面的 10 只当替补（资金买不起一手时顶上）。"""
     import json
     from pathlib import Path
     from quantcore.quant import ml_shadow
     from quantcore.quant.local_store import DEFAULT_DB_PATH
 
-    data = await _run_light(ml_shadow.latest_list, DEFAULT_DB_PATH)
-    quotes = await _realtime_quotes([i["symbol"] for i in data["items"]], allow_snapshot_fallback=False)
-    for item in data["items"]:
+    table = "ml_shadow_small" if book == "small" else "ml_shadow_picks"
+    data = await _run_light(ml_shadow.latest_list, DEFAULT_DB_PATH, table)
+    data["reserves"] = []
+    if book == "small" and data["signal_date"]:
+        std = await _run_light(ml_shadow.latest_list, DEFAULT_DB_PATH, "ml_shadow_picks")
+        mine = {i["symbol"] for i in data["items"]}
+        if std["signal_date"] == data["signal_date"]:
+            data["reserves"] = [i for i in std["items"] if i["symbol"] not in mine][:10]
+    rows = data["items"] + data["reserves"]
+    quotes = await _realtime_quotes([i["symbol"] for i in rows], allow_snapshot_fallback=False)
+    for item in rows:
         q = quotes.get(item["symbol"]) or {}
         price = q.get("price") if q.get("price") is not None else q.get("close")
         item["price"] = price
@@ -624,7 +633,8 @@ async def quant_model_picks(user: dict = Depends(require_admin)):
         logger.warning("model-picks market snapshot failed: %r", exc)
         data["market_today"] = None
     eval_path = Path(DEFAULT_DB_PATH).with_name("ml_shadow_eval.json")
-    data["record"] = json.loads(eval_path.read_text(encoding="utf-8")) if eval_path.exists() else None
+    record = json.loads(eval_path.read_text(encoding="utf-8")) if eval_path.exists() else {}
+    data["record"] = record.get(table)
     return {"success": True, "data": data}
 
 

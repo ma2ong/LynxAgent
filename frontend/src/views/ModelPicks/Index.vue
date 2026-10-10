@@ -3,10 +3,15 @@
     <div class="page-head">
       <div>
         <h1>模型选股 <el-tag size="small" type="warning" effect="plain">试运行 · 仅管理员可见</el-tag></h1>
-        <p>统计模型每周选 50 只、平均分仓、持有一周；周五收盘后出新名单，下周一开盘调仓。</p>
+        <p>统计模型每周打分、平均分仓、持有一周；周五收盘后出新名单，下周一开盘调仓。</p>
       </div>
       <el-button :loading="loading" @click="load"><el-icon><Refresh /></el-icon>刷新</el-button>
     </div>
+
+    <el-radio-group v-model="book" @change="switchBook">
+      <el-radio-button value="small">小资金版 · 10 只</el-radio-button>
+      <el-radio-button value="std">标准版 · 50 只</el-radio-button>
+    </el-radio-group>
 
     <el-alert v-if="data?.signal_date" :title="statusLine" type="info" show-icon :closable="false" />
     <el-alert v-else-if="!loading && data" title="还没有名单：第一份名单会在周五收盘后自动生成" type="info" show-icon :closable="false" />
@@ -15,7 +20,7 @@
       <div class="kpi">
         <span>{{ data.buy_date ? '本周名单 · 自买入平均' : '本周名单 · 自信号日收盘平均' }}</span>
         <strong :class="tone(data.avg_ret)">{{ pct(data.avg_ret) }}</strong>
-        <em>50 只等权，含已持有的</em>
+        <em>{{ data.items.length }} 只等权，含已持有的</em>
       </div>
       <div class="kpi">
         <span>当日平均涨跌（最近交易日）</span>
@@ -34,6 +39,26 @@
         <strong>新进 {{ newCount }} · 卖出 {{ data.sold.length }}</strong>
         <em>续持 {{ data.items.length - newCount }} 只</em>
       </div>
+    </section>
+
+    <section v-if="book === 'small' && data?.items.length" class="panel plan">
+      <div class="panel-title">本周操作
+        <span class="capital">我的资金
+          <el-input-number v-model="capital" :min="10000" :step="10000" :controls="!isMobile" size="small" @change="saveCapital" /> 元
+        </span>
+      </div>
+      <p class="plan-note">每只约投 {{ yuan(capital / 10) }}，按 100 股一手向下取整；价格按{{ data.buy_date ? '现价' : '最新收盘价' }}估算，周一开盘会略有出入。
+        一手都买不起的跳过，由标准版里排在后面的股票顶上。</p>
+      <div class="plan-row" v-if="data.sold.length"><b class="down">卖出 {{ data.sold.length }} 只</b>
+        <span v-for="s in data.sold" :key="s.symbol">{{ s.name || s.symbol }}</span></div>
+      <div class="plan-row"><b class="up">买入 {{ plan.buys.length }} 只</b>
+        <span v-for="r in plan.buys" :key="r.symbol">{{ r.name }} <i>{{ r.shares }} 股 ≈ {{ yuan(r.cost) }}</i><em v-if="r.reserve">替补</em></span>
+        <span v-if="!plan.buys.length">无</span></div>
+      <div class="plan-row" v-if="plan.holds.length"><b>继续持有 {{ plan.holds.length }} 只</b>
+        <span v-for="r in plan.holds" :key="r.symbol">{{ r.name }}</span></div>
+      <div class="plan-row" v-if="plan.skipped.length"><b>资金不够一手、已跳过</b>
+        <span v-for="r in plan.skipped" :key="r.symbol">{{ r.name }}（一手 {{ yuan((r.price || 0) * 100) }}）</span></div>
+      <p class="plan-note">合计约 {{ yuan(plan.total) }}，剩余现金约 {{ yuan(capital - plan.total - plan.holdValue) }}<template v-if="plan.holds.length">（续持的按每只 {{ yuan(capital / 10) }} 估）</template>。</p>
     </section>
 
     <section v-if="data?.items.length" class="panel">
@@ -84,10 +109,13 @@
         <li><b>怎么打分：</b>统计模型（LightGBM，量化公司常用的一种）从 2021 年以来全部 A 股里学
           「哪种指标组合的股票，下一周比其他股票涨得多」。每周用最新数据重新学一次。只比相对强弱，不预测大盘涨跌。</li>
         <li><b>从哪里选：</b>沪深两市、上市满一年、近 20 天日均成交额 ≥3000 万、不含 ST。</li>
-        <li><b>选哪些：</b>模型分最高的 50 只，每只投同样多的钱。</li>
+        <li><b>选哪些：</b>模型分最高的 50 只（小资金版取前 10 只），每只投同样多的钱。</li>
         <li><b>怎么换仓：</b>每周五收盘后出新名单，下周一开盘调仓。已持有的只要仍排在全市场前 20% 就继续拿，掉出才卖，
           所以每周只换约四分之一。没有止损、止盈，只按周调仓。</li>
       </ol>
+      <div class="subtitle">小资金版为什么是 10 只、不是 1~3 只</div>
+      <p>同一个模型，每周按排名 3 只一组切成 16 组回测，各组年化从 0% 到 +34% 都有，排第 1~3 名那组恰好是 0%——只买两三只，结果主要看运气。
+        10 只（2022-07~2026-09）年化 +17.0%、每年都跑赢全市场、回撤 −28%，是小资金能执行的下限。小额交易记得开「免五」，否则每笔最低 5 元佣金会吃掉不少收益。</p>
       <div class="subtitle">要知道的特点</div>
       <ul>
         <li>偏爱走势平稳、没有短期暴涨、成交活跃的股票，常见大盘蓝筹。<b>不会选</b>刚连板、短线暴涨的票——和「一键智选」是两种相反的风格。</li>
@@ -116,9 +144,18 @@
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
-import { quantApi, type ModelPicksResult } from '@/api/quant'
+import { quantApi, type ModelPickItem, type ModelPicksResult } from '@/api/quant'
 
 const KLineProChart = defineAsyncComponent(() => import('@/components/KLineProChart.vue'))
+
+const BOOK_KEY = 'model-picks-book'
+const CAPITAL_KEY = 'model-picks-capital'
+const readStore = (k: string) => { try { return localStorage.getItem(k) } catch { return null } }
+const writeStore = (k: string, v: string) => { try { localStorage.setItem(k, v) } catch { /* 隐私模式 */ } }
+const book = ref<'small' | 'std'>(readStore(BOOK_KEY) === 'std' ? 'std' : 'small')
+const capital = ref(Number(readStore(CAPITAL_KEY)) || 50000)
+const saveCapital = () => writeStore(CAPITAL_KEY, String(capital.value || 50000))
+const switchBook = () => { writeStore(BOOK_KEY, book.value); data.value = null; load() }
 
 const data = ref<ModelPicksResult | null>(null)
 const loading = ref(false)
@@ -137,6 +174,26 @@ const statusLine = computed(() => {
     : `本周名单 ${d.signal_date} 收盘后生成，下一个交易日开盘买入（买入前「自信号日」按 ${d.signal_date} 收盘价算）。`
 })
 
+type PlanRow = ModelPickItem & { shares: number; cost: number; reserve?: boolean }
+// 新进的按每份资金算手数；买不起一手的跳过，用标准版排在后面的顶上
+const plan = computed(() => {
+  const d = data.value
+  const per = capital.value / 10
+  const lot = (r: ModelPickItem) => (r.price || r.signal_close) * 100
+  const sized = (r: ModelPickItem, reserve = false): PlanRow => {
+    const shares = Math.floor(per / lot(r)) * 100
+    return { ...r, shares, cost: shares * (r.price || r.signal_close), reserve }
+  }
+  const holds = d?.items.filter((r) => r.kept) || []
+  const fresh = (d?.items.filter((r) => !r.kept) || []).map((r) => sized(r))
+  const buys = fresh.filter((r) => r.shares > 0)
+  const skipped = fresh.filter((r) => r.shares === 0)
+  const spare = (d?.reserves || []).map((r) => sized(r, true)).filter((r) => r.shares > 0)
+  buys.push(...spare.slice(0, skipped.length))
+  const total = buys.reduce((a, r) => a + r.cost, 0)
+  return { buys, holds, skipped, total, holdValue: holds.length * per }
+})
+const yuan = (v: number) => `${Math.round(v).toLocaleString()} 元`
 const pct = (v: number | null | undefined) => (v == null ? '-' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`)
 const num = (v: number | null | undefined) => (v == null ? '-' : v.toFixed(2))
 const tone = (v: number | null | undefined) => (v == null || v === 0 ? '' : v > 0 ? 'up' : 'down')
@@ -148,7 +205,7 @@ const topPct = (score: number) => {
 async function load() {
   loading.value = true
   try {
-    data.value = await quantApi.modelPicks()
+    data.value = await quantApi.modelPicks(book.value)
   } catch (error: any) {
     ElMessage.error(error?.message || '模型名单读取失败，稍后点刷新重试')
   } finally {
@@ -200,6 +257,13 @@ onUnmounted(() => {
 .up { color: #f56c6c; }
 .down { color: #67c23a; }
 .sold { margin-top: 10px; font-size: 13px; color: var(--el-text-color-regular); display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.plan .panel-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.capital { margin-left: auto; font-size: 13px; font-weight: 400; display: flex; align-items: center; gap: 6px; }
+.plan-note { margin: 0 0 8px; font-size: 13px; color: var(--el-text-color-secondary); line-height: 1.7; }
+.plan-row { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 14px; padding: 8px 0; border-top: 1px solid var(--el-border-color-lighter); }
+.plan-row b { min-width: 92px; }
+.plan-row i { font-style: normal; color: var(--el-text-color-secondary); font-size: 12px; }
+.plan-row em { font-style: normal; font-size: 12px; color: var(--el-color-warning); margin-left: 4px; }
 .rules { font-size: 14px; line-height: 1.75; color: var(--el-text-color-regular); }
 .rules ol, .rules ul { margin: 0; padding-left: 20px; }
 .rules p { margin: 0; }

@@ -569,6 +569,7 @@ export interface ModelPicksResult {
   buy_date: string | null
   items: ModelPickItem[]
   sold: { symbol: string; name: string }[]
+  reserves: ModelPickItem[]
   avg_ret: number | null
   avg_today: number | null
   market_today: number | null
@@ -577,8 +578,8 @@ export interface ModelPicksResult {
 }
 
 export const quantApi = {
-  modelPicks: async () =>
-    unwrap<ModelPicksResult>(await ApiClient.get('/api/quant/model-picks', { _ts: nonce() }, { timeout: 30000 })),
+  modelPicks: async (book: 'std' | 'small' = 'std') =>
+    unwrap<ModelPicksResult>(await ApiClient.get('/api/quant/model-picks', { book, _ts: nonce() }, { timeout: 30000 })),
 
   capabilities: async () =>
     unwrap<QuantCapabilitiesResult>(await ApiClient.get('/api/quant/capabilities', undefined, { timeout: 60000 })),

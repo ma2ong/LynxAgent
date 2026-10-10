@@ -53,7 +53,8 @@ def test_run_weekly_records_last_finished_week_without_st(tmp_path, monkeypatch)
 
     r = ml_shadow.run_weekly(db, now=datetime(2026, 10, 9, 17, 30))
     assert r["status"] == "ok" and r["signal_date"] == days[-1]
-    assert r["picks"] == 29                                        # 30 只剔掉 1 只 ST，全选
+    assert r["ml_shadow_picks"]["picks"] == 29                     # 30 只剔掉 1 只 ST，全选
+    assert r["ml_shadow_small"]["picks"] == 10                     # 小资金版同一份分数取前 10
     assert ml_shadow.run_weekly(db, now=datetime(2026, 10, 12, 17, 30))["status"] == "skip"   # 同一周不重复记
     with sqlite3.connect(db) as conn:
         ranks = [r[0] for r in conn.execute("SELECT rank FROM ml_shadow_picks ORDER BY rank")]

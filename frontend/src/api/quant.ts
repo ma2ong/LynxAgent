@@ -156,6 +156,21 @@ export interface RiskCheckResult {
   disclaimer?: string
 }
 
+export interface PullbackPick {
+  symbol: string
+  code: string
+  name: string
+  industry?: string
+  price?: number | null
+  close?: number | null
+  pct_chg?: number | null
+  score?: number | null
+  /** 现价相对前 20 日最高价，%（负数 = 回调幅度） */
+  dist_high20: number
+  /** 在够分名单里的名次（可能在展示的前 10 名之外） */
+  list_rank: number
+}
+
 export interface QuantSmartPoolResult {
   /** 今天是否已经真正跑过一次全量扫描（后端按 picks_history 当日留痕判定）。
    *  cache_only 端上来的名单可能是昨天底池按今日实时重排的，有名单不等于扫过。 */
@@ -174,6 +189,8 @@ export interface QuantSmartPoolResult {
   ranking_basis?: string
   force_refreshed?: boolean
   requested_limit?: number
+  /** 回调优选（试运行，2026-10-10）：够分前 20 里离 20 日高点最远的 2 只 */
+  pullback_picks?: PullbackPick[]
   score_floor?: number
   score_floor_best?: number
   score_floor_note?: string
@@ -481,6 +498,7 @@ const normalizeSmartPoolResult = (raw: any): QuantSmartPoolResult => {
     ranking_basis: raw?.ranking_basis,
     force_refreshed: raw?.force_refreshed,
     requested_limit: raw?.requested_limit,
+    pullback_picks: raw?.pullback_picks || [],
     score_floor: raw?.score_floor,
     score_floor_best: raw?.score_floor_best,
     score_floor_note: raw?.score_floor_note,

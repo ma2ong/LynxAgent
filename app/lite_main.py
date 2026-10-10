@@ -333,6 +333,15 @@ async def health():
 # 2026-09-04 起它是**门槛之上的封顶**：行情好、80 分以上一大把时最多给 20 只，
 # 再多用户也看不过来。不再是「每天固定给这么多」。
 SMART_POOL_MAX_ITEMS = 20
+# 用户看到的名单只数上限（2026-10-10 Allen 定：限 10 只）。计算、缓存、候选仍按 SMART_POOL_MAX_ITEMS
+# 走——改那个数要同步预热参数和前端控件，否则缓存全未命中；这里只在定稿时截断展示。
+SMART_POOL_DISPLAY_MAX = max(1, int(float(os.getenv("LYNX_SMART_DISPLAY_MAX", "10"))))
+# 「回调优选」小板块（2026-10-10，试运行）：从够分的前 20 只里取离 20 日高点最远的 2 只。
+# experiments/smart_full_lab.py + pullback_paired.py：对「前 20 平均」的配对差，回放 141 期 +1.82pp（t 2.39）、
+# 线上留痕 51 天 +2.43pp（t 2.12），是 31 种挑法里唯一两份样本都好过名单的；但绝对值 7 月后仍跑输大盘，
+# 只是亏得少。单独留痕为 pool="pullback"，复盘页同口径对比，连续两三个月跑输名单就撤。
+PULLBACK_FROM = 20
+PULLBACK_PICKS = 2
 # 一键智选最终名单的分数门槛：达到这条线才上榜。
 #
 # 口径变过三轮，这里记全，免得再来回改：
@@ -1215,14 +1224,38 @@ def _drop_far_below_best(kept: list[dict[str, Any]]) -> tuple[list[dict[str, Any
     return survivors, note
 
 
+def _pullback_picks(pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """够分前 20 里离 20 日高点最远的 2 只（价格用实时价，20 日高点不含当日）。"""
+    rows = []
+    for list_rank, item in enumerate(pool, start=1):
+        high20 = (item.get("entry_position") or {}).get("high20")
+        price = item.get("price") if item.get("price") is not None else item.get("close")
+        try:
+            dist = float(price) / float(high20) - 1
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        rows.append((dist, list_rank, item))
+    rows.sort(key=lambda r: r[0])
+    out = []
+    for dist, list_rank, item in rows[:PULLBACK_PICKS]:
+        out.append({
+            "symbol": item.get("symbol") or item.get("code"), "code": item.get("code") or item.get("symbol"),
+            "name": item.get("name"), "industry": item.get("industry"),
+            "close": item.get("close"), "price": item.get("price"), "pct_chg": item.get("pct_chg"),
+            "score": item.get("quality_score") or item.get("score"),
+            "dist_high20": round(dist * 100, 1), "list_rank": list_rank,
+        })
+    return out
+
+
 def _finalize_intraday_quality(data: dict[str, Any], target: int, score_floor: float = 0.0) -> None:
     items = list(data.get("items") or [])
     blocked = [item for item in items if item.get("timing_status") == "blocked"]
     kept = [item for item in items if item.get("timing_status") != "blocked"]
     previous_excluded = int(data.get("timing_excluded_count") or 0)
     previous_samples = list(data.get("timing_excluded_samples") or [])
-    # 上限跟随端点的 safe_limit（现 20），不再写死 10——写死会让「推荐上限」控件失效。
-    safe_target = max(1, min(int(target or SMART_POOL_MAX_ITEMS), SMART_POOL_MAX_ITEMS))
+    # 上限跟随端点的 safe_limit，再受展示上限 SMART_POOL_DISPLAY_MAX（现 10）约束。
+    safe_target = max(1, min(int(target or SMART_POOL_MAX_ITEMS), SMART_POOL_MAX_ITEMS, SMART_POOL_DISPLAY_MAX))
     if score_floor > 0:
         # 门槛制 + 封顶：够分就上榜，不按名次砍；只有够分的超过 safe_target 只时才截断。
         # 截断要记进 score_floor_extra，前端得说清「不是只有这些够分，是给你挑了最强的」。
@@ -1234,6 +1267,8 @@ def _finalize_intraday_quality(data: dict[str, Any], target: int, score_floor: f
         data["score_floor_note"] = ""
         data["score_floor_qualified"] = len(survivors)
         data["score_floor_extra"] = max(0, len(survivors) - safe_target)
+        # 回调优选按回测口径从「够分的前 20 只」里挑，必须在截到展示上限之前算
+        data["pullback_picks"] = _pullback_picks(survivors[:PULLBACK_FROM])
         if len(survivors) > safe_target:
             survivors = survivors[:safe_target]
         if not survivors and kept and SMART_POOL_FLOOR_FALLBACK > 0:
@@ -1249,6 +1284,7 @@ def _finalize_intraday_quality(data: dict[str, Any], target: int, score_floor: f
             )
         kept = survivors
     else:
+        data["pullback_picks"] = _pullback_picks(kept[:PULLBACK_FROM])
         kept = _reserve_breakout_slots(kept, safe_target)
     kept, thin_reason = _drop_far_below_best(kept)
     if thin_reason:
@@ -1372,6 +1408,8 @@ def _record_smart_picks_once(data: dict[str, Any], items: list[dict[str, Any]]) 
             [{**item, "score": item.get("quality_score") or item.get("score")} for item in items],
         )
         store.record_picks("smart", items)
+        if data.get("pullback_picks"):
+            store.record_picks("pullback", data["pullback_picks"])
     except Exception as exc:  # noqa: BLE001 — 留痕失败不能阻断推荐主流程
         print(f"record_picks failed: {exc}")
         return
@@ -1620,6 +1658,7 @@ def _confluence_enrich_items(items: list[dict[str, Any]]) -> None:
                 item["entry_position"] = {
                     "ret20": round((float(closes.iloc[-1]) / float(closes.iloc[-21]) - 1) * 100, 1),
                     "dist_high20": round((float(closes.iloc[-1]) / hi20 - 1) * 100, 1) if hi20 > 0 else None,
+                    "high20": round(hi20, 3) if hi20 > 0 else None,   # 回调优选用实时价重算距离
                 }
         except Exception:  # noqa: BLE001 — 位置标注失败不影响选股主流程
             pass
@@ -1892,7 +1931,7 @@ async def _compute_lite_smart_pool_unlocked(
     # 评分公式版本进 cache key：换公式必须换 key，否则旧公式的缓存结果会被继续端上来。
     daily_as_of = get_local_store().latest_real_bar_date() or "unknown"
     # v20（2026-09-29）：停用 AI 因子，且不再因 AI 模型就绪切到备用算法
-    cache_prefix = f"smart-pool:factor-v23-event-tags:{SMART_POOL_INTRADAY_WEIGHT}:"
+    cache_prefix = f"smart-pool:factor-v24-pullback:{SMART_POOL_INTRADAY_WEIGHT}:"
     cache_suffix = f":{strategy}:{safe_limit}:{safe_universe}"
     cache_key = (
         # v18（2026-08-28）：修好共振加成里的「强度」分支——它的缩进原先落在 except 块内，

@@ -1162,8 +1162,10 @@ class LocalQuantStore:
         # 只让「还在跑」的池决定共同起点：已停用的池（如 swing）往往上线晚、停得早，
         # 拿它定边界会把所有池的可比窗口无谓地压窄。留 3 个留痕日的余量，容忍偶发扫描失败。
         recent_days = sorted({str(r[0]) for r in picks}, reverse=True)[:3]
+        # 「回调优选」（pullback，2026-10-10 起）是从智选名单里挑的子集，自己跟名单同窗口比（前端单独算），
+        # 不能让它的上线日把复盘页所有池的共同起点拖到 10-10 以后。
         active_first = [d for pool_name, d in first_seen.items()
-                        if last_seen.get(pool_name) in recent_days]
+                        if last_seen.get(pool_name) in recent_days and pool_name != "pullback"]
         aligned_since = max(active_first) if len(active_first) > 1 else None
         aligned_agg: Dict[str, Dict[int, List[float]]] = {}
         for pick_date, pool_name, symbol, name, score, close, rank, patterns_str in picks:

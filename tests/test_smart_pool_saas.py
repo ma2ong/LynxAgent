@@ -435,11 +435,28 @@ def test_one_click_recommendations_are_hard_capped_at_pool_max(monkeypatch):
     )
     lite_main._finalize_intraday_quality(data, 30)
 
-    assert len(data["items"]) == lite_main.SMART_POOL_MAX_ITEMS
-    assert data["requested_limit"] == lite_main.SMART_POOL_MAX_ITEMS
-    assert [item["rank"] for item in data["items"]] == list(
-        range(1, lite_main.SMART_POOL_MAX_ITEMS + 1)
-    )
+    # 2026-10-10 起展示上限 10（SMART_POOL_DISPLAY_MAX），计算仍按 SMART_POOL_MAX_ITEMS
+    cap = min(lite_main.SMART_POOL_MAX_ITEMS, lite_main.SMART_POOL_DISPLAY_MAX)
+    assert len(data["items"]) == cap
+    assert data["requested_limit"] == cap
+    assert [item["rank"] for item in data["items"]] == list(range(1, cap + 1))
+
+
+def test_pullback_picks_come_from_top20_before_display_cap(monkeypatch):
+    """回调优选：从够分的前 20 只里取离 20 日高点最远的 2 只，名单截到 10 只之前算。"""
+    monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
+    items = []
+    for i in range(25):
+        dist = -0.01 * i if i not in (14, 22) else -0.5    # 第 15 名回调最深；第 23 名在前 20 之外不算
+        items.append({"symbol": f"600{i:03d}", "name": f"候选{i}", "smart_score": 99.0 - i * 0.1,
+                      "score": 99.0 - i * 0.1, "quality_score": 99.0 - i * 0.1, "pct_chg": 1.0,
+                      "price": 10.0 * (1 + dist), "entry_position": {"high20": 10.0}})
+    data = {"items": items}
+    lite_main._finalize_intraday_quality(data, 20, score_floor=85.0)
+    assert len(data["items"]) == lite_main.SMART_POOL_DISPLAY_MAX
+    picks = data["pullback_picks"]
+    assert [p["symbol"] for p in picks] == ["600014", "600019"]
+    assert picks[0]["list_rank"] == 15 and picks[0]["dist_high20"] == -50.0
 
 
 def test_final_list_reports_industry_concentration_without_hiding_candidates(monkeypatch):
@@ -538,6 +555,8 @@ def _finalize_with_floor(items: list[dict], floor: float = 90.0) -> dict:
 
 
 def test_score_floor_gives_every_qualified_pick_up_to_the_cap(monkeypatch):
+    # 这条考门槛制本身；展示上限（10 只）由 test_pullback_picks_* 覆盖，这里放开到计算上限
+    monkeypatch.setattr(lite_main, "SMART_POOL_DISPLAY_MAX", lite_main.SMART_POOL_MAX_ITEMS)
     """够门槛的全给——只数不设下限，只在超过封顶时才截断（2026-09-04 Allen 定的口径）。"""
     monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
     data = _finalize_with_floor(
@@ -552,6 +571,8 @@ def test_score_floor_gives_every_qualified_pick_up_to_the_cap(monkeypatch):
 
 
 def test_score_floor_caps_a_flood_of_qualified_picks_and_says_how_many_were_cut(monkeypatch):
+    # 这条考门槛制本身；展示上限（10 只）由 test_pullback_picks_* 覆盖，这里放开到计算上限
+    monkeypatch.setattr(lite_main, "SMART_POOL_DISPLAY_MAX", lite_main.SMART_POOL_MAX_ITEMS)
     """行情好、够分的一大把时只给最强的封顶只数，但要说清有多少只达标被砍。"""
     monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
     data = _finalize_with_floor(
@@ -608,6 +629,8 @@ def test_score_floor_fallback_stays_out_of_the_way_when_someone_qualifies(monkey
 
 
 def test_score_floor_zero_falls_back_to_the_old_rank_cap(monkeypatch):
+    # 这条考门槛制本身；展示上限（10 只）由 test_pullback_picks_* 覆盖，这里放开到计算上限
+    monkeypatch.setattr(lite_main, "SMART_POOL_DISPLAY_MAX", lite_main.SMART_POOL_MAX_ITEMS)
     """回滚开关：LYNX_SMART_SCORE_FLOOR=0 回到旧的 20 名上限。"""
     monkeypatch.setenv("LYNX_SMART_QUALITY_GAP", "0")
     data = _finalize_with_floor(
@@ -630,7 +653,7 @@ def test_cache_only_serves_previous_list_after_bar_date_rolls(monkeypatch):
 
     monkeypatch.setattr("quantcore.quant.local_store.get_local_store", lambda: _Store())
     monkeypatch.setattr(lite_main, "_cache_get", lambda key, ttl: None)
-    prev_key = (f"smart-pool:factor-v23-event-tags:{lite_main.SMART_POOL_INTRADAY_WEIGHT}:"
+    prev_key = (f"smart-pool:factor-v24-pullback:{lite_main.SMART_POOL_INTRADAY_WEIGHT}:"
                 f"2026-09-24:balanced:20:5525")
     _persistent_cache_set(prev_key, {"success": True, "data": {"items": [{"symbol": "600000"}],
                                                               "daily_as_of": "2026-09-24"}})

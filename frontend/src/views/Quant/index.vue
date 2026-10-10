@@ -353,6 +353,34 @@
             :title="`当前市场环境下达标标的仅 ${smartPoolResult.items.length} 只`"
             description="名单只收综合排序够门槛的，够几只给几只；今天少说明全市场就没几只够分（或部分候选被风控剔除）。可参考顶部大盘环境提示控制仓位。"
           />
+          <!-- 回调优选（试运行）：从够分的前 20 只里挑离 20 日高点最远的 2 只，名单本身不动 -->
+          <section v-if="smartPoolResult?.pullback_picks?.length" class="pullback-box">
+            <div class="pb-head">
+              <b>回调优选 · {{ smartPoolResult.pullback_picks.length }} 只</b>
+              <el-tag size="small" type="warning" effect="plain">试运行</el-tag>
+              <span class="pb-sub">从今天够分的前 20 只里，挑离 20 日高点最远的</span>
+            </div>
+            <div class="pb-items">
+              <div v-for="p in smartPoolResult.pullback_picks" :key="p.symbol" class="pb-item">
+                <span class="pb-name"><b>{{ p.name }}</b> <i>{{ p.symbol }}</i></span>
+                <span>名单第 {{ p.list_rank }} 名</span>
+                <span>距 20 日高点 <b class="text-green">{{ p.dist_high20.toFixed(1) }}%</b></span>
+                <span>今日 <b :class="(p.pct_chg || 0) >= 0 ? 'text-red' : 'text-green'">{{ (p.pct_chg ?? 0) >= 0 ? '+' : '' }}{{ Number(p.pct_chg ?? 0).toFixed(2) }}%</b></span>
+                <el-button link type="primary" size="small" @click="openChart(p)">看图</el-button>
+              </div>
+            </div>
+            <p class="pb-note">
+              依据：过去两年回放和 7 月以来的线上记录里，这 2 只都比整份名单 5 天后多赚约 2 个百分点；
+              但 7 月以来它们仍跑输大盘，只是亏得少。<b>不保证赚钱</b>，只是在这份名单里相对更稳。
+              <template v-if="pullbackRecord">
+                <br>上线以来（{{ pullbackRecord.since }} 起，已兑现 {{ pullbackRecord.samples }} 只次）：5 天后平均超额
+                <b>{{ fmtPp(pullbackRecord.pbEx) }}</b>，同期名单 {{ fmtPp(pullbackRecord.listEx) }}；跑赢大盘 {{ fmtWin(pullbackRecord.pbWin) }}。
+                连续两三个月跑输名单就撤下。
+              </template>
+              <template v-else><br>上线以来的成绩：买入满 5 个交易日后开始显示。</template>
+            </p>
+          </section>
+
           <!-- 手机端用卡片：表格在 390px 宽里只剩分数和操作按钮，股名被截成三个字，
                现价、首推后这些要横滑才看得到（2026-09-29）。 -->
           <div v-if="smartPoolResult?.items.length && isMobile" class="pick-cards">
@@ -960,12 +988,31 @@ const observeStickyHead = () => {
   stickyHeadObserver.observe(hero)
 }
 
+// 回调优选上线以来的成绩：和名单在同一段日期里比（名单的统计窗口从回调优选首次留痕日起）
+const pullbackRecord = ref<{ since: string; samples: number; pbEx: number | null; pbWin: number | null; listEx: number | null } | null>(null)
+const fmtPp = (v: number | null | undefined) => (v == null ? '-' : `${v > 0 ? '+' : ''}${v.toFixed(2)}%`)
+const fmtWin = (v: number | null | undefined) => (v == null ? '-' : `${Math.round(v * 100)}%`)
+async function loadPullbackRecord() {
+  try {
+    const pb = (await quantApi.picksStats(365, 'pullback', false))?.pools?.find((p) => p.pool === 'pullback')
+    const t5 = pb?.horizons?.t5
+    if (!pb?.first_pick_date || !t5?.samples) return
+    const days = Math.ceil((Date.now() - new Date(pb.first_pick_date).getTime()) / 86_400_000) + 1
+    const sm = (await quantApi.picksStats(days, 'smart', false))?.pools?.find((p) => p.pool === 'smart')
+    pullbackRecord.value = {
+      since: pb.first_pick_date, samples: t5.samples, pbEx: t5.avg_excess ?? null,
+      pbWin: t5.excess_win_rate ?? null, listEx: sm?.horizons?.t5?.avg_excess ?? null,
+    }
+  } catch { /* 成绩只是附注，拿不到就显示「买入满 5 日后显示」 */ }
+}
+
 onMounted(async () => {
   observeStickyHead()
   // 结构底池每天生成一次；页面打开后和停留期间每 30 秒按实时量价静默换榜。
   refreshSmartPoolLive()
   smartLiveTimer = window.setInterval(refreshSmartPoolLive, 30_000)
   quantApi.riskAlert().then((alert) => { riskAlert.value = alert || null }).catch(() => {})
+  loadPullbackRecord()
   quantApi.picksStats(30, '', false).then((res) => {
     const map: Record<string, { win_rate: number | null; samples: number }> = {}
     for (const p of res?.pools || []) {
@@ -1710,6 +1757,20 @@ const openChart = async (row: any) => {
 .few-picks-tip {
   margin-bottom: 8px;
 }
+.pullback-box {
+  border: 1px solid var(--el-color-warning-light-5);
+  background: var(--el-color-warning-light-9);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+}
+.pb-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; }
+.pb-sub { font-size: 12px; color: var(--el-text-color-secondary); }
+.pb-items { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 4px; }
+.pb-item { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; }
+.pb-name { min-width: 150px; }
+.pb-name i { font-style: normal; color: var(--el-text-color-secondary); font-size: 12px; }
+.pb-note { margin: 4px 0 0; font-size: 12px; line-height: 1.7; color: var(--el-text-color-regular); }
 /* 单栏自上而下：原左右两栏网格里，右栏一行字被拉成和左栏红条一样高，留一大块空白，
    第三条还被挤到下面只露半截（Allen 2026-09-29 截图）。每条提示按内容高度，间距统一。 */
 .decision-context {
